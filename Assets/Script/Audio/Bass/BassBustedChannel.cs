@@ -94,7 +94,7 @@ namespace YARG.Audio.BASS
                 int randomSemitones;
                 do
                 {
-                    randomSemitones = Random.Range(-2, 2); // Range is -1 to +1 inclusive
+                    randomSemitones = Random.Range(-6, 6); // Range is -1 to +1 inclusive
                 }
                 while (randomSemitones == 0 || randomSemitones == _lastPitchShift);
                 _lastPitchShift = randomSemitones;
@@ -151,6 +151,7 @@ namespace YARG.Audio.BASS
             return true;
         }
 
+        //TODO: handle stereo vs mono
         private void RMSNormalizationDSP(int handle, int channel, IntPtr buffer, int length, IntPtr user)
         {
             int sampleCount = length / 4;
@@ -158,19 +159,20 @@ namespace YARG.Audio.BASS
             {
                 float* samples = (float*)buffer;
 
-                // Calculate RMS for entire buffer
-                double sumOfSquares = 0.0;
+                // Find peak (maximum absolute value) in buffer
+                float peak = 0.0f;
                 for (int i = 0; i < sampleCount; i++)
                 {
-                    float s = samples[i];
-                    sumOfSquares += s * s;
+                    float absSample = Math.Abs(samples[i]);
+                    if (absSample > peak)
+                    {
+                        peak = absSample;
+                    }
                 }
 
-                float rms = (float)Math.Sqrt(sumOfSquares / sampleCount);
-
-                // Calculate gain needed to reach target RMS
-                float targetRMS = 0.165f;
-                float gain = targetRMS / (rms + 0.0001f);
+                // Calculate gain needed to reach target peak
+                float targetPeak = 0.5f;
+                float gain = targetPeak / (peak + 0.0001f);
                 gain = Math.Min(gain, 15.0f);
 
                 // Apply gain to all samples

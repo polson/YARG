@@ -1,3 +1,4 @@
+using JetBrains.Annotations;
 using ManagedBass;
 using ManagedBass.Mix;
 using UnityEngine;
@@ -12,6 +13,7 @@ namespace YARG.Audio.BASS
         private StreamHandle               _streamHandles;
         private StreamHandle               _reverbHandles;
         private PitchShiftParametersStruct _pitchParams;
+        [CanBeNull]
         private BassBustedChannel _bustedChannel;
 
         private double _volume;
@@ -19,7 +21,7 @@ namespace YARG.Audio.BASS
 
         internal BassStemChannel(AudioManager manager, SongStem stem, bool clampStemVolume,
             in PitchShiftParametersStruct pitchParams, int sourceHandle, in StreamHandle streamHandles,
-            in StreamHandle reverbHandles, BassBustedChannel bustedChannel)
+            in StreamHandle reverbHandles, BassBustedChannel bustedChannel = null)
             : base(manager, stem, clampStemVolume)
         {
             _sourceHandle = sourceHandle;
@@ -40,7 +42,7 @@ namespace YARG.Audio.BASS
 
         public override void PlayBustedNote()
         {
-            _bustedChannel.PlayBustedNote();
+            _bustedChannel?.PlayBustedNote();
         }
 
         protected override void SetWhammyPitch_Internal(float percent)
@@ -214,7 +216,7 @@ namespace YARG.Audio.BASS
         {
             _streamHandles.Dispose();
             _reverbHandles.Dispose();
-            _bustedChannel.Dispose();
+            _bustedChannel?.Dispose();
             if (_sourceHandle != 0)
             {
                 if (!Bass.StreamFree(_sourceHandle) && Bass.LastError != Errors.Handle)

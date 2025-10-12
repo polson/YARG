@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
+using JetBrains.Annotations;
 using ManagedBass;
 using ManagedBass.Mix;
 using YARG.Core.Audio;
@@ -256,7 +257,11 @@ namespace YARG.Audio.BASS
                     }
                 }
 
-                var bustedChannel = new BassBustedChannel(stem, indices, sourceStream, streamHandles.Stream);
+                BassBustedChannel bustedChannel = null;
+                if (AudioHelpers.PitchBendAllowedStems.Contains(stem))
+                {
+                    bustedChannel = new BassBustedChannel(stem, indices, sourceStream, streamHandles.Stream);
+                }
 
                 CreateChannel(stem, sourceStream, streamHandles, reverbHandles, bustedChannel);
             }
@@ -324,7 +329,7 @@ namespace YARG.Audio.BASS
             }
         }
 
-        private void CreateChannel(SongStem stem, int sourceHandle, StreamHandle streamHandles, StreamHandle reverbHandles, BassBustedChannel bustedChannel)
+        private void CreateChannel(SongStem stem, int sourceHandle, StreamHandle streamHandles, StreamHandle reverbHandles, [CanBeNull] BassBustedChannel bustedChannel = null)
         {
             var pitchparams = BassAudioManager.SetPitchParams(stem, _speed, streamHandles, reverbHandles);
             var stemchannel = new BassStemChannel(_manager, stem, _clampStemVolume, pitchparams, sourceHandle, streamHandles, reverbHandles, bustedChannel);
