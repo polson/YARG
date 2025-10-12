@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using ManagedBass;
 using ManagedBass.Fx;
 using ManagedBass.Mix;
@@ -18,23 +19,13 @@ namespace YARG.Audio.BASS
     internal class StreamHandle : IDisposable
     {
 #nullable enable
-        public static StreamHandle? Create(int sourceStream, int[] indices)
+        public static StreamHandle? Create(int sourceStream, int[]? channelMap)
         {
             const BassFlags splitFlags = BassFlags.Decode | BassFlags.SplitPosition;
             const BassFlags tempoFlags = BassFlags.SampleOverrideLowestVolume | BassFlags.Decode | BassFlags.FxFreeSource;
 
-            int[]? channelMap = null;
-#nullable disable
-            if (indices != null)
-            {
-                channelMap = new int[indices.Length + 1];
-                for (int i = 0; i < indices.Length; ++i)
-                {
-                    channelMap[i] = indices[i];
-                }
-                channelMap[indices.Length] = -1;
-            }
-
+            //BassMix.CreateSplitStream expects a -1 terminated array
+            channelMap = channelMap?.Append(-1).ToArray();
             int streamSplit = BassMix.CreateSplitStream(sourceStream, splitFlags, channelMap);
             if (streamSplit == 0)
             {
@@ -47,7 +38,6 @@ namespace YARG.Audio.BASS
         private bool _disposed;
         public readonly int Stream;
 
-        public int CompressorFX;
         public int PitchFX;
         public int ReverbFX;
 
@@ -461,8 +451,7 @@ namespace YARG.Audio.BASS
             int sourceStream,
             int[] channelMap,
             out StreamHandle? streamHandles,
-            out StreamHandle? reverbHandles,
-            out StreamHandle? bustedHandles
+            out StreamHandle? reverbHandles
             )
 #nullable disable
         {
@@ -470,7 +459,6 @@ namespace YARG.Audio.BASS
             if (streamHandles == null)
             {
                 reverbHandles = null;
-                bustedHandles = null;
                 return false;
             }
 
@@ -478,47 +466,36 @@ namespace YARG.Audio.BASS
             if (reverbHandles == null)
             {
                 streamHandles.Dispose();
-                bustedHandles = null;
-                return false;
-            }
-
-            bustedHandles = StreamHandle.Create(sourceStream, channelMap);
-            if (bustedHandles == null)
-            {
-                streamHandles.Dispose();
-                reverbHandles.Dispose();
                 return false;
             }
             return true;
         }
 
-        internal static (PitchShiftParametersStruct regularAndReverb, PitchShiftParametersStruct busted) SetPitchParams(SongStem stem, float speed, StreamHandle streamHandles, StreamHandle reverbHandles, StreamHandle bustedHandles)
+        internal static PitchShiftParametersStruct SetPitchParams(SongStem stem, float speed, StreamHandle streamHandles, StreamHandle reverbHandles)
         {
-            PitchShiftParametersStruct regularPitchParams = new(1, 0, GlobalAudioHandler.WHAMMY_FFT_DEFAULT, GlobalAudioHandler.WHAMMY_OVERSAMPLE_DEFAULT);
-            PitchShiftParametersStruct bustedPitchParams = new(1, 0, GlobalAudioHandler.WHAMMY_FFT_DEFAULT, GlobalAudioHandler.WHAMMY_OVERSAMPLE_DEFAULT);
+            PitchShiftParametersStruct pitchParams = new(1, 0, GlobalAudioHandler.WHAMMY_FFT_DEFAULT, GlobalAudioHandler.WHAMMY_OVERSAMPLE_DEFAULT);
 
             // Set whammy pitch bending if enabled
             if (GlobalAudioHandler.UseWhammyFx && AudioHelpers.PitchBendAllowedStems.Contains(stem))
             {
                 // Setting the FFT size causes a crash in BASS_FX :/
                 // _pitchParams.FFTSize = _manager.Options.WhammyFFTSize;
-                regularPitchParams.OversampleFactor = GlobalAudioHandler.WhammyOversampleFactor;
-                bustedPitchParams.OversampleFactor = GlobalAudioHandler.WhammyOversampleFactor;
+                pitchParams.OversampleFactor = GlobalAudioHandler.WhammyOversampleFactor;
 
-                if (SetupPitchBend(regularPitchParams, streamHandles))
+                if (SetupPitchBend(pitchParams, streamHandles))
                 {
-                    SetupPitchBend(regularPitchParams, reverbHandles);
+                    SetupPitchBend(pitchParams, reverbHandles);
                 }
-                SetupPitchBend(bustedPitchParams, bustedHandles);
             }
 
+            //TODO: no way this should go here
             speed = (float) Math.Clamp(speed, 0.05, 50);
             if (!Mathf.Approximately(speed, 1))
             {
                 SetSpeed(speed, streamHandles.Stream, reverbHandles.Stream, true);
             }
 
-            return (regularPitchParams, bustedPitchParams);
+            return pitchParams;
         }
 
         internal static void SetChipmunking(float speed, int streamHandle, int reverbHandle)
@@ -537,7 +514,7 @@ namespace YARG.Audio.BASS
             handles.PitchFX = BassHelpers.FXAddParameters(handles.Stream, EffectType.PitchShift, pitchParams);
             if (handles.PitchFX == 0)
             {
-                YargLogger.LogError("Failed to set up pitch bend for main stream!");
+                YargLogger.LogError("Failed to set up pitch bend for stream!");
                 return false;
             }
 
