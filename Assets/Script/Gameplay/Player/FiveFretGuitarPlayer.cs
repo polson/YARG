@@ -362,7 +362,6 @@ namespace YARG.Gameplay.Player
         protected override void OnNoteMissed(int index, GuitarNote chordParent)
         {
             base.OnNoteMissed(index, chordParent);
-
             foreach (var note in chordParent.AllNotes)
             {
                 (NotePool.GetByKey(note) as FiveFretGuitarNoteElement)?.MissNote();
@@ -385,6 +384,8 @@ namespace YARG.Gameplay.Player
 
                 var randomOverstrum = (SfxSample) Random.Range(MIN, MAX + 1);
                 GlobalAudioHandler.PlaySoundEffect(randomOverstrum);
+                SetStemMuteState(true);
+                GameManager.PlayBustedNote(_stem);
             }
 
             // To check if held frets are valid
@@ -415,6 +416,8 @@ namespace YARG.Gameplay.Player
 
                 if (currentNote == null || (currentNote.NoteMask & (1 << (int) fret)) == 0)
                 {
+                    SetStemMuteState(true);
+                    GameManager.PlayBustedNote(_stem);
                     _fretArray.PlayMissAnimation((int) fret);
                 }
             }
@@ -422,6 +425,8 @@ namespace YARG.Gameplay.Player
             // Play open-strum miss if no frets are held
             if (!anyHeld)
             {
+                SetStemMuteState(true);
+                GameManager.PlayBustedNote(_stem);
                 _fretArray.PlayOpenMissAnimation();
             }
         }
@@ -472,6 +477,7 @@ namespace YARG.Gameplay.Player
                 if (!parent.IsDisjoint || _sustainCount == 0)
                 {
                     SetStemMuteState(true);
+                    GameManager.PlayBustedNote(_stem);
                 }
             }
 

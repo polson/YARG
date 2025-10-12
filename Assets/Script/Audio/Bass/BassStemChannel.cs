@@ -1,4 +1,7 @@
+using System.IO;
+using System.Threading.Tasks;
 using ManagedBass;
+using ManagedBass.Fx;
 using ManagedBass.Mix;
 using UnityEngine;
 using YARG.Core.Audio;
@@ -8,30 +11,56 @@ namespace YARG.Audio.BASS
 {
     public sealed class BassStemChannel : StemChannel
     {
-        private int _sourceHandle;
-        private StreamHandle _streamHandles;
-        private StreamHandle _reverbHandles;
+        private int                        _sourceHandle;
+        private StreamHandle               _streamHandles;
+        private StreamHandle               _reverbHandles;
+        private StreamHandle               _bustedHandles;
         private PitchShiftParametersStruct _pitchParams;
+        private PitchShiftParametersStruct _bustedPitchParams;
 
         private double _volume;
         private bool _isReverbing;
 
         internal BassStemChannel(AudioManager manager, SongStem stem, bool clampStemVolume,
-            in PitchShiftParametersStruct pitchParams, int sourceHandle, in StreamHandle streamHandles,
-            in StreamHandle reverbHandles)
+            in PitchShiftParametersStruct pitchParams, in PitchShiftParametersStruct bustedPitchParams, int sourceHandle, in StreamHandle streamHandles,
+            in StreamHandle reverbHandles, in StreamHandle bustedHandles)
             : base(manager, stem, clampStemVolume)
         {
             _sourceHandle = sourceHandle;
             _streamHandles = streamHandles;
             _reverbHandles = reverbHandles;
+            _bustedHandles = bustedHandles;
             _pitchParams = pitchParams;
+            _bustedPitchParams = bustedPitchParams;
 
             double volume = GlobalAudioHandler.GetTrueVolume(stem);
             if (clampStemVolume && volume < MINIMUM_STEM_VOLUME)
             {
                 volume = MINIMUM_STEM_VOLUME;
             }
+
             SetVolume_Internal(volume);
+
+            // Add aggressive compressor to busted stream for completely flat dynamic range
+            if (_bustedHandles.Stream != 0)
+            {
+                var bustedCompressorParams = new CompressorParameters
+                {
+                    fGain = 60f,        // Crank it even higher - you want LOUD
+                    fThreshold = -100f, // Even lower - compress the silence itself
+                    fAttack = 0.0001f,  // If the API allows it, go lower
+                    fRelease = 0.5f,    // Even faster - never let anything breathe
+                    fRatio = 100f       // Already maxed, can't go higher
+                };
+
+                int compressorFx = BassHelpers.FXAddParameters(_bustedHandles.Stream,
+                    EffectType.Compressor, bustedCompressorParams);
+
+                if (compressorFx == 0)
+                {
+                    YargLogger.LogFormatError("Failed to add compressor to busted stream: {0}", Bass.LastError);
+                }
+            }
         }
 
         protected override void SetWhammyPitch_Internal(float percent)
@@ -122,6 +151,7 @@ namespace YARG.Audio.BASS
 
         protected override void SetSpeed_Internal(float speed, bool shiftPitch)
         {
+            //TODO: busted handles
             BassAudioManager.SetSpeed(speed, _streamHandles.Stream, _reverbHandles.Stream, shiftPitch);
         }
 
@@ -137,11 +167,52 @@ namespace YARG.Audio.BASS
             }
 
             float reverbVolume = _isReverbing ? (float) volume * BassHelpers.REVERB_VOLUME_MULTIPLIER : 0;
-
             if (!Bass.ChannelSlideAttribute(_reverbHandles.Stream, ChannelAttribute.Volume, reverbVolume, 0))
             {
                 YargLogger.LogFormatError("Failed to set reverb volume: {0}!", Bass.LastError);
             }
+
+            if (!Bass.ChannelSlideAttribute(_bustedHandles.Stream, ChannelAttribute.Volume, 0f, 50))
+            {
+                YargLogger.LogFormatError("Failed to set busted volume: {0}!", Bass.LastError);
+            }
+        }
+
+        private int _lastPitchShift;
+
+        public override void PlayBustedNote()
+        {
+            if (_bustedHandles.PitchFX != 0)
+            {
+                // Random pitch shift between -6 and +3 semitones (excluding 0 and no repeats)
+                int randomSemitones;
+                do
+                {
+                    randomSemitones = Random.Range(-6, 4); // Range is -6 to +3 inclusive
+                }
+                while (randomSemitones == 0 || randomSemitones == _lastPitchShift);
+                _lastPitchShift = randomSemitones;
+                _bustedPitchParams.fPitchShift = Mathf.Pow(2, randomSemitones / 12f);
+                if (!BassHelpers.FXSetParameters(_bustedHandles.PitchFX, _bustedPitchParams))
+                {
+                    YargLogger.LogFormatError("Failed to set pitch on stream: {0}", Bass.LastError);
+                }
+            }
+
+            if (!Bass.ChannelSlideAttribute(_bustedHandles.Stream, ChannelAttribute.Volume, 1.5f, 0))
+            {
+                YargLogger.LogFormatError("Failed to set busted volume: {0}!", Bass.LastError);
+            }
+
+            // Wait 750ms then hard cut to 0
+            Task.Run(async () =>
+            {
+                await Task.Delay(250);
+                if (!Bass.ChannelSlideAttribute(_bustedHandles.Stream, ChannelAttribute.Volume, 0, 450))
+                {
+                    YargLogger.LogFormatError("Failed to set busted volume: {0}!", Bass.LastError);
+                }
+            });
         }
 
         protected override void SetReverb_Internal(bool reverb)
@@ -204,6 +275,7 @@ namespace YARG.Audio.BASS
         {
             _streamHandles.Dispose();
             _reverbHandles.Dispose();
+            _bustedHandles.Dispose();
             if (_sourceHandle != 0)
             {
                 if (!Bass.StreamFree(_sourceHandle) && Bass.LastError != Errors.Handle)

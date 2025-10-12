@@ -457,13 +457,20 @@ namespace YARG.Audio.BASS
         }
 
 #nullable enable
-        internal static bool CreateSplitStreams(int sourceStream, int[] channelMap, out StreamHandle? streamHandles, out StreamHandle? reverbHandles)
+        internal static bool CreateSplitStreams(
+            int sourceStream,
+            int[] channelMap,
+            out StreamHandle? streamHandles,
+            out StreamHandle? reverbHandles,
+            out StreamHandle? bustedHandles
+            )
 #nullable disable
         {
             streamHandles = StreamHandle.Create(sourceStream, channelMap);
             if (streamHandles == null)
             {
                 reverbHandles = null;
+                bustedHandles = null;
                 return false;
             }
 
@@ -471,24 +478,38 @@ namespace YARG.Audio.BASS
             if (reverbHandles == null)
             {
                 streamHandles.Dispose();
+                bustedHandles = null;
+                return false;
+            }
+
+            bustedHandles = StreamHandle.Create(sourceStream, channelMap);
+            if (bustedHandles == null)
+            {
+                streamHandles.Dispose();
+                reverbHandles.Dispose();
                 return false;
             }
             return true;
         }
 
-        internal static PitchShiftParametersStruct SetPitchParams(SongStem stem, float speed, StreamHandle streamHandles, StreamHandle reverbHandles)
+        internal static (PitchShiftParametersStruct regularAndReverb, PitchShiftParametersStruct busted) SetPitchParams(SongStem stem, float speed, StreamHandle streamHandles, StreamHandle reverbHandles, StreamHandle bustedHandles)
         {
-            PitchShiftParametersStruct pitchParams = new(1, 0, GlobalAudioHandler.WHAMMY_FFT_DEFAULT, GlobalAudioHandler.WHAMMY_OVERSAMPLE_DEFAULT);
+            PitchShiftParametersStruct regularPitchParams = new(1, 0, GlobalAudioHandler.WHAMMY_FFT_DEFAULT, GlobalAudioHandler.WHAMMY_OVERSAMPLE_DEFAULT);
+            PitchShiftParametersStruct bustedPitchParams = new(1, 0, GlobalAudioHandler.WHAMMY_FFT_DEFAULT, GlobalAudioHandler.WHAMMY_OVERSAMPLE_DEFAULT);
+
             // Set whammy pitch bending if enabled
             if (GlobalAudioHandler.UseWhammyFx && AudioHelpers.PitchBendAllowedStems.Contains(stem))
             {
                 // Setting the FFT size causes a crash in BASS_FX :/
                 // _pitchParams.FFTSize = _manager.Options.WhammyFFTSize;
-                pitchParams.OversampleFactor = GlobalAudioHandler.WhammyOversampleFactor;
-                if (SetupPitchBend(pitchParams, streamHandles))
+                regularPitchParams.OversampleFactor = GlobalAudioHandler.WhammyOversampleFactor;
+                bustedPitchParams.OversampleFactor = GlobalAudioHandler.WhammyOversampleFactor;
+
+                if (SetupPitchBend(regularPitchParams, streamHandles))
                 {
-                    SetupPitchBend(pitchParams, reverbHandles);
+                    SetupPitchBend(regularPitchParams, reverbHandles);
                 }
+                SetupPitchBend(bustedPitchParams, bustedHandles);
             }
 
             speed = (float) Math.Clamp(speed, 0.05, 50);
@@ -496,7 +517,8 @@ namespace YARG.Audio.BASS
             {
                 SetSpeed(speed, streamHandles.Stream, reverbHandles.Stream, true);
             }
-            return pitchParams;
+
+            return (regularPitchParams, bustedPitchParams);
         }
 
         internal static void SetChipmunking(float speed, int streamHandle, int reverbHandle)

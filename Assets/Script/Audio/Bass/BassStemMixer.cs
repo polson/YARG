@@ -218,7 +218,7 @@ namespace YARG.Audio.BASS
             foreach (var (stem, indices, panning) in stemInfos)
             {
                 if (!BassAudioManager.CreateSplitStreams(sourceStream, indices, out var streamHandles,
-                    out var reverbHandles))
+                    out var reverbHandles, out var bustedHandles))
                 {
                     YargLogger.LogFormatError("Failed to load stem {0}: {1}!", stem, Bass.LastError);
                     return false;
@@ -228,7 +228,8 @@ namespace YARG.Audio.BASS
                 var flags = isMultiChannel ? BassFlags.MixerChanMatrix : BassFlags.Default;
 
                 if (!BassMix.MixerAddChannel(_mixerHandle, streamHandles.Stream, flags) ||
-                    !BassMix.MixerAddChannel(_mixerHandle, reverbHandles.Stream, flags))
+                    !BassMix.MixerAddChannel(_mixerHandle, reverbHandles.Stream, flags) ||
+                    !BassMix.MixerAddChannel(_mixerHandle, bustedHandles.Stream, flags))
                 {
                     YargLogger.LogFormatError("Failed to add channel {0} to mixer: {1}!", stem, Bass.LastError);
                     return false;
@@ -252,14 +253,15 @@ namespace YARG.Audio.BASS
                     }
 
                     if (!BassMix.ChannelSetMatrix(streamHandles.Stream, volumeMatrix) ||
-                        !BassMix.ChannelSetMatrix(reverbHandles.Stream, volumeMatrix))
+                        !BassMix.ChannelSetMatrix(reverbHandles.Stream, volumeMatrix) ||
+                        !BassMix.ChannelSetMatrix(bustedHandles.Stream, volumeMatrix))
                     {
                         YargLogger.LogFormatError("Failed to set {stem} matrices: {0}!", Bass.LastError);
                         return false;
                     }
                 }
 
-                CreateChannel(stem, sourceStream, streamHandles, reverbHandles);
+                CreateChannel(stem, sourceStream, streamHandles, reverbHandles, bustedHandles);
             }
             return true;
         }
@@ -325,10 +327,10 @@ namespace YARG.Audio.BASS
             }
         }
 
-        private void CreateChannel(SongStem stem, int sourceHandle, StreamHandle streamHandles, StreamHandle reverbHandles)
+        private void CreateChannel(SongStem stem, int sourceHandle, StreamHandle streamHandles, StreamHandle reverbHandles, StreamHandle bustedHandles)
         {
-            var pitchparams = BassAudioManager.SetPitchParams(stem, _speed, streamHandles, reverbHandles);
-            var stemchannel = new BassStemChannel(_manager, stem, _clampStemVolume, pitchparams, sourceHandle, streamHandles, reverbHandles);
+            var (pitchparams, bustedPitchParams) = BassAudioManager.SetPitchParams(stem, _speed, streamHandles, reverbHandles, bustedHandles);
+            var stemchannel = new BassStemChannel(_manager, stem, _clampStemVolume, pitchparams, bustedPitchParams, sourceHandle, streamHandles, reverbHandles, bustedHandles);
 
             double length = BassAudioManager.GetLengthInSeconds(streamHandles.Stream);
             if (_mainHandle == null || length > _length)

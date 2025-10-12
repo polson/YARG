@@ -141,7 +141,7 @@ namespace YARG.Gameplay
                 StarPowerActivations = 0;
         }
 
-        public void ChangeStemMuteState(SongStem stem, bool muted, float duration = 0.0f)
+        public void ChangeStemMuteState(SongStem stem, bool muted, float duration = 0.0f, bool playBusted = true)
         {
             var setting = SettingsManager.Settings.MuteOnMiss.Value;
             if (setting == AudioFxMode.Off
@@ -168,6 +168,11 @@ namespace YARG.Gameplay
             {
                 _volumeTween.ChangeEndValue(volume);
             }
+        }
+
+        public void PlayBustedNote(SongStem stem)
+        {
+            _mixer[stem].PlayBustedNote();
         }
 
         public void ChangeStemReverbState(SongStem stem, bool reverb)
