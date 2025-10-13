@@ -385,7 +385,7 @@ namespace YARG.Gameplay.Player
                 var randomOverstrum = (SfxSample) Random.Range(MIN, MAX + 1);
                 GlobalAudioHandler.PlaySoundEffect(randomOverstrum);
                 SetStemMuteState(true);
-                GameManager.PlayBustedNote(_stem);
+                PlayBustedNote();
             }
 
             // To check if held frets are valid
@@ -417,7 +417,7 @@ namespace YARG.Gameplay.Player
                 if (currentNote == null || (currentNote.NoteMask & (1 << (int) fret)) == 0)
                 {
                     SetStemMuteState(true);
-                    GameManager.PlayBustedNote(_stem);
+                    PlayBustedNote();
                     _fretArray.PlayMissAnimation((int) fret);
                 }
             }
@@ -426,9 +426,18 @@ namespace YARG.Gameplay.Player
             if (!anyHeld)
             {
                 SetStemMuteState(true);
-                GameManager.PlayBustedNote(_stem);
+                PlayBustedNote();
                 _fretArray.PlayOpenMissAnimation();
             }
+        }
+
+        private double GetDurationToNextNote()
+        {
+            var note = Notes[Engine.NoteIndex];
+            var nextNote = Notes.ElementAtOrDefault(Engine.NoteIndex + 1);
+            var duration = nextNote != null ? nextNote.Time - note.Time : 0;
+            YargLogger.LogDebug($"Duration to next note: {duration}");
+            return duration * 1000;
         }
 
         private void OnSustainStart(GuitarNote parent)
@@ -477,7 +486,6 @@ namespace YARG.Gameplay.Player
                 if (!parent.IsDisjoint || _sustainCount == 0)
                 {
                     SetStemMuteState(true);
-                    GameManager.PlayBustedNote(_stem);
                 }
             }
 
@@ -486,6 +494,11 @@ namespace YARG.Gameplay.Player
                 WhammyFactor = 0;
                 GameManager.ChangeStemWhammyPitch(_stem, 0);
             }
+        }
+
+        private void PlayBustedNote()
+        {
+            GameManager.PlayBustedNote(_stem, GetDurationToNextNote());
         }
 
         protected override bool InterceptInput(ref GameInput input)
@@ -499,6 +512,8 @@ namespace YARG.Gameplay.Player
         protected override void OnInputQueued(GameInput input)
         {
             base.OnInputQueued(input);
+
+            YargLogger.LogDebug($"Action queued: {input.GetAction<GuitarAction>()} (Axis: {input.Axis})");
 
             // Update the whammy factor
             if (_sustainCount > 0 && input.GetAction<GuitarAction>() == GuitarAction.Whammy)

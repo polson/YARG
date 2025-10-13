@@ -5,6 +5,7 @@ using DG.Tweening.Core;
 using DG.Tweening.Plugins.Options;
 using UnityEngine;
 using YARG.Core.Audio;
+using YARG.Core.Logging;
 using YARG.Playback;
 using YARG.Settings;
 
@@ -141,7 +142,7 @@ namespace YARG.Gameplay
                 StarPowerActivations = 0;
         }
 
-        public void ChangeStemMuteState(SongStem stem, bool muted, float duration = 0.0f, bool playBusted = true)
+        public void ChangeStemMuteState(SongStem stem, bool muted, float duration = 0.0f)
         {
             var setting = SettingsManager.Settings.MuteOnMiss.Value;
             if (setting == AudioFxMode.Off
@@ -170,9 +171,17 @@ namespace YARG.Gameplay
             }
         }
 
-        public void PlayBustedNote(SongStem stem)
+        public void PlayBustedNote(SongStem stem, double durationMs)
         {
-            _mixer[stem].PlayBustedNote();
+            var stemChannel = _mixer[stem];
+            if (stemChannel != null)
+            {
+                stemChannel.PlayBustedNote(durationMs);
+            }
+            else
+            {
+                YargLogger.LogError($"Missing stem channel: {stem}, available stems: {string.Join(", ", _mixer.Channels.Select(c => c.Stem))}");
+            }
         }
 
         public void ChangeStemReverbState(SongStem stem, bool reverb)

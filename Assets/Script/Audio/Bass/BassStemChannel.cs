@@ -4,6 +4,7 @@ using ManagedBass.Mix;
 using UnityEngine;
 using YARG.Core.Audio;
 using YARG.Core.Logging;
+using YARG.Gameplay;
 
 namespace YARG.Audio.BASS
 {
@@ -40,9 +41,9 @@ namespace YARG.Audio.BASS
             SetVolume_Internal(volume);
         }
 
-        public override void PlayBustedNote()
+        public override void PlayBustedNote(double durationMs)
         {
-            _bustedChannel?.PlayBustedNote();
+            _bustedChannel?.PlayBustedNote(durationMs);
         }
 
         protected override void SetWhammyPitch_Internal(float percent)

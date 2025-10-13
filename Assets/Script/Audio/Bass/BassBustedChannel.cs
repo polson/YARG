@@ -86,15 +86,14 @@ namespace YARG.Audio.BASS
         }
 
         //TODO: This should not happen on main thread, also pass in time to next note
-        public void PlayBustedNote()
+        public void PlayBustedNote(double durationMs)
         {
             if (_bustedHandle.PitchFX != 0)
             {
-                // Random pitch shift between -6 and +3 semitones (excluding 0 and no repeats)
                 int randomSemitones;
                 do
                 {
-                    randomSemitones = Random.Range(-6, 6); // Range is -1 to +1 inclusive
+                    randomSemitones = Random.Range(-2, 2);
                 }
                 while (randomSemitones == 0 || randomSemitones == _lastPitchShift);
                 _lastPitchShift = randomSemitones;
@@ -113,7 +112,9 @@ namespace YARG.Audio.BASS
             // Wait 750ms then hard cut to 0
             Task.Run(async () =>
             {
-                await Task.Delay(450);
+                YargLogger.LogDebug($"Delaying for {durationMs}ms");
+                var delay = (int) Math.Clamp(durationMs, 500, 2000);
+                await Task.Delay(delay);
                 if (!Bass.ChannelSlideAttribute(_bustedHandle.Stream, ChannelAttribute.Volume, 0, 250))
                 {
                     YargLogger.LogFormatError("Failed to set busted volume: {0}!", Bass.LastError);
