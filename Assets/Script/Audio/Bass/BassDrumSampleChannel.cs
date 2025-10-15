@@ -3,6 +3,7 @@ using UnityEngine;
 using YARG.Core.Audio;
 using YARG.Core.Logging;
 using YARG.Input;
+using YARG.Settings;
 
 namespace YARG.Audio.BASS
 {
@@ -27,21 +28,29 @@ namespace YARG.Audio.BASS
                 return null;
             }
 
-            return new BassDrumSampleChannel(handle, channel, sample, path, playbackCount);
+            return new BassDrumSampleChannel(handle, channel, sample);
         }
 
         private readonly int _sfxHandle;
         private readonly int _channel;
 
-        private BassDrumSampleChannel(int handle, int channel, DrumSfxSample sample, string path, int playbackCount)
-            : base(sample, path, playbackCount)
+        private BassDrumSampleChannel(int handle, int channel, DrumSfxSample sample)
+            : base(sample)
         {
             _sfxHandle = handle;
             _channel = channel;
+            SettingsManager.Settings.DrumSfxVolume.OnChange += OnVolumeChanged;
         }
 
-        protected override void Play_Internal()
+        private void OnVolumeChanged(float volume)
         {
+            SetVolume_Internal(volume);
+        }
+
+        protected override void Play_Internal(double volume)
+        {
+            volume *=  SettingsManager.Settings.DrumSfxVolume.Value;
+            SetVolume_Internal(volume);
             if (!Bass.ChannelPlay(_channel, true))
             {
                 YargLogger.LogFormatError("Failed to play {0} channel: {1}!", Sample, Bass.LastError);
@@ -59,6 +68,12 @@ namespace YARG.Audio.BASS
         protected override void DisposeUnmanagedResources()
         {
             Bass.SampleFree(_sfxHandle);
+        }
+
+        protected override void DisposeManagedResources()
+        {
+            SettingsManager.Settings.DrumSfxVolume.OnChange -= OnVolumeChanged;
+            base.DisposeManagedResources();
         }
     }
 }

@@ -25,13 +25,6 @@ namespace YARG.Audio.BASS
             _streamHandles = streamHandles;
             _reverbHandles = reverbHandles;
             _pitchParams = pitchParams;
-
-            double volume = GlobalAudioHandler.GetTrueVolume(stem);
-            if (clampStemVolume && volume < MINIMUM_STEM_VOLUME)
-            {
-                volume = MINIMUM_STEM_VOLUME;
-            }
-            SetVolume_Internal(volume);
         }
 
         protected override void SetWhammyPitch_Internal(float percent)
@@ -125,7 +118,7 @@ namespace YARG.Audio.BASS
             BassAudioManager.SetSpeed(speed, _streamHandles.Stream, _reverbHandles.Stream, shiftPitch);
         }
 
-        protected override void SetVolume_Internal(double volume)
+        protected override void SetVolume_Internal(double volume, float fadeDurationMs)
         {
             _volume = volume;
 

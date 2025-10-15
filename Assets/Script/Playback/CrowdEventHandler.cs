@@ -50,13 +50,16 @@ namespace YARG.Playback
         private readonly double _musicStartTime;
         private readonly double _musicEndTime;
 
-        public CrowdEventHandler(SongChart chart, GameManager gameManager)
+        private StemController _crowdStemController;
+
+        public CrowdEventHandler(SongChart chart, StemController stemController, GameManager gameManager)
         {
             // Clone the event list so we can modify it if necessary
             _events = new List<CrowdEvent>(chart.CrowdEvents);
             _syncTrack = chart.SyncTrack;
             _gameManager = gameManager;
             _engineManager = gameManager.EngineManager;
+            _crowdStemController = stemController;
 
             var (musicStart, musicEnd) = chart.GetMusicEvents();
 
@@ -219,7 +222,7 @@ namespace YARG.Playback
         {
             if (IsCrowdMuted != muted)
             {
-                _gameManager.ChangeStemMuteState(SongStem.Crowd, muted, 1.0f);
+                _crowdStemController.SetMute(muted, 1.0f);
                 IsCrowdMuted = muted;
             }
         }

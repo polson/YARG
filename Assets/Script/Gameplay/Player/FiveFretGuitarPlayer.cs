@@ -80,14 +80,14 @@ namespace YARG.Gameplay.Player
         private SongStem _stem;
         private double _practiceSectionStartTime;
 
-        public override void Initialize(int index, YargPlayer player, SongChart chart, TrackView trackView, StemMixer mixer, int? currentHighScore)
+        public override void Initialize(int index, YargPlayer player, SongChart chart, TrackView trackView, StemController stemController,  StemMixer mixer, int? currentHighScore)
         {
             _stem = player.Profile.CurrentInstrument.ToSongStem();
             if (_stem == SongStem.Bass && mixer[SongStem.Bass] == null)
             {
                 _stem = SongStem.Rhythm;
             }
-            base.Initialize(index, player, chart, trackView, mixer, currentHighScore);
+            base.Initialize(index, player, chart, trackView, stemController, mixer, currentHighScore);
         }
 
         protected override InstrumentDifficulty<GuitarNote> GetNotes(SongChart chart)
@@ -316,14 +316,14 @@ namespace YARG.Gameplay.Player
         {
             if (IsStemMuted != muted)
             {
-                GameManager.ChangeStemMuteState(_stem, muted);
+                _audioController.SetMute(muted);
                 IsStemMuted = muted;
             }
         }
 
         public override void SetStarPowerFX(bool active)
         {
-            GameManager.ChangeStemReverbState(_stem, active);
+            _audioController.SetReverb(active);
         }
 
         protected override void ResetVisuals()
@@ -478,7 +478,7 @@ namespace YARG.Gameplay.Player
             if (_sustainCount == 0)
             {
                 WhammyFactor = 0;
-                GameManager.ChangeStemWhammyPitch(_stem, 0);
+                _audioController.SetWhammyPercent(0);
             }
         }
 
@@ -498,7 +498,7 @@ namespace YARG.Gameplay.Player
             if (_sustainCount > 0 && input.GetAction<GuitarAction>() == GuitarAction.Whammy)
             {
                 WhammyFactor = Mathf.Clamp01(input.Axis);
-                GameManager.ChangeStemWhammyPitch(_stem, WhammyFactor);
+                _audioController.SetWhammyPercent(WhammyFactor);
             }
         }
 

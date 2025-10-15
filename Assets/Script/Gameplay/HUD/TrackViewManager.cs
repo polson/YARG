@@ -32,7 +32,7 @@ namespace YARG.Gameplay.HUD
         private RenderTexture _highwaysOutputTexture;
         private readonly List<TrackView> _trackViews = new();
 
-        public TrackView CreateTrackView(TrackPlayer trackPlayer, YargPlayer player)
+        public TrackView CreateTrackView(TrackPlayer trackPlayer)
         {
             // Create a track view
             var trackView = Instantiate(_trackViewPrefab, transform).GetComponent<TrackView>();

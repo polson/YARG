@@ -394,7 +394,7 @@ namespace YARG.Gameplay.Player
         {
             if (IsStemMuted != muted)
             {
-                GameManager.ChangeStemMuteState(SongStem.Keys, muted);
+                _audioController.SetMute(muted);
                 IsStemMuted = muted;
             }
         }

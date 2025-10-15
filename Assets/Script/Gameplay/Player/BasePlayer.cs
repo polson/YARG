@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using PlasticBand.Haptics;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -104,6 +104,8 @@ namespace YARG.Gameplay.Player
 
         protected EngineManager.EngineContainer EngineContainer;
 
+        protected StemController _audioController;
+
         protected override void GameplayAwake()
         {
             _replayInputs = new List<GameInput>();
@@ -126,7 +128,7 @@ namespace YARG.Gameplay.Player
             }
         }
 
-        protected void Initialize(int index, YargPlayer player, SongChart chart, int? lastHighScore)
+        protected void Initialize(int index, YargPlayer player, SongChart chart, StemController audioController, int? lastHighScore)
         {
             if (IsInitialized)
             {
@@ -154,6 +156,7 @@ namespace YARG.Gameplay.Player
                 InputViewer.ResetButtons();
             }
 
+            _audioController = audioController;
             IsInitialized = true;
         }
 
@@ -187,7 +190,7 @@ namespace YARG.Gameplay.Player
 
         public virtual void SetStarPowerFX(bool active)
         {
-            GameManager.ChangeStemReverbState(SongStem.Song, active);
+            _audioController.SetReverb(active);
         }
 
         public virtual void SetReplayTime(double time)

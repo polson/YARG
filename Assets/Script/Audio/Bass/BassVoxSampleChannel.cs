@@ -1,10 +1,7 @@
 ﻿#nullable enable
-using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using Cysharp.Threading.Tasks;
 using ManagedBass;
-using ManagedBass.Mix;
 using YARG.Core.Audio;
 using YARG.Core.Logging;
 using YARG.Settings;
@@ -40,13 +37,7 @@ namespace YARG.Audio.BASS
                 return null;
             }
 
-            // TODO: This should probably have its own volume setting at some point
-            if (!Bass.ChannelSetAttribute(channel, ChannelAttribute.Volume, 1.0f))
-            {
-                YargLogger.LogFormatError("Failed to set {0} volume: {1}!", sample, Bass.LastError);
-            }
-
-            return new BassVoxSampleChannel(handle, channel, sample, path);
+            return new BassVoxSampleChannel(handle, channel, sample);
         }
 
         private static void QueuePlayback(BassVoxSampleChannel channel)
@@ -82,14 +73,27 @@ namespace YARG.Audio.BASS
             return false;
         }
 
-        private readonly int    _channel;
+        private readonly int _channel;
 
-        private BassVoxSampleChannel(int handle, int channel, VoxSample sample, string path)
-            : base(sample, path)
+        private BassVoxSampleChannel(int handle, int channel, VoxSample sample)
+            : base(sample)
         {
             _sampleHandle = handle;
             _channel = channel;
             Channels.Add(this);
+            SettingsManager.Settings.SfxVolume.OnChange += OnVolumeChanged;
+            SettingsManager.Settings.EnableVoxSamples.OnChange += OnVoxEnabledChanged;
+        }
+
+        private void OnVolumeChanged(float volume)
+        {
+            SetVolume_Internal(volume);
+        }
+
+        private void OnVoxEnabledChanged(bool enabled)
+        {
+            // This allows real-time updates when the setting changes
+            // though the main check still happens in Play_Internal
         }
 
         protected override void Play_Internal()
@@ -130,6 +134,12 @@ namespace YARG.Audio.BASS
         protected override void DisposeUnmanagedResources()
         {
             Bass.SampleFree(_sampleHandle);
+        }
+
+        protected override void DisposeManagedResources()
+        {
+            SettingsManager.Settings.EnableVoxSamples.OnChange -= OnVoxEnabledChanged;
+            base.DisposeManagedResources();
         }
     }
 }
