@@ -15,14 +15,15 @@ using YARG.Playback;
 using YARG.Player;
 using YARG.Settings;
 using YARG.Themes;
+using static YARG.Gameplay.Player.PlayerEvent;
 
 namespace YARG.Gameplay.Player
 {
     public abstract class TrackPlayer : BasePlayer
     {
-        public const float STRIKE_LINE_POS       = -2f;
-        public const float DEFAULT_ZERO_FADE_POS = 3f;
-        public const float NOTE_SPAWN_OFFSET     = 5f;
+        public const float  STRIKE_LINE_POS       = -2f;
+        public const float  DEFAULT_ZERO_FADE_POS = 3f;
+        public const float  NOTE_SPAWN_OFFSET     = 5f;
 
         public const float TRACK_WIDTH = 2f;
 
@@ -123,7 +124,7 @@ namespace YARG.Gameplay.Player
         {
             // "Muting a stem" isn't technically a visual,
             // but it's a form of feedback so we'll put it here.
-            SetStemMuteState(false);
+            OnEvent(new VisualsReset());
 
             ComboMeter.SetFullCombo(IsFc);
             TrackView.ForceReset();
@@ -139,7 +140,8 @@ namespace YARG.Gameplay.Player
         where TEngine : BaseEngine
         where TNote : Note<TNote>
     {
-        public TEngine Engine { get; private set; }
+
+        public TEngine      Engine { get; private set; }
 
         public override BaseEngine BaseEngine => Engine;
 
@@ -704,9 +706,9 @@ namespace YARG.Gameplay.Player
 
         protected virtual void OnNoteHit(int index, TNote note)
         {
+            OnEvent(new NoteHit());
             if (!GameManager.IsSeekingReplay)
             {
-                SetStemMuteState(false);
                 if (_currentMultiplier != _previousMultiplier)
                 {
                     _previousMultiplier = _currentMultiplier;
@@ -735,6 +737,7 @@ namespace YARG.Gameplay.Player
 
         protected virtual void OnNoteMissed(int index, TNote note)
         {
+            OnEvent(new NoteMissed());
             if (IsFc)
             {
                 ComboMeter.SetFullCombo(false);
@@ -743,8 +746,6 @@ namespace YARG.Gameplay.Player
 
             if (!GameManager.IsSeekingReplay)
             {
-                SetStemMuteState(true);
-
                 if (LastCombo >= 10)
                 {
                     GlobalAudioHandler.PlaySoundEffect(SfxSample.NoteMiss);

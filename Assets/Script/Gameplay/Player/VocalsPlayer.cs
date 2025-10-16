@@ -201,9 +201,9 @@ namespace YARG.Gameplay.Player
                 {
                     IsFc = false;
                 }
-                
+
                 LastCombo = Combo;
-                
+
                 ShowTextNotifications(isLastPhrase);
 
                 // Order is important here. ShowVocalPhraseResult() will skip showing AWESOME! if other, more important notifications are already showing.
@@ -542,11 +542,6 @@ namespace YARG.Gameplay.Player
 
             Engine = CreateEngine();
             ResetPracticeSection();
-        }
-
-        public override void SetStemMuteState(bool muted)
-        {
-            // Vocals has no stem muting
         }
 
         protected override bool InterceptInput(ref GameInput input)

@@ -12,6 +12,7 @@ using YARG.Core.Input;
 using YARG.Core.Logging;
 using YARG.Core.Replays;
 using YARG.Gameplay.Visuals;
+using static YARG.Gameplay.Player.PlayerEvent;
 
 namespace YARG.Gameplay.Player
 {
@@ -275,7 +276,7 @@ namespace YARG.Gameplay.Player
             if (!finished)
             {
                 // Do we want to check if its part of a chord, and if so, if all sustains were dropped to mute?
-                SetStemMuteState(true);
+                OnEvent(new SustainBroken());
             }
         }
 
@@ -422,15 +423,6 @@ namespace YARG.Gameplay.Player
             foreach (var bar in _chordBarPool.AllSpawned)
             {
                 (bar as ProKeysChordBarElement)?.UpdateXPosition();
-            }
-        }
-
-        public override void SetStemMuteState(bool muted)
-        {
-            if (IsStemMuted != muted)
-            {
-                GameManager.ChangeStemMuteState(SongStem.Keys, muted);
-                IsStemMuted = muted;
             }
         }
 

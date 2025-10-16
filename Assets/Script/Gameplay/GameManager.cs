@@ -4,6 +4,7 @@ using System.Linq;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using YARG.Audio;
 using YARG.Core.Audio;
 using YARG.Core.Chart;
 using YARG.Core.Engine;
@@ -61,6 +62,8 @@ namespace YARG.Gameplay
         public IReadOnlyList<YargPlayer> YargPlayers { get; private set;}
 
         private List<BasePlayer> _players;
+
+        private PlayerAudioManager _playerAudioManager;
 
         public bool IsSongStarted { get; private set; } = false;
 
@@ -211,6 +214,7 @@ namespace YARG.Gameplay
             _pauseMenu.PopAllMenus();
             _mixer?.Dispose();
             _songRunner?.Dispose();
+            _playerAudioManager?.Dispose();
             BackgroundManager.Dispose();
             CrowdEventHandler.Dispose();
 
@@ -260,7 +264,7 @@ namespace YARG.Gameplay
 
                 totalScore += player.Score;
                 totalScore += player.BandBonusScore;
-                totalStars += player.Stars;               
+                totalStars += player.Stars;
             }
 
             if (GlobalVariables.VerboseReplays)
