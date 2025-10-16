@@ -1,8 +1,8 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using YARG.Core;
-using YARG.Core.Audio;
 using YARG.Core.Chart;
 using YARG.Core.Input;
 using YARG.Core.Logging;
@@ -10,20 +10,20 @@ using YARG.Core.Replays;
 using YARG.Core.Engine.Keys;
 using YARG.Core.Engine.Keys.Engines;
 using YARG.Gameplay;
-using YARG.Gameplay.HUD;
 using YARG.Gameplay.Player;
 using YARG.Gameplay.Visuals;
 using YARG.Helpers;
 using YARG.Helpers.Extensions;
 using YARG.Playback;
-using YARG.Player;
 using YARG.Themes;
+using static YARG.Gameplay.Player.PlayerEvent;
 using static YARG.Core.Engine.Keys.FiveLaneKeysEngine;
 
 namespace YARG.Assets.Script.Gameplay.Player
 {
     public sealed class FiveLaneKeysPlayer : TrackPlayer<FiveLaneKeysEngine, GuitarNote>
     {
+
         private const double SUSTAIN_END_MUTE_THRESHOLD = 0.1;
 
         private const int SHIFT_INDICATOR_MEASURES_BEFORE = 5;
@@ -68,19 +68,7 @@ namespace YARG.Assets.Script.Gameplay.Player
         public float WhammyFactor { get; private set; }
 
         private int _sustainCount;
-
-        private SongStem _stem;
         private double _practiceSectionStartTime;
-
-        public override void Initialize(int index, YargPlayer player, SongChart chart, TrackView trackView, StemMixer mixer, int? currentHighScore)
-        {
-            _stem = player.Profile.CurrentInstrument.ToSongStem();
-            if (_stem == SongStem.Bass && mixer[SongStem.Bass] == null)
-            {
-                _stem = SongStem.Rhythm;
-            }
-            base.Initialize(index, player, chart, trackView, mixer, currentHighScore);
-        }
 
         protected override InstrumentDifficulty<GuitarNote> GetNotes(SongChart chart)
         {
@@ -325,7 +313,7 @@ namespace YARG.Assets.Script.Gameplay.Player
             if (_sustainCount > 0 && input.GetAction<ProKeysAction>() == ProKeysAction.TouchEffects)
             {
                 WhammyFactor = Mathf.Clamp01(input.Axis);
-                GameManager.ChangeStemWhammyPitch(_stem, WhammyFactor);
+                OnEvent(new WhammyDuringSustain(WhammyFactor));
             }
         }
 
@@ -429,7 +417,7 @@ namespace YARG.Assets.Script.Gameplay.Player
             if (!finished)
             {
                 // Do we want to check if its part of a chord, and if so, if all sustains were dropped to mute?
-                SetStemMuteState(true);
+                OnEvent(new SustainBroken());
             }
 
             if (note.FiveLaneKeysAction is not FiveLaneKeysAction.OpenNote)
@@ -441,8 +429,8 @@ namespace YARG.Assets.Script.Gameplay.Player
 
             if (_sustainCount == 0)
             {
+                OnEvent(new SustainEnded());
                 WhammyFactor = 0;
-                GameManager.ChangeStemWhammyPitch(_stem, 0);
             }
         }
 
@@ -459,15 +447,6 @@ namespace YARG.Assets.Script.Gameplay.Player
         {
             var frame = new ReplayFrame(Player.Profile, EngineParams, Engine.EngineStats, ReplayInputs.ToArray());
             return (frame, Engine.EngineStats.ConstructReplayStats(Player.Profile.Name));
-        }
-
-        public override void SetStemMuteState(bool muted)
-        {
-            if (IsStemMuted != muted)
-            {
-                GameManager.ChangeStemMuteState(_stem, muted);
-                IsStemMuted = muted;
-            }
         }
 
         private void InitializeRangeShift(double time = 0)
