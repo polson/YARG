@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using YARG.Core;
@@ -21,8 +22,11 @@ using static YARG.Core.Engine.Keys.FiveLaneKeysEngine;
 
 namespace YARG.Assets.Script.Gameplay.Player
 {
-    public sealed class FiveLaneKeysPlayer : TrackPlayer<FiveLaneKeysEngine, GuitarNote>
+    public sealed class FiveLaneKeysPlayer : TrackPlayer<FiveLaneKeysEngine, GuitarNote>, ISustainPlayer
     {
+        public event Action SustainGroupBroken;
+        public event Action SustainGroupEnded;
+
         private const double SUSTAIN_END_MUTE_THRESHOLD = 0.1;
 
         private const int SHIFT_INDICATOR_MEASURES_BEFORE = 5;
@@ -375,7 +379,12 @@ namespace YARG.Assets.Script.Gameplay.Player
             if (!finished)
             {
                 // Do we want to check if its part of a chord, and if so, if all sustains were dropped to mute?
+                SustainGroupBroken?.Invoke();
                 SetStemMuteState(true);
+            }
+            else
+            {
+                SustainGroupEnded?.Invoke();
             }
 
             if (note.FiveLaneKeysAction is not FiveLaneKeysAction.OpenNote)

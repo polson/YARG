@@ -16,6 +16,7 @@ namespace YARG.Gameplay.Player
 {
     public class ProKeysPlayer : TrackPlayer<ProKeysEngine, ProKeysNote>
     {
+        public event Action<bool> SustainBroken;
         public struct RangeShift
         {
             public static readonly RangeShift Default = new()
@@ -257,6 +258,7 @@ namespace YARG.Gameplay.Player
             if (!finished)
             {
                 // Do we want to check if its part of a chord, and if so, if all sustains were dropped to mute?
+                SustainBroken(true);
                 SetStemMuteState(true);
             }
         }

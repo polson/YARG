@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using YARG.Core;
@@ -20,8 +21,12 @@ using Random = UnityEngine.Random;
 
 namespace YARG.Gameplay.Player
 {
-    public sealed class FiveFretGuitarPlayer : TrackPlayer<GuitarEngine, GuitarNote>
+    public sealed class FiveFretGuitarPlayer : TrackPlayer<GuitarEngine, GuitarNote>, ISustainPlayer, IWhammyPlayer
     {
+        public event Action SustainGroupBroken;
+        public event Action SustainGroupEnded;
+        public event Action<float> WhammyChangedOnSustain;
+
         private const double SUSTAIN_END_MUTE_THRESHOLD = 0.1;
 
         private const int SHIFT_INDICATOR_MEASURES_BEFORE = 5;
@@ -321,11 +326,6 @@ namespace YARG.Gameplay.Player
             }
         }
 
-        public override void SetStarPowerFX(bool active)
-        {
-            GameManager.ChangeStemReverbState(_stem, active);
-        }
-
         protected override void ResetVisuals()
         {
             base.ResetVisuals();
@@ -471,12 +471,15 @@ namespace YARG.Gameplay.Player
             {
                 if (!parent.IsDisjoint || _sustainCount == 0)
                 {
+                    SustainGroupBroken?.Invoke();
                     SetStemMuteState(true);
                 }
             }
 
             if (_sustainCount == 0)
             {
+                // Notify all sustains ended
+                SustainGroupEnded?.Invoke();
                 WhammyFactor = 0;
                 GameManager.ChangeStemWhammyPitch(_stem, 0);
             }
@@ -498,6 +501,7 @@ namespace YARG.Gameplay.Player
             if (_sustainCount > 0 && input.GetAction<GuitarAction>() == GuitarAction.Whammy)
             {
                 WhammyFactor = Mathf.Clamp01(input.Axis);
+                WhammyChangedOnSustain?.Invoke(WhammyFactor);
                 GameManager.ChangeStemWhammyPitch(_stem, WhammyFactor);
             }
         }

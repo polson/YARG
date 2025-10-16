@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using PlasticBand.Haptics;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -17,9 +18,11 @@ using YARG.Settings;
 
 namespace YARG.Gameplay.Player
 {
-    public abstract class BasePlayer : GameplayBehaviour
+    public abstract class BasePlayer : GameplayBehaviour, IStarPowerPlayer, IReplayPlayer
     {
-        public int HighwayIndex { get; private set; }
+        public event Action<bool> StarPowerChanged;
+        public event Action<double> ReplayTimeChanged;
+        public  int      HighwayIndex { get; private set; }
 
         public YargPlayer Player { get; private set; }
 
@@ -187,6 +190,7 @@ namespace YARG.Gameplay.Player
 
         public virtual void SetStarPowerFX(bool active)
         {
+            StarPowerChanged?.Invoke(active);
             GameManager.ChangeStemReverbState(SongStem.Song, active);
         }
 
@@ -196,6 +200,7 @@ namespace YARG.Gameplay.Player
 
             _replayInputIndex = BaseEngine.ProcessUpToTime(time, ReplayInputs);
 
+            ReplayTimeChanged?.Invoke(time);
             SetStemMuteState(false);
 
             ResetVisuals();

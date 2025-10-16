@@ -18,11 +18,23 @@ using YARG.Themes;
 
 namespace YARG.Gameplay.Player
 {
-    public abstract class TrackPlayer : BasePlayer
+    public interface TrackPlayerEvents
     {
-        public const float STRIKE_LINE_POS       = -2f;
-        public const float DEFAULT_ZERO_FADE_POS = 3f;
-        public const float NOTE_SPAWN_OFFSET     = 5f;
+        event Action VisualsReset;
+    }
+
+    public interface NotePlayerEvents : TrackPlayerEvents
+    {
+        event Action NoteHit;
+        event Action NoteMissed;
+    }
+    public abstract class TrackPlayer : BasePlayer, TrackPlayerEvents
+    {
+        public event Action VisualsReset;
+
+        public const float  STRIKE_LINE_POS       = -2f;
+        public const float  DEFAULT_ZERO_FADE_POS = 3f;
+        public const float  NOTE_SPAWN_OFFSET     = 5f;
 
         public const float TRACK_WIDTH = 2f;
 
@@ -123,6 +135,7 @@ namespace YARG.Gameplay.Player
         {
             // "Muting a stem" isn't technically a visual,
             // but it's a form of feedback so we'll put it here.
+            VisualsReset?.Invoke();
             SetStemMuteState(false);
 
             ComboMeter.SetFullCombo(IsFc);
@@ -135,11 +148,13 @@ namespace YARG.Gameplay.Player
         }
     }
 
-    public abstract class TrackPlayer<TEngine, TNote> : TrackPlayer
+    public abstract class TrackPlayer<TEngine, TNote> : TrackPlayer, NotePlayerEvents
         where TEngine : BaseEngine
         where TNote : Note<TNote>
     {
-        public TEngine Engine { get; private set; }
+        public event Action NoteHit;
+        public event Action NoteMissed;
+        public TEngine      Engine { get; private set; }
 
         public override BaseEngine BaseEngine => Engine;
 
@@ -706,6 +721,7 @@ namespace YARG.Gameplay.Player
         {
             if (!GameManager.IsSeekingReplay)
             {
+                NoteHit?.Invoke();
                 SetStemMuteState(false);
                 if (_currentMultiplier != _previousMultiplier)
                 {
@@ -743,6 +759,7 @@ namespace YARG.Gameplay.Player
 
             if (!GameManager.IsSeekingReplay)
             {
+                NoteMissed?.Invoke();
                 SetStemMuteState(true);
 
                 if (LastCombo >= 10)

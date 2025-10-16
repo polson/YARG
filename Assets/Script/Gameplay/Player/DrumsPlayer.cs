@@ -267,11 +267,6 @@ namespace YARG.Gameplay.Player
             }
         }
 
-        public override void SetStarPowerFX(bool active)
-        {
-            GameManager.ChangeStemReverbState(SongStem.Drums, active);
-        }
-
         protected override void ResetVisuals()
         {
             base.ResetVisuals();
