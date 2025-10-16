@@ -5,6 +5,7 @@ using DG.Tweening.Plugins.Options;
 using UnityEngine;
 using UnityEngine.Rendering;
 using YARG.Core.Audio;
+using YARG.Core.Logging;
 using YARG.Playback;
 using YARG.Settings;
 using YARG.Settings.Types;
@@ -35,6 +36,7 @@ namespace YARG.Gameplay
             _channel = channel;
             _numPlayers = numPlayers;
             _isOnlyStem = isOnlyStem;
+            _volumeSetting = volumeSetting;
             SubscribeToVolumeSetting(volumeSetting);
         }
 
@@ -49,6 +51,7 @@ namespace YARG.Gameplay
 
         private void UpdateVolume(float fadeDurationMs = 0.0f)
         {
+            YargLogger.LogDebug($"Updating volume for {_channel.Stem} to {MuteFactor} (Max: {MaxVolume}, Muted: {_isMuted}, Players: {_numPlayers})");
             _channel.SetVolume(MaxVolume * MuteFactor, fadeDurationMs);
         }
 

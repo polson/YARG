@@ -105,6 +105,9 @@ namespace YARG
         {
             SettingsManager.LoadSettings();
             InputManager.Initialize();
+            GlobalAudioHandler.LoadDrumSfx();
+            GlobalAudioHandler.LoadVox();
+            GlobalAudioHandler.LoadSfx();
 
             LoadScene(SceneIndex.Menu);
         }

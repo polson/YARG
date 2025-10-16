@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using JetBrains.Annotations;
 using YARG.Core.Audio;
 using YARG.Core.Chart;
 using YARG.Core.Engine;
@@ -50,9 +51,10 @@ namespace YARG.Playback
         private readonly double _musicStartTime;
         private readonly double _musicEndTime;
 
+        [CanBeNull]
         private StemController _crowdStemController;
 
-        public CrowdEventHandler(SongChart chart, StemController stemController, GameManager gameManager)
+        public CrowdEventHandler(SongChart chart, [CanBeNull] StemController stemController, GameManager gameManager)
         {
             // Clone the event list so we can modify it if necessary
             _events = new List<CrowdEvent>(chart.CrowdEvents);
@@ -222,7 +224,7 @@ namespace YARG.Playback
         {
             if (IsCrowdMuted != muted)
             {
-                _crowdStemController.SetMute(muted, 1.0f);
+                _crowdStemController?.SetMute(muted, 1.0f);
                 IsCrowdMuted = muted;
             }
         }

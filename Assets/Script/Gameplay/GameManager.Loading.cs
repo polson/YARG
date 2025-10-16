@@ -371,10 +371,16 @@ namespace YARG.Gameplay
             // Make sure enough beatlines have been generated to cover the song end delay
             Chart.SyncTrack.GenerateBeatlines(SongLength + SONG_END_DELAY, true);
 
-            var stemController = new BassStemController(
-                _mixer[SongStem.Crowd],
-                SettingsManager.Settings.CrowdVolume
-            );
+            var crowdChannel = _mixer[SongStem.Crowd];
+            StemController stemController = null;
+            if (crowdChannel != null)
+            {
+                stemController = new BassStemController(
+                    crowdChannel,
+                    SettingsManager.Settings.CrowdVolume
+                );
+            }
+
             BeatEventHandler = new BeatEventHandler(Chart.SyncTrack);
             CrowdEventHandler = new CrowdEventHandler(Chart, stemController, this);
 
@@ -448,12 +454,19 @@ namespace YARG.Gameplay
                             new Vector3(highwayIndex * TRACK_SPACING_X, 100f, 0f), prefab.transform.rotation);
 
                         // Setup player
-                        var stem2 = player.Profile.CurrentInstrument.ToSongStem();
+                        var songStem = player.Profile.CurrentInstrument.ToSongStem();
 
-                        var total = playerCountsByStem[stem2];
+                        var total = playerCountsByStem[songStem];
+                        var channel = _mixer[songStem];
+                        if (channel == null)
+                        {
+                            YargLogger.LogFormatError("PROBLEM! No audio channel for stem {0}", songStem);
+                            continue;
+                        }
+                        YargLogger.LogDebug($"Initializing stem controller with params: channel={channel}, volumeSetting={GetVolumeSetting(songStem)}, numPlayers={total}, isOnlyStem={_mixer.Channels.Count == 1}");
                         var stemController = new BassStemController(
-                            channel: _mixer[stem2],
-                            volumeSetting: GetVolumeSetting(stem2),
+                            channel: channel,
+                            volumeSetting: GetVolumeSetting(songStem),
                             numPlayers: total,
                             isOnlyStem: _mixer.Channels.Count == 1
                         );

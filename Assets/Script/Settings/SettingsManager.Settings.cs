@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Net;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -165,11 +165,11 @@ namespace YARG.Settings
 
             public VolumeSetting SongVolume { get; } = new(1f);
 
-            public VolumeSetting CrowdVolume { get; } = new(1f);
+            public VolumeSetting CrowdVolume { get; } = new(0.5f);
 
-            public VolumeSetting SfxVolume { get; } = new(1f);
+            public VolumeSetting SfxVolume { get; } = new(0.8f);
 
-            public VolumeSetting DrumSfxVolume { get; } = new(1f);
+            public VolumeSetting DrumSfxVolume { get; } = new(0.8f);
 
             public VolumeSetting PreviewVolume { get; } = new(0.25f);
             public VolumeSetting MusicPlayerVolume { get; } = new(0.15f, MusicPlayerVolumeCallback);

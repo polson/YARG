@@ -1,4 +1,4 @@
-﻿using ManagedBass;
+using ManagedBass;
 using UnityEngine;
 using YARG.Core.Audio;
 using YARG.Core.Logging;
