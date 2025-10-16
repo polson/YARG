@@ -71,14 +71,14 @@ namespace YARG.Assets.Script.Gameplay.Player
         private SongStem _stem;
         private double _practiceSectionStartTime;
 
-        public override void Initialize(int index, YargPlayer player, SongChart chart, TrackView trackView, StemMixer mixer, int? currentHighScore)
+        public override void Initialize(int index, YargPlayer player, SongChart chart, TrackView trackView, StemController stemController, StemMixer mixer, int? currentHighScore)
         {
             _stem = player.Profile.CurrentInstrument.ToSongStem();
             if (_stem == SongStem.Bass && mixer[SongStem.Bass] == null)
             {
                 _stem = SongStem.Rhythm;
             }
-            base.Initialize(index, player, chart, trackView, mixer, currentHighScore);
+            base.Initialize(index, player, chart, trackView, stemController, mixer, currentHighScore);
         }
 
         protected override InstrumentDifficulty<GuitarNote> GetNotes(SongChart chart)
@@ -394,7 +394,7 @@ namespace YARG.Assets.Script.Gameplay.Player
         {
             if (IsStemMuted != muted)
             {
-                GameManager.ChangeStemMuteState(_stem, muted);
+                _audioController.SetMute(muted);
                 IsStemMuted = muted;
             }
         }

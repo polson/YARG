@@ -56,7 +56,7 @@ namespace YARG.Audio.BASS
         private int _syncHandle;
 
         private BassSampleChannel(int handle, int channel, SfxSample sample, string path, int playbackCount)
-            : base(sample, path, playbackCount)
+            : base(sample)
         {
             _sfxHandle = handle;
             _channel = channel;

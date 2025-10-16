@@ -201,12 +201,6 @@ namespace YARG.Gameplay
             SettingsManager.Settings.NoFailMode.OnChange -= OnNoFailModeChanged;
             EngineManager.OnSongFailed -= OnSongFailed;
 
-            //Restore stem volumes to their original state
-            foreach (var (stem, state) in _stemStates)
-            {
-                GlobalAudioHandler.SetVolumeSetting(stem, state.Volume);
-            }
-
             DisposeDebug();
             _pauseMenu.PopAllMenus();
             _mixer?.Dispose();
@@ -260,7 +254,7 @@ namespace YARG.Gameplay
 
                 totalScore += player.Score;
                 totalScore += player.BandBonusScore;
-                totalStars += player.Stars;               
+                totalStars += player.Stars;
             }
 
             if (GlobalVariables.VerboseReplays)

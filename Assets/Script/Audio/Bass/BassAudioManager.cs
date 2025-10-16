@@ -8,6 +8,7 @@ using UnityEngine;
 using YARG.Core.Audio;
 using YARG.Core.Logging;
 using YARG.Settings;
+using YARG.Settings.Types;
 
 #if UNITY_EDITOR
 using UnityEditor;
@@ -146,10 +147,6 @@ namespace YARG.Audio.BASS
                 return;
             }
 
-            LoadSfx();
-            LoadDrumSfx(); // TODO: move drum sfx loading/disposal to song start/end respectively IF there are any drum players
-            LoadVox();
-
             var info = Bass.Info;
             PlaybackLatency = info.Latency + Bass.DeviceBufferLength + devPeriod;
             MinimumBufferLength = info.MinBufferLength + Bass.UpdatePeriod;
@@ -242,7 +239,7 @@ namespace YARG.Audio.BASS
             return device;
         }
 
-        private void LoadSfx()
+        protected override void LoadSfx()
         {
             YargLogger.LogInfo("Loading SFX");
 
@@ -272,7 +269,7 @@ namespace YARG.Audio.BASS
             YargLogger.LogInfo("Finished loading SFX");
         }
 
-        private void LoadDrumSfx()
+        protected override void LoadDrumSfx()
         {
             YargLogger.LogInfo("Loading Drum SFX");
 
@@ -300,7 +297,7 @@ namespace YARG.Audio.BASS
             YargLogger.LogInfo("Finished loading Drum SFX");
         }
 
-        private void LoadVox()
+        protected override void LoadVox()
         {
             YargLogger.LogInfo("Loading VOX");
             string voxFolder = Path.Combine(Application.streamingAssetsPath, "vox");

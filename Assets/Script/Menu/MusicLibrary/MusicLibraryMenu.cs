@@ -4,17 +4,14 @@ using System.Linq;
 using System.Threading;
 using TMPro;
 using UnityEngine;
-using UnityEngine.InputSystem;
 using YARG.Core;
 using YARG.Core.Audio;
 using YARG.Core.Game;
 using YARG.Core.Input;
 using YARG.Core.Song;
-using YARG.Input;
 using YARG.Localization;
 using YARG.Menu.ListMenu;
 using YARG.Menu.Navigation;
-using YARG.Menu.Persistent;
 using YARG.Player;
 using YARG.Playlists;
 using YARG.Settings;
@@ -146,7 +143,9 @@ namespace YARG.Menu.MusicLibrary
 
             SetRefreshIfNeeded();
 
-            StemSettings.ApplySettings = SettingsManager.Settings.ApplyVolumesInMusicLibrary.Value;
+            //TODO: do something with this
+            var applyVolumesInMusicLibrary = SettingsManager.Settings.ApplyVolumesInMusicLibrary.Value;
+
             _previewDelay = 0;
             if (_reloadState == MusicLibraryReloadState.Full)
             {
@@ -531,7 +530,6 @@ namespace YARG.Menu.MusicLibrary
             _previewCanceller?.Cancel();
             _previewContext?.Dispose();
             _previewContext = null;
-            StemSettings.ApplySettings = true;
             MenuManager.Instance.PopMenu();
         }
 
@@ -707,7 +705,6 @@ namespace YARG.Menu.MusicLibrary
             _previewCanceller?.Cancel();
             _previewContext?.Dispose();
             _reloadState = MusicLibraryReloadState.Partial;
-            StemSettings.ApplySettings = true;
         }
 
         private void Back()

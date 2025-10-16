@@ -64,7 +64,7 @@ namespace YARG.Gameplay.Player
 
         private SongChart _chart;
 
-        public void Initialize(int index, int vocalIndex, YargPlayer player, SongChart chart,
+        public void Initialize(int index, int vocalIndex, YargPlayer player, SongChart chart, StemController stemController,
             VocalsPlayerHUD hud, VocalPercussionTrack percussionTrack, int? lastHighScore, float trackSpeed)
         {
             if (IsInitialized)
@@ -72,7 +72,7 @@ namespace YARG.Gameplay.Player
                 return;
             }
 
-            base.Initialize(index, player, chart, lastHighScore);
+            base.Initialize(index, player, chart, stemController, lastHighScore);
 
             // Save the chart
             _chart = chart;
@@ -201,9 +201,9 @@ namespace YARG.Gameplay.Player
                 {
                     IsFc = false;
                 }
-                
+
                 LastCombo = Combo;
-                
+
                 ShowTextNotifications(isLastPhrase);
 
                 // Order is important here. ShowVocalPhraseResult() will skip showing AWESOME! if other, more important notifications are already showing.

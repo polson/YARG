@@ -32,7 +32,7 @@ namespace YARG.Settings.Types
 
         public abstract string AddressableName { get; }
 
-        public Action<T> OnChange;
+        public event Action<T> OnChange;
 
         protected AbstractSetting(Action<T> onChange)
         {

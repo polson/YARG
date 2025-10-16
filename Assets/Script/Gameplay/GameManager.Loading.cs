@@ -1,11 +1,18 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics.Contracts;
 using System.IO;
+using System.Linq;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
+using YARG.Audio;
+using YARG.Audio.BASS;
 using YARG.Core;
 using YARG.Core.Audio;
 using YARG.Core.Chart;
+using YARG.Core.Engine.Drums;
+using YARG.Core.Engine.Guitar;
+using YARG.Core.Engine.Keys;
 using YARG.Core.IO;
 using YARG.Core.Logging;
 using YARG.Core.Replays;
@@ -17,6 +24,7 @@ using YARG.Playback;
 using YARG.Player;
 using YARG.Scores;
 using YARG.Settings;
+using YARG.Settings.Types;
 using YARG.Song;
 
 namespace YARG.Gameplay
@@ -363,8 +371,18 @@ namespace YARG.Gameplay
             // Make sure enough beatlines have been generated to cover the song end delay
             Chart.SyncTrack.GenerateBeatlines(SongLength + SONG_END_DELAY, true);
 
+            var crowdChannel = _mixer[SongStem.Crowd];
+            StemController stemController = null;
+            if (crowdChannel != null)
+            {
+                stemController = new BassStemController(
+                    crowdChannel,
+                    SettingsManager.Settings.CrowdVolume
+                );
+            }
+
             BeatEventHandler = new BeatEventHandler(Chart.SyncTrack);
-            CrowdEventHandler = new CrowdEventHandler(Chart, this);
+            CrowdEventHandler = new CrowdEventHandler(Chart, stemController, this);
 
             _chartLoaded?.Invoke(Chart);
 
@@ -382,6 +400,12 @@ namespace YARG.Gameplay
                 int index = -1;
                 int highwayIndex = -1;
                 int vocalIndex = -1;
+
+                var playerCountsByStem = YargPlayers
+                    .Where(player => !player.SittingOut)
+                    .GroupBy(player => player.Profile.CurrentInstrument.ToSongStem())
+                    .ToDictionary(group => group.Key, group => group.Count());
+
                 foreach (var player in YargPlayers)
                 {
                     if (!player.IsReplay)
@@ -430,10 +454,26 @@ namespace YARG.Gameplay
                             new Vector3(highwayIndex * TRACK_SPACING_X, 100f, 0f), prefab.transform.rotation);
 
                         // Setup player
-                        var trackPlayer = playerObject.GetComponent<TrackPlayer>();
-                        var trackView = _trackViewManager.CreateTrackView(trackPlayer, player);
-                        trackPlayer.Initialize(highwayIndex, player, Chart, trackView, _mixer, lastHighScore);
+                        var songStem = player.Profile.CurrentInstrument.ToSongStem();
 
+                        var total = playerCountsByStem[songStem];
+                        var channel = _mixer[songStem];
+                        if (channel == null)
+                        {
+                            YargLogger.LogFormatError("PROBLEM! No audio channel for stem {0}", songStem);
+                            continue;
+                        }
+                        YargLogger.LogDebug($"Initializing stem controller with params: channel={channel}, volumeSetting={GetVolumeSetting(songStem)}, numPlayers={total}, isOnlyStem={_mixer.Channels.Count == 1}");
+                        var stemController = new BassStemController(
+                            channel: channel,
+                            volumeSetting: GetVolumeSetting(songStem),
+                            numPlayers: total,
+                            isOnlyStem: _mixer.Channels.Count == 1
+                        );
+
+                        var trackPlayer = playerObject.GetComponent<TrackPlayer>();
+                        var trackView = _trackViewManager.CreateTrackView(trackPlayer);
+                        trackPlayer.Initialize(highwayIndex, player, Chart, trackView, stemController, _mixer, lastHighScore);
                         _players.Add(trackPlayer);
                         _trackViewManager._highwayCameraRendering.AddTrackPlayer(trackPlayer);
                     }
@@ -464,7 +504,13 @@ namespace YARG.Gameplay
 
                         var percussionTrack = VocalTrack.CreatePercussionTrack();
                         percussionTrack.TrackSpeed = VocalTrack.TrackSpeed;
-                        vocalsPlayer.Initialize(index, vocalIndex, player, Chart, playerHud, percussionTrack, lastHighScore, VocalTrack.TrackSpeed);
+                        var stemController = new BassStemController(
+                            channel: _mixer[SongStem.Vocals],
+                            volumeSetting: GetVolumeSetting(SongStem.Vocals),
+                            numPlayers: 1,
+                            isOnlyStem: _mixer.Channels.Count == 1
+                        );
+                        vocalsPlayer.Initialize(index, vocalIndex, player, Chart, stemController, playerHud, percussionTrack, lastHighScore, VocalTrack.TrackSpeed);
 
                         _players.Add(vocalsPlayer);
                     }
@@ -498,5 +544,22 @@ namespace YARG.Gameplay
                 YargLogger.LogException(ex, "Failed to load song!");
             }
         }
+
+         private VolumeSetting GetVolumeSetting(SongStem stem)
+         {
+             return stem switch
+             {
+                 SongStem.Guitar                       => SettingsManager.Settings.GuitarVolume,
+                 SongStem.Rhythm                       => SettingsManager.Settings.RhythmVolume,
+                 SongStem.Bass                         => SettingsManager.Settings.BassVolume,
+                 SongStem.Keys                         => SettingsManager.Settings.KeysVolume,
+                 var songStem when songStem.IsDrums()   => SettingsManager.Settings.DrumsVolume,
+                 var songStem when songStem.IsVocals() => SettingsManager.Settings.VocalsVolume,
+                 SongStem.Song                         => SettingsManager.Settings.SongVolume,
+                 SongStem.Crowd                        => SettingsManager.Settings.CrowdVolume,
+                 SongStem.Sfx                          => SettingsManager.Settings.SfxVolume,
+                 _                                     => SettingsManager.Settings.SongVolume
+             };
+         }
     }
 }

@@ -47,12 +47,12 @@ namespace YARG.Gameplay.Player
 
         private Dictionary<int, float> _fretToLastPressedTimeDelta = new Dictionary<int, float>();
 
-        public override void Initialize(int index, YargPlayer player, SongChart chart, TrackView trackView, StemMixer mixer,
+        public override void Initialize(int index, YargPlayer player, SongChart chart, TrackView trackView, StemController stemController, StemMixer mixer,
             int? currentHighScore)
         {
             // Before we do anything, see if we're in five lane mode or not
             _fiveLaneMode = player.Profile.CurrentInstrument == Instrument.FiveLaneDrums;
-            base.Initialize(index, player, chart, trackView, mixer, currentHighScore);
+            base.Initialize(index, player, chart, trackView, stemController, mixer, currentHighScore);
         }
 
         protected override InstrumentDifficulty<DrumNote> GetNotes(SongChart chart)
@@ -262,14 +262,14 @@ namespace YARG.Gameplay.Player
         {
             if (IsStemMuted != muted)
             {
-                GameManager.ChangeStemMuteState(SongStem.Drums, muted);
+                _audioController.SetMute(muted);
                 IsStemMuted = muted;
             }
         }
 
         public override void SetStarPowerFX(bool active)
         {
-            GameManager.ChangeStemReverbState(SongStem.Drums, active);
+            _audioController.SetReverb(active);
         }
 
         protected override void ResetVisuals()
