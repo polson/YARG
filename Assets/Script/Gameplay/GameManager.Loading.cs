@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 using YARG.Audio;
@@ -268,15 +269,13 @@ namespace YARG.Gameplay
 
         private void SetupPlayerAudio()
         {
-            _playerAudioManager = new PlayerAudioManager(this);
+            var mixerController = new MixerController(_mixer);
+            var isMultiTrack = _mixer.Channels.Count > 1;
+            _playerAudioManager = new PlayerAudioManager(this, mixerController, isMultiTrack);
             foreach (var player in _players)
             {
-                var songStem = player.Player.Profile.CurrentInstrument.ToSongStem();
-                if (songStem == SongStem.Bass && _mixer[SongStem.Bass] == null)
-                {
-                    songStem = SongStem.Rhythm;
-                }
-                _playerAudioManager.AddPlayer(songStem, player);
+                var mixerGroup = player.Player.Profile.CurrentInstrument.ToMixerGroup();
+                _playerAudioManager.AddPlayer(mixerGroup, player);
             }
         }
 
@@ -380,6 +379,8 @@ namespace YARG.Gameplay
             Chart.SyncTrack.GenerateBeatlines(SongLength + SONG_END_DELAY, true);
 
             BeatEventHandler = new BeatEventHandler(Chart.SyncTrack);
+
+            //TODO pass in mixer controller for crowd
             CrowdEventHandler = new CrowdEventHandler(Chart, this);
 
             _chartLoaded?.Invoke(Chart);
@@ -483,25 +484,6 @@ namespace YARG.Gameplay
                         vocalsPlayer.Initialize(index, vocalIndex, player, Chart, playerHud, percussionTrack, lastHighScore, VocalTrack.TrackSpeed);
 
                         _players.Add(vocalsPlayer);
-                    }
-
-                    // Add (or increase total of) the stem state
-                    var stem = player.Profile.CurrentInstrument.ToSongStem();
-                    if (stem == SongStem.Bass && !_stemStates.ContainsKey(SongStem.Bass))
-                    {
-                        stem = SongStem.Rhythm;
-                    }
-
-                    if (stem != _backgroundStem && _stemStates.TryGetValue(stem, out var state))
-                    {
-                        ++state.Total;
-                        ++state.Audible;
-                    }
-                    else if (_stemStates.TryGetValue(_backgroundStem, out state))
-                    {
-                        // Ensures the stem will still play at a minimum of 50%, even if all players mute
-                        state.Total += 2;
-                        state.Audible += 2;
                     }
                 }
                 // Set the hud scale (position is handled by TrackPlayer)
