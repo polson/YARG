@@ -349,15 +349,36 @@ namespace YARG.Audio.BASS
 
             _sourceHandles.Add(sourceStream);
             List<StemData> stemDatas = new();
-            foreach (var stemInfo in stemInfos)
+
+            // Group by stem to consolidate multichannel stems (e.g., drums)
+            var groupedByStem = stemInfos.GroupBy(info => info.Stem);
+            foreach (var group in groupedByStem)
             {
-                if (!BassAudioManager.CreateSplitStreams(sourceStream, stemInfo.Indices, out var streamHandles,
+                SongStem stem = group.Key;
+                IEnumerable<StemInfo> infos = group;
+                bool isMultiChannel = infos.Count() > 1;
+                var allIndices = infos
+                    .Where(info => info.Indices != null)
+                    .SelectMany(info => info.Indices)
+                    .ToArray();
+                if (allIndices.Length == 0)
+                {
+                    allIndices = null;
+                }
+
+                if (!BassAudioManager.CreateSplitStreams(sourceStream, allIndices, out var streamHandles,
                     out var reverbHandles))
                 {
-                    YargLogger.LogFormatError("Failed to load stem {0}: {1}!", stemInfo.Stem, Bass.LastError);
+                    YargLogger.LogFormatError("Failed to load stem {0}: {1}!", stem, Bass.LastError);
                     continue;
                 }
-                stemDatas.Add(new StemData(stemInfo.Stem, stemInfo.GetVolumeMatrix(), streamHandles!, reverbHandles!));
+
+                // Build volume matrix for multichannel stems
+                float[,] volumeMatrix = isMultiChannel && allIndices != null
+                    ? BuildVolumeMatrix(infos, allIndices.Length)
+                    : !isMultiChannel ? infos.First().GetVolumeMatrix() : null;
+
+                stemDatas.Add(new StemData(stem, volumeMatrix, streamHandles!, reverbHandles!));
             }
 
             if (!stemDatas.Any())
@@ -464,11 +485,34 @@ namespace YARG.Audio.BASS
 
                 if (!BassMix.ChannelSetMatrix(streamHandles.Stream, volumeMatrix) || !BassMix.ChannelSetMatrix(reverbHandles.Stream, volumeMatrix))
                 {
-                    YargLogger.LogFormatError("Failed to set {stem} matrices: {0}!", Bass.LastError);
+                    YargLogger.LogFormatError("Failed to set {0} matrices: {1}!", stem, Bass.LastError);
                     return false;
                 }
             }
             return true;
+        }
+
+#nullable enable
+        private static float[,]? BuildVolumeMatrix(IEnumerable<StemInfo> infos, int totalChannels)
+#nullable disable
+        {
+            float[,] volumeMatrix = new float[2, totalChannels];
+            const int LEFT_PAN = 0;
+            const int RIGHT_PAN = 1;
+
+            int channelIndex = 0;
+            foreach (var info in infos)
+            {
+                var panning = info.Panning;
+                for (int i = 0; i < info.Indices.Length; ++i)
+                {
+                    volumeMatrix[LEFT_PAN, channelIndex] = panning[2 * i];
+                    volumeMatrix[RIGHT_PAN, channelIndex] = panning[2 * i + 1];
+                    channelIndex++;
+                }
+            }
+
+            return volumeMatrix;
         }
 
         protected override bool RemoveChannel_Internal(SongStem stemToRemove)
