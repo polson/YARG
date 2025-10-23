@@ -3,20 +3,24 @@ using System.IO;
 using System.Threading.Tasks;
 using ManagedBass;
 using ManagedBass.Mix;
+using UnityEngine;
 using YARG.Core.Audio;
 using YARG.Core.Logging;
 using YARG.Core.Song;
+using YARG.Helpers;
 
 namespace YARG.Audio.BASS
 {
     public sealed class BassStemMixer : StemMixer
     {
-        private readonly int _mixerHandle;
+        private const    float WHAMMY_SYNC_INTERVAL_SECONDS = 1f;
+        private readonly int   _mixerHandle;
 
-        private StemChannel _mainChannel;
+        private StemChannel  _mainChannel;
         private StreamHandle _mainHandle;
-        private int _songEndHandle;
-        private float _speed;
+        private int          _songEndHandle;
+        private float        _speed;
+        private Timer        _whammySyncTimer;
 
         public override event Action SongEnd
         {
@@ -49,6 +53,7 @@ namespace YARG.Audio.BASS
         {
             _mixerHandle = handle;
             _speed = speed;
+            _whammySyncTimer = new Timer();
             SetVolume_Internal(volume);
             _BufferSetter(Settings.SettingsManager.Settings.EnablePlaybackBuffer.Value, Bass.PlaybackBufferLength);
         }
@@ -67,7 +72,23 @@ namespace YARG.Audio.BASS
                     YargLogger.LogFormatError("Failed to fill playback buffer: {0}!", Bass.LastError);
                 }
             }
+
+            _whammySyncTimer.Start(WHAMMY_SYNC_INTERVAL_SECONDS, SyncWhammyPitch);
+
             return 0;
+        }
+
+        private void SyncWhammyPitch()
+        {
+            foreach (var channel in Channels)
+            {
+                // GetWhammyPitch returns 1.0 if no pitch shift is applied
+                if (Mathf.Approximately(channel.GetWhammyPitch(), 1.0f))
+                {
+                    // Setting the pitch shift to 0.0 percent corrects sync drift when pitch shift is applied
+                    channel.SetWhammyPitch(percent: 0.0f);
+                }
+            }
         }
 
         protected override void FadeIn_Internal(double maxVolume, double duration)
@@ -83,6 +104,7 @@ namespace YARG.Audio.BASS
 
         protected override int Pause_Internal()
         {
+            _whammySyncTimer.Stop();
             if (!Bass.ChannelPause(_mixerHandle))
             {
                 return (int) Bass.LastError;
@@ -302,6 +324,8 @@ namespace YARG.Audio.BASS
 
         protected override void DisposeManagedResources()
         {
+            _whammySyncTimer.Stop();
+            _whammySyncTimer = null;
             if (_channels.Count == 0)
             {
                 _mainHandle?.Dispose();
