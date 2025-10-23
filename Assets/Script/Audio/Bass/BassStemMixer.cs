@@ -8,14 +8,16 @@ using YARG.Core.Audio;
 using YARG.Core.Logging;
 using YARG.Core.Song;
 using YARG.Helpers;
+using YARG.Settings;
 
 namespace YARG.Audio.BASS
 {
     public sealed class BassStemMixer : StemMixer
     {
         private const    float WHAMMY_SYNC_INTERVAL_SECONDS = 1f;
-        private readonly int   _mixerHandle;
+        private          bool  IsWhammyEnabled => SettingsManager.Settings.UseWhammyFx.Value;
 
+        private readonly int   _mixerHandle;
         private StemChannel  _mainChannel;
         private StreamHandle _mainHandle;
         private int          _songEndHandle;
@@ -55,7 +57,6 @@ namespace YARG.Audio.BASS
             _speed = speed;
             _whammySyncTimer = new Timer();
             SetVolume_Internal(volume);
-            _BufferSetter(Settings.SettingsManager.Settings.EnablePlaybackBuffer.Value, Bass.PlaybackBufferLength);
         }
 
         protected override int Play_Internal(bool restartBuffer)
@@ -65,15 +66,10 @@ namespace YARG.Audio.BASS
                 return (int) Bass.LastError;
             }
 
-            if (Settings.SettingsManager.Settings.EnablePlaybackBuffer.Value)
+            if (IsWhammyEnabled)
             {
-                if (!Bass.ChannelUpdate(_mixerHandle, Bass.PlaybackBufferLength))
-                {
-                    YargLogger.LogFormatError("Failed to fill playback buffer: {0}!", Bass.LastError);
-                }
+                _whammySyncTimer.Start(WHAMMY_SYNC_INTERVAL_SECONDS, SyncWhammyPitch);
             }
-
-            _whammySyncTimer.Start(WHAMMY_SYNC_INTERVAL_SECONDS, SyncWhammyPitch);
 
             return 0;
         }
@@ -306,6 +302,7 @@ namespace YARG.Audio.BASS
         protected override void SetBufferLength_Internal(int length)
         {
             _BufferSetter(Settings.SettingsManager.Settings.EnablePlaybackBuffer.Value, length);
+            _BufferSetter(SettingsManager.Settings.EnablePlaybackBuffer.Value, length);
         }
 
         private void _BufferSetter(bool enable, int length)
