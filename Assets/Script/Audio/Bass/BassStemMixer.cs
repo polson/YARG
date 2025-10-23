@@ -104,7 +104,6 @@ namespace YARG.Audio.BASS
 
         protected override int Pause_Internal()
         {
-            _whammySyncTimer.Stop();
             if (!Bass.ChannelPause(_mixerHandle))
             {
                 return (int) Bass.LastError;

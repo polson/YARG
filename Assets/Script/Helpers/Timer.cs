@@ -7,31 +7,35 @@ namespace YARG.Helpers
 {
     public class Timer
     {
-        private CancellationTokenSource _cancellationTokenSource;
+        private CancellationTokenSource _cts;
+        private bool                    IsRunning => _cts != null;
 
         public void Start(float intervalSeconds, Action onTick)
         {
-            Stop();
-            _cancellationTokenSource = new CancellationTokenSource();
+            if (IsRunning)
+            {
+                return;
+            }
 
+            _cts = new CancellationTokenSource();
             UniTaskAsyncEnumerable.Timer(
                     TimeSpan.Zero,
                     TimeSpan.FromSeconds(intervalSeconds)
                 )
-                .ForEachAsync(_ => onTick?.Invoke(), _cancellationTokenSource.Token)
+                .ForEachAsync(_ => onTick?.Invoke(), _cts.Token)
                 .Forget();
         }
 
         public void Stop()
         {
-            if (_cancellationTokenSource == null)
+            if (_cts == null)
             {
                 return;
             }
 
-            _cancellationTokenSource.Cancel();
-            _cancellationTokenSource.Dispose();
-            _cancellationTokenSource = null;
+            _cts.Cancel();
+            _cts.Dispose();
+            _cts = null;
         }
     }
 }
