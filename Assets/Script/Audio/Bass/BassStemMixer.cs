@@ -68,20 +68,23 @@ namespace YARG.Audio.BASS
 
             if (IsWhammyEnabled)
             {
-                _whammySyncTimer.Start(WHAMMY_SYNC_INTERVAL_SECONDS, SyncWhammyPitch);
+                _whammySyncTimer.Start(WHAMMY_SYNC_INTERVAL_SECONDS, SyncWhammyDrift);
             }
 
             return 0;
         }
 
-        private void SyncWhammyPitch()
+        /// <summary>.
+        /// The BASS PitchShift effect causes the stem playback to drift over time.
+        /// It was discovered that we can correct the drift by setting the whammy pitch
+        /// to 0% when no pitch shift is applied.
+        /// </summary>
+        private void SyncWhammyDrift()
         {
             foreach (var channel in Channels)
             {
-                // GetWhammyPitch returns 1.0 if no pitch shift is applied
                 if (Mathf.Approximately(channel.GetWhammyPitch(), 1.0f))
                 {
-                    // Setting the pitch shift to 0.0 percent corrects sync drift when pitch shift is applied
                     channel.SetWhammyPitch(percent: 0.0f);
                 }
             }
@@ -301,7 +304,6 @@ namespace YARG.Audio.BASS
 
         protected override void SetBufferLength_Internal(int length)
         {
-            _BufferSetter(Settings.SettingsManager.Settings.EnablePlaybackBuffer.Value, length);
             _BufferSetter(SettingsManager.Settings.EnablePlaybackBuffer.Value, length);
         }
 
