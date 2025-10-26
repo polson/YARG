@@ -117,15 +117,25 @@ namespace YARG.Gameplay.Visuals
                     minWorld = x - 1;
                 }
             }
+
             _renderCamera.transform.position = _renderCamera.transform.position.WithX((minWorld + maxWorld) / 2);
-            _renderCamera.orthographicSize = Math.Max(25, (maxWorld - minWorld) / 2);
+            float requiredHalfWidth = Math.Max(25, (maxWorld - minWorld) / 2f);
+            float safeAspect = Mathf.Max(_renderCamera.aspect, 0.001f);
+            _renderCamera.orthographicSize = requiredHalfWidth / safeAspect;
         }
 
         public static float CalculateScale(int count)
         {
             // This equation calculates a good scale for all of the tracks.
             // It was made with experimentation; there's probably a "real" formula for this.
-            return 1f - Mathf.Max(0.7f * Mathf.Log10(count), 0f);
+            float baseScale = 1f - Mathf.Max(0.7f * Mathf.Log10(count), 0f);
+            const float baseAspectRatio = 16f / 9f;
+            var aspectRatio = Screen.width / (float) Screen.height;
+
+            // On a 9:16 screen, this will be ~0.56.
+            // On a 16:9 screen, this will be 1.0.
+            float aspectCorrection = aspectRatio / baseAspectRatio;
+            return baseScale * aspectCorrection;
         }
 
         // This is only directly used for fake track player really
