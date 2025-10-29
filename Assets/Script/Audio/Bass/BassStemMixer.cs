@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 using ManagedBass;
+using ManagedBass.Fx;
 using ManagedBass.Mix;
 using UnityEngine;
 using YARG.Core.Audio;
@@ -15,14 +16,17 @@ namespace YARG.Audio.BASS
     public sealed class BassStemMixer : StemMixer
     {
         private const    float WHAMMY_SYNC_INTERVAL_SECONDS = 1f;
-        private          bool  IsWhammyEnabled => SettingsManager.Settings.UseWhammyFx.Value;
 
-        private readonly int   _mixerHandle;
-        private StemChannel  _mainChannel;
-        private StreamHandle _mainHandle;
-        private int          _songEndHandle;
-        private float        _speed;
-        private Timer        _whammySyncTimer;
+        //The delay which is introduced by the pitch shift effect, in seconds
+        private const float PITCH_DELAY_SECONDS = GlobalAudioHandler.WHAMMY_FFT_DEFAULT / 44100f;
+        private       bool  IsWhammyEnabled => SettingsManager.Settings.UseWhammyFx.Value;
+
+        private readonly int          _mixerHandle;
+        private          BassTempoStream          _tempoStream;
+        private          StreamHandle _mainHandle;
+        private          int          _songEndHandle;
+        private          float        _speed;
+        private          Timer        _whammySyncTimer;
 
         public override event Action SongEnd
         {
@@ -39,7 +43,7 @@ namespace YARG.Audio.BASS
                             UnityMainThreadCallback.QueueEvent(end.Invoke);
                         }
                     }
-                    _songEndHandle = BassMix.ChannelSetSync(_mainHandle.Stream, SyncFlags.End, 0, sync);
+                    _songEndHandle = BassMix.ChannelSetSync(_tempoStream.handle, SyncFlags.End, 0, sync);
                 }
 
                 _songEnd += value;
@@ -53,15 +57,23 @@ namespace YARG.Audio.BASS
         internal BassStemMixer(string name, BassAudioManager manager, float speed, double volume, int handle, bool clampStemVolume)
             : base(name, manager, clampStemVolume)
         {
+            if (!BassTempoStream.CreateFromMixer(handle, out var tempoStream))
+            {
+                YargLogger.LogFormatError("Failed to create tempo stream: {0}", Bass.LastError);
+                return;
+            }
+
             _mixerHandle = handle;
+            _tempoStream = tempoStream;
             _speed = speed;
             _whammySyncTimer = new Timer();
             SetVolume_Internal(volume);
         }
 
-        protected override int Play_Internal(bool restartBuffer)
+        protected override int Play_Internal()
         {
-            if (!Bass.ChannelPlay(_mixerHandle, restartBuffer))
+            var result = _tempoStream.Play();
+            if (result != 0)
             {
                 return (int) Bass.LastError;
             }
@@ -93,65 +105,43 @@ namespace YARG.Audio.BASS
         protected override void FadeIn_Internal(double maxVolume, double duration)
         {
             float scaled = (float) BassAudioManager.ExponentialVolume(maxVolume);
-            Bass.ChannelSlideAttribute(_mixerHandle, ChannelAttribute.Volume, scaled, (int) (duration * SongMetadata.MILLISECOND_FACTOR));
+            Bass.ChannelSlideAttribute(_tempoStream.handle, ChannelAttribute.Volume, scaled, (int) (duration * SongMetadata.MILLISECOND_FACTOR));
         }
 
         protected override void FadeOut_Internal(double duration)
         {
-            Bass.ChannelSlideAttribute(_mixerHandle, ChannelAttribute.Volume, 0, (int) (duration * SongMetadata.MILLISECOND_FACTOR));
+            Bass.ChannelSlideAttribute(_tempoStream.handle, ChannelAttribute.Volume, 0, (int) (duration * SongMetadata.MILLISECOND_FACTOR));
         }
 
         protected override int Pause_Internal()
         {
-            if (!Bass.ChannelPause(_mixerHandle))
-            {
-                return (int) Bass.LastError;
-            }
-            return 0;
+            return _tempoStream.Pause();
         }
 
         protected override double GetPosition_Internal()
         {
-            double seconds = _mainChannel.GetPosition();
-            return seconds;
+            return _tempoStream.GetPosition();
         }
 
         protected override double GetVolume_Internal()
         {
-            if (!Bass.ChannelGetAttribute(_mixerHandle, ChannelAttribute.Volume, out float volume))
-            {
-                YargLogger.LogFormatError("Failed to get volume: {0}", Bass.LastError);
-            }
+            var volume = _tempoStream.GetVolume();
             return BassAudioManager.LogarithmicVolume(volume);
         }
 
         protected override void SetPosition_Internal(double position)
         {
-            bool playing = !IsPaused;
-            if (playing)
-            {
-                // Pause when seeking to avoid desyncing individual stems
-                Pause_Internal();
-            }
-
             foreach (var channel in _channels)
             {
                 channel.SetPosition(position);
             }
-
-            if (playing)
-            {
-                Play_Internal(true);
-            }
+            _tempoStream.SetPosition(position);
         }
 
         protected override void SetVolume_Internal(double volume)
         {
             volume = BassAudioManager.ExponentialVolume(volume);
-            if (!Bass.ChannelSetAttribute(_mixerHandle, ChannelAttribute.Volume, volume))
-            {
-                YargLogger.LogFormatError("Failed to set mixer volume: {0}", Bass.LastError);
-            }
+            _tempoStream.SetVolume(volume);
         }
 
         protected override int GetFFTData_Internal(float[] buffer, int fftSize, bool complex)
@@ -183,7 +173,7 @@ namespace YARG.Audio.BASS
                 flags |= (int) DataFlags.FFTComplex;
             }
 
-            int data = Bass.ChannelGetData(_mixerHandle, buffer, flags);
+            int data = Bass.ChannelGetData(_tempoStream.handle, buffer, flags);
             if (data < 0)
             {
                 return (int) Bass.LastError;
@@ -193,7 +183,7 @@ namespace YARG.Audio.BASS
 
         protected override int GetSampleData_Internal(float[] buffer)
         {
-            int data = Bass.ChannelGetData(_mixerHandle, buffer, (buffer.Length * 4) | (int) (DataFlags.Float));
+            int data = Bass.ChannelGetData(_tempoStream.handle, buffer, (buffer.Length * 4) | (int) (DataFlags.Float));
             if (data < 0)
             {
                 return (int) Bass.LastError;
@@ -203,27 +193,35 @@ namespace YARG.Audio.BASS
 
         protected override int GetLevel_Internal(float[] level)
         {
-            bool status = Bass.ChannelGetLevel(_mixerHandle, level, 0.2f, LevelRetrievalFlags.Mono | LevelRetrievalFlags.RMS);
+            bool status = Bass.ChannelGetLevel(_tempoStream.handle, level, 0.2f, LevelRetrievalFlags.Mono | LevelRetrievalFlags.RMS);
             if (!status)
             {
                 return (int) Bass.LastError;
             }
 
-            return (int) ManagedBass.Errors.OK;
+            return (int) Errors.OK;
         }
 
         protected override void SetSpeed_Internal(float speed, bool shiftPitch)
         {
             speed = (float) Math.Clamp(speed, 0.05, 50);
-            if (_speed == speed)
+            if (Mathf.Approximately(_speed, speed))
             {
                 return;
             }
 
             _speed = speed;
-            foreach (var channel in _channels)
+
+            float percentageSpeed = speed * 100;
+            float relativeSpeed = percentageSpeed - 100;
+
+            _tempoStream.SetSpeed(relativeSpeed);
+
+            if (GlobalAudioHandler.IsChipmunkSpeedup && shiftPitch)
             {
-                channel.SetSpeed(speed, shiftPitch);
+                double accurateSemitoneShift = 12 * Math.Log(speed, 2);
+                float finalSemitoneShift = (float) Math.Clamp(accurateSemitoneShift, -60, 60);
+                _tempoStream.SetPitch(finalSemitoneShift);
             }
         }
 
@@ -247,8 +245,16 @@ namespace YARG.Audio.BASS
                 var isMultiChannel = indices != null && panning != null;
                 var flags = isMultiChannel ? BassFlags.MixerChanMatrix : BassFlags.Default;
 
-                if (!BassMix.MixerAddChannel(_mixerHandle, streamHandles.Stream, flags) ||
-                    !BassMix.MixerAddChannel(_mixerHandle, reverbHandles.Stream, flags))
+
+                //Delay any non-pitch bended stem by Whammy FFT size samples to align with pitch bended stems
+                long bytes = 0;
+                if (GlobalAudioHandler.UseWhammyFx && !AudioHelpers.PitchBendAllowedStems.Contains(stem))
+                {
+                    bytes = Bass.ChannelSeconds2Bytes(_mixerHandle, PITCH_DELAY_SECONDS);
+                }
+
+                if (!BassMix.MixerAddChannel(_mixerHandle, streamHandles.Stream, flags, bytes, 0) ||
+                    !BassMix.MixerAddChannel(_mixerHandle, reverbHandles.Stream, flags, bytes, 0))
                 {
                     YargLogger.LogFormatError("Failed to add channel {0} to mixer: {1}!", stem, Bass.LastError);
                     return false;
@@ -281,6 +287,7 @@ namespace YARG.Audio.BASS
 
                 CreateChannel(stem, sourceStream, streamHandles, reverbHandles);
             }
+
             return true;
         }
 
@@ -345,6 +352,7 @@ namespace YARG.Audio.BASS
                     YargLogger.LogFormatError("Failed to free mixer stream (THIS WILL LEAK MEMORY!): {0}!", Bass.LastError);
                 }
             }
+            _tempoStream.Dispose();
         }
 
         private void CreateChannel(SongStem stem, int sourceHandle, StreamHandle streamHandles, StreamHandle reverbHandles)
@@ -352,12 +360,11 @@ namespace YARG.Audio.BASS
             var pitchparams = BassAudioManager.SetPitchParams(stem, _speed, streamHandles, reverbHandles);
             var stemchannel = new BassStemChannel(_manager, stem, _clampStemVolume, pitchparams, sourceHandle, streamHandles, reverbHandles);
 
-            double length = BassAudioManager.GetLengthInSeconds(streamHandles.Stream);
+            double length = _tempoStream.Length;
             if (_mainHandle == null || length > _length)
             {
-                _mainChannel = stemchannel;
                 _mainHandle = streamHandles;
-                _length = length;
+                _length = length; //TODO: clean this up
             }
 
             _channels.Add(stemchannel);

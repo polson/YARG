@@ -20,7 +20,7 @@ namespace YARG.Audio.BASS
 #nullable enable
         public static StreamHandle? Create(int sourceStream, int[] indices)
         {
-            const BassFlags splitFlags = BassFlags.Decode | BassFlags.SplitPosition;
+            const BassFlags splitFlags = BassFlags.SplitPosition | BassFlags.Decode;
             const BassFlags tempoFlags = BassFlags.SampleOverrideLowestVolume | BassFlags.Decode | BassFlags.FxFreeSource;
 
             int[]? channelMap = null;
@@ -41,7 +41,7 @@ namespace YARG.Audio.BASS
                 YargLogger.LogFormatError("Failed to create split stream: {0}!", Bass.LastError);
                 return null;
             }
-            return new StreamHandle(BassFx.TempoCreate(streamSplit, tempoFlags));
+            return new StreamHandle(streamSplit);
         }
 
         private bool _disposed;
@@ -400,7 +400,7 @@ namespace YARG.Audio.BASS
         {
             // The float flag allows >0dB signals.
             // Note that the compressor attempts to normalize signals >-2dB, but some mixes will pierce through.
-            mixerHandle = BassMix.CreateMixerStream(44100, 2, BassFlags.Float);
+            mixerHandle = BassMix.CreateMixerStream(44100, 2, BassFlags.Float | BassFlags.Decode);
             if (mixerHandle == 0)
             {
                 YargLogger.LogFormatError("Failed to create mixer: {0}!", Bass.LastError);
@@ -527,9 +527,6 @@ namespace YARG.Audio.BASS
                 YargLogger.LogError("Failed to set up pitch bend for main stream!");
                 return false;
             }
-
-            // Adjust the position to account for inherent pitch fx delay
-            Bass.ChannelSetPosition(handles.Stream, GlobalAudioHandler.WHAMMY_FFT_DEFAULT * 2);
 
             return true;
         }

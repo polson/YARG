@@ -75,7 +75,8 @@ namespace YARG.Audio.BASS
 
         protected override void SetPosition_Internal(double position)
         {
-            BassMix.SplitStreamReset(_sourceHandle);
+            //Flush the buffer to prevent us from hearing stale audio briefly?  not sure if this even works
+            Bass.ChannelUpdate(_streamHandles.Stream, 0);
 
             long bytes = Bass.ChannelSeconds2Bytes(_streamHandles.Stream, position);
             if (bytes < 0)
@@ -88,12 +89,6 @@ namespace YARG.Audio.BASS
             if (_length > 0 && bytes > _length)
             {
                 bytes = _length - 1;
-            }
-
-            if (_streamHandles.PitchFX != 0)
-            {
-                //Account for inherent pitch shift delay
-                bytes += GlobalAudioHandler.WHAMMY_FFT_DEFAULT * 2;
             }
 
             bool success = BassMix.ChannelSetPosition(_streamHandles.Stream, bytes, PositionFlags.Bytes | PositionFlags.MixerReset);
@@ -115,12 +110,6 @@ namespace YARG.Audio.BASS
             {
                 YargLogger.LogFormatError("Failed to get byte position: {0}!", Bass.LastError);
                 return 0.0;
-            }
-
-            if (_streamHandles.PitchFX != 0)
-            {
-                //Account for inherent pitch shift delay
-                position -= GlobalAudioHandler.WHAMMY_FFT_DEFAULT * 2;
             }
 
             double seconds = Bass.ChannelBytes2Seconds(_streamHandles.Stream, position);
