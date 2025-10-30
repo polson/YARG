@@ -1,8 +1,6 @@
 using System;
 using System.IO;
-using System.Threading.Tasks;
 using ManagedBass;
-using ManagedBass.Fx;
 using ManagedBass.Mix;
 using UnityEngine;
 using YARG.Core.Audio;
@@ -23,7 +21,6 @@ namespace YARG.Audio.BASS
 
         private readonly int          _mixerHandle;
         private          BassTempoStream          _tempoStream;
-        private          StreamHandle _mainHandle;
         private          int          _songEndHandle;
         private          float        _speed;
         private          Timer        _whammySyncTimer;
@@ -205,7 +202,7 @@ namespace YARG.Audio.BASS
         protected override void SetSpeed_Internal(float speed, bool shiftPitch)
         {
             speed = (float) Math.Clamp(speed, 0.05, 50);
-            if (Mathf.Approximately(_speed, speed))
+            if (_speed == speed)
             {
                 return;
             }
@@ -333,7 +330,6 @@ namespace YARG.Audio.BASS
             _whammySyncTimer = null;
             if (_channels.Count == 0)
             {
-                _mainHandle?.Dispose();
                 return;
             }
 
@@ -359,14 +355,7 @@ namespace YARG.Audio.BASS
         {
             var pitchparams = BassAudioManager.SetPitchParams(stem, _speed, streamHandles, reverbHandles);
             var stemchannel = new BassStemChannel(_manager, stem, _clampStemVolume, pitchparams, sourceHandle, streamHandles, reverbHandles);
-
-            double length = _tempoStream.Length;
-            if (_mainHandle == null || length > _length)
-            {
-                _mainHandle = streamHandles;
-                _length = length; //TODO: clean this up
-            }
-
+            _length = _tempoStream.Length;
             _channels.Add(stemchannel);
             UpdateThreading();
         }

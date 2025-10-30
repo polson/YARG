@@ -52,7 +52,6 @@ namespace YARG.Audio.BASS
 
         public double GetPosition()
         {
-            YargLogger.LogDebug($"position result: {GetTempoStreamPositionSeconds()} + {_positionOffset}");
             return GetTempoStreamPositionSeconds() + _positionOffset;
         }
 
@@ -128,7 +127,7 @@ namespace YARG.Audio.BASS
         {
             tempoStream = null;
 
-            var tempoHandle = BassFx.TempoCreate(mixerHandle, BassFlags.Default);
+            var tempoHandle = BassFx.TempoCreate(mixerHandle, BassFlags.SampleOverrideLowestVolume);
             if (tempoHandle == 0)
             {
                 return false;

@@ -20,8 +20,7 @@ namespace YARG.Audio.BASS
 #nullable enable
         public static StreamHandle? Create(int sourceStream, int[] indices)
         {
-            const BassFlags splitFlags = BassFlags.SplitPosition | BassFlags.Decode;
-            const BassFlags tempoFlags = BassFlags.SampleOverrideLowestVolume | BassFlags.Decode | BassFlags.FxFreeSource;
+            const BassFlags splitFlags = BassFlags.Decode | BassFlags.SplitPosition;
 
             int[]? channelMap = null;
 #nullable disable

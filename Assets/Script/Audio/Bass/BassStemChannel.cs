@@ -75,7 +75,8 @@ namespace YARG.Audio.BASS
 
         protected override void SetPosition_Internal(double position)
         {
-            //Flush the buffer to prevent us from hearing stale audio briefly?  not sure if this even works
+            // Flush the buffer to prevent us from hearing stale audio briefly
+            // This retains the mixer delay when adding channels, vs using SplitStreamReset
             Bass.ChannelUpdate(_streamHandles.Stream, 0);
 
             long bytes = Bass.ChannelSeconds2Bytes(_streamHandles.Stream, position);
