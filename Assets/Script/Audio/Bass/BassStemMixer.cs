@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using ManagedBass;
 using ManagedBass.Mix;
@@ -19,11 +20,12 @@ namespace YARG.Audio.BASS
         private const float PITCH_DELAY_SECONDS = GlobalAudioHandler.WHAMMY_FFT_DEFAULT / 44100f;
         private       bool  IsWhammyEnabled => SettingsManager.Settings.UseWhammyFx.Value;
 
-        private readonly int          _mixerHandle;
-        private          BassTempoStream          _tempoStream;
-        private          int          _songEndHandle;
-        private          float        _speed;
-        private          Timer        _whammySyncTimer;
+        private readonly int             _mixerHandle;
+        private readonly List<int>       _sourceHandles = new();
+        private          BassTempoStream _tempoStream;
+        private          int             _songEndHandle;
+        private          float           _speed;
+        private          Timer           _whammySyncTimer;
 
         public override event Action SongEnd
         {
@@ -230,6 +232,8 @@ namespace YARG.Audio.BASS
                 return false;
             }
 
+            _sourceHandles.Add(sourceStream);
+
             foreach (var (stem, indices, panning) in stemInfos)
             {
                 if (!BassAudioManager.CreateSplitStreams(sourceStream, indices, out var streamHandles,
@@ -337,6 +341,11 @@ namespace YARG.Audio.BASS
             {
                 channel.Dispose();
             }
+
+            foreach (var sourceHandle in _sourceHandles)
+            {
+                Bass.StreamFree(sourceHandle);
+            }
         }
 
         protected override void DisposeUnmanagedResources()
@@ -348,13 +357,14 @@ namespace YARG.Audio.BASS
                     YargLogger.LogFormatError("Failed to free mixer stream (THIS WILL LEAK MEMORY!): {0}!", Bass.LastError);
                 }
             }
+
             _tempoStream.Dispose();
         }
 
         private void CreateChannel(SongStem stem, int sourceHandle, StreamHandle streamHandles, StreamHandle reverbHandles)
         {
             var pitchparams = BassAudioManager.SetPitchParams(stem, _speed, streamHandles, reverbHandles);
-            var stemchannel = new BassStemChannel(_manager, stem, _clampStemVolume, pitchparams, sourceHandle, streamHandles, reverbHandles);
+            var stemchannel = new BassStemChannel(_manager, stem, _clampStemVolume, pitchparams, streamHandles, reverbHandles);
             _length = _tempoStream.Length;
             _channels.Add(stemchannel);
             UpdateThreading();

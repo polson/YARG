@@ -43,8 +43,8 @@ namespace YARG.Audio.BASS
             return new StreamHandle(streamSplit);
         }
 
-        private bool _disposed;
-        public readonly int Stream;
+        private          bool _disposed;
+        public readonly  int  Stream;
 
         public int CompressorFX;
         public int PitchFX;
