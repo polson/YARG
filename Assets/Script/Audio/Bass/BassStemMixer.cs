@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using ManagedBass;
+using ManagedBass.Fx;
 using ManagedBass.Mix;
 using UnityEngine;
 using YARG.Core.Audio;
@@ -22,7 +23,9 @@ namespace YARG.Audio.BASS
 
         private readonly int             _mixerHandle;
         private readonly List<int>       _sourceHandles = new();
-        private          BassTempoStream _tempoStream;
+        private          int             _tempoStreamHandle;
+        private          double          _positionOffset = 0.0;
+        private          bool            _didSetPosition = false;
         private          int             _songEndHandle;
         private          float           _speed;
         private          Timer           _whammySyncTimer;
@@ -42,7 +45,7 @@ namespace YARG.Audio.BASS
                             UnityMainThreadCallback.QueueEvent(end.Invoke);
                         }
                     }
-                    _songEndHandle = BassMix.ChannelSetSync(_tempoStream.handle, SyncFlags.End, 0, sync);
+                    _songEndHandle = BassMix.ChannelSetSync(_tempoStreamHandle, SyncFlags.End, 0, sync);
                 }
 
                 _songEnd += value;
@@ -56,14 +59,14 @@ namespace YARG.Audio.BASS
         internal BassStemMixer(string name, BassAudioManager manager, float speed, double volume, int handle, bool clampStemVolume)
             : base(name, manager, clampStemVolume)
         {
-            if (!BassTempoStream.CreateFromMixer(handle, out var tempoStream))
+            _tempoStreamHandle = BassFx.TempoCreate(handle, BassFlags.SampleOverrideLowestVolume);
+            if (_tempoStreamHandle == 0)
             {
                 YargLogger.LogFormatError("Failed to create tempo stream: {0}", Bass.LastError);
                 return;
             }
 
             _mixerHandle = handle;
-            _tempoStream = tempoStream;
             _speed = speed;
             _whammySyncTimer = new Timer();
             SetVolume_Internal(volume);
@@ -71,10 +74,15 @@ namespace YARG.Audio.BASS
 
         protected override int Play_Internal()
         {
-            var result = _tempoStream.Play();
-            if (result != 0)
+            var playbackState = Bass.ChannelIsActive(_tempoStreamHandle);
+            if (playbackState != PlaybackState.Playing)
             {
-                return (int) Bass.LastError;
+                if (!Bass.ChannelPlay(_tempoStreamHandle, _didSetPosition))
+                {
+                    return (int) Bass.LastError;
+                }
+
+                _didSetPosition = false;
             }
 
             if (IsWhammyEnabled)
@@ -104,27 +112,53 @@ namespace YARG.Audio.BASS
         protected override void FadeIn_Internal(double maxVolume, double duration)
         {
             float scaled = (float) BassAudioManager.ExponentialVolume(maxVolume);
-            Bass.ChannelSlideAttribute(_tempoStream.handle, ChannelAttribute.Volume, scaled, (int) (duration * SongMetadata.MILLISECOND_FACTOR));
+            Bass.ChannelSlideAttribute(_tempoStreamHandle, ChannelAttribute.Volume, scaled, (int) (duration * SongMetadata.MILLISECOND_FACTOR));
         }
 
         protected override void FadeOut_Internal(double duration)
         {
-            Bass.ChannelSlideAttribute(_tempoStream.handle, ChannelAttribute.Volume, 0, (int) (duration * SongMetadata.MILLISECOND_FACTOR));
+            Bass.ChannelSlideAttribute(_tempoStreamHandle, ChannelAttribute.Volume, 0, (int) (duration * SongMetadata.MILLISECOND_FACTOR));
         }
 
         protected override int Pause_Internal()
         {
-            return _tempoStream.Pause();
+            var playbackState = Bass.ChannelIsActive(_tempoStreamHandle);
+            if (playbackState == PlaybackState.Playing)
+            {
+                if (!Bass.ChannelPause(_tempoStreamHandle))
+                {
+                    return (int) Bass.LastError;
+                }
+            }
+
+            return 0;
         }
 
         protected override double GetPosition_Internal()
         {
-            return _tempoStream.GetPosition();
+            long positionBytes = Bass.ChannelGetPosition(_tempoStreamHandle);
+            if (positionBytes < 0)
+            {
+                YargLogger.LogFormatError("Failed to get byte position: {0}!", Bass.LastError);
+                return 0.0f;
+            }
+
+            double seconds = Bass.ChannelBytes2Seconds(_tempoStreamHandle, positionBytes);
+            if (seconds < 0)
+            {
+                YargLogger.LogFormatError("Failed to convert bytes to seconds: {0}!", Bass.LastError);
+                return 0.0f;
+            }
+
+            return seconds + _positionOffset;
         }
 
         protected override double GetVolume_Internal()
         {
-            var volume = _tempoStream.GetVolume();
+            if (!Bass.ChannelGetAttribute(_tempoStreamHandle, ChannelAttribute.Volume, out float volume))
+            {
+                YargLogger.LogFormatError("Failed to get volume: {0}", Bass.LastError);
+            }
             return BassAudioManager.LogarithmicVolume(volume);
         }
 
@@ -134,13 +168,17 @@ namespace YARG.Audio.BASS
             {
                 channel.SetPosition(position);
             }
-            _tempoStream.SetPosition(position);
+            _didSetPosition = true;
+            _positionOffset = position;
         }
 
         protected override void SetVolume_Internal(double volume)
         {
             volume = BassAudioManager.ExponentialVolume(volume);
-            _tempoStream.SetVolume(volume);
+            if (!Bass.ChannelSetAttribute(_tempoStreamHandle, ChannelAttribute.Volume, volume))
+            {
+                YargLogger.LogFormatError("Failed to set tempo stream volume: {0}", Bass.LastError);
+            }
         }
 
         protected override int GetFFTData_Internal(float[] buffer, int fftSize, bool complex)
@@ -172,7 +210,7 @@ namespace YARG.Audio.BASS
                 flags |= (int) DataFlags.FFTComplex;
             }
 
-            int data = Bass.ChannelGetData(_tempoStream.handle, buffer, flags);
+            int data = Bass.ChannelGetData(_tempoStreamHandle, buffer, flags);
             if (data < 0)
             {
                 return (int) Bass.LastError;
@@ -182,7 +220,7 @@ namespace YARG.Audio.BASS
 
         protected override int GetSampleData_Internal(float[] buffer)
         {
-            int data = Bass.ChannelGetData(_tempoStream.handle, buffer, (buffer.Length * 4) | (int) (DataFlags.Float));
+            int data = Bass.ChannelGetData(_tempoStreamHandle, buffer, (buffer.Length * 4) | (int) (DataFlags.Float));
             if (data < 0)
             {
                 return (int) Bass.LastError;
@@ -192,7 +230,7 @@ namespace YARG.Audio.BASS
 
         protected override int GetLevel_Internal(float[] level)
         {
-            bool status = Bass.ChannelGetLevel(_tempoStream.handle, level, 0.2f, LevelRetrievalFlags.Mono | LevelRetrievalFlags.RMS);
+            bool status = Bass.ChannelGetLevel(_tempoStreamHandle, level, 0.2f, LevelRetrievalFlags.Mono | LevelRetrievalFlags.RMS);
             if (!status)
             {
                 return (int) Bass.LastError;
@@ -214,13 +252,19 @@ namespace YARG.Audio.BASS
             float percentageSpeed = speed * 100;
             float relativeSpeed = percentageSpeed - 100;
 
-            _tempoStream.SetSpeed(relativeSpeed);
+            if (!Bass.ChannelSetAttribute(_tempoStreamHandle, ChannelAttribute.Tempo, relativeSpeed))
+            {
+                YargLogger.LogFormatError("Failed to set channel speed: {0}!", Bass.LastError);
+            }
 
             if (GlobalAudioHandler.IsChipmunkSpeedup && shiftPitch)
             {
                 double accurateSemitoneShift = 12 * Math.Log(speed, 2);
                 float finalSemitoneShift = (float) Math.Clamp(accurateSemitoneShift, -60, 60);
-                _tempoStream.SetPitch(finalSemitoneShift);
+                if (!Bass.ChannelSetAttribute(_tempoStreamHandle, ChannelAttribute.Pitch, finalSemitoneShift))
+                {
+                    YargLogger.LogFormatError("Failed to set channel pitch: {0}!", Bass.LastError);
+                }
             }
         }
 
@@ -358,14 +402,20 @@ namespace YARG.Audio.BASS
                 }
             }
 
-            _tempoStream.Dispose();
+            if (_tempoStreamHandle != 0)
+            {
+                if (!Bass.StreamFree(_tempoStreamHandle))
+                {
+                    YargLogger.LogFormatError("Failed to free tempo stream: {0}!", Bass.LastError);
+                }
+            }
         }
 
         private void CreateChannel(SongStem stem, int sourceHandle, StreamHandle streamHandles, StreamHandle reverbHandles)
         {
             var pitchparams = BassAudioManager.SetPitchParams(stem, _speed, streamHandles, reverbHandles);
             var stemchannel = new BassStemChannel(_manager, stem, _clampStemVolume, pitchparams, streamHandles, reverbHandles);
-            _length = _tempoStream.Length;
+            _length = BassAudioManager.GetLengthInSeconds(_tempoStreamHandle);
             _channels.Add(stemchannel);
             UpdateThreading();
         }
