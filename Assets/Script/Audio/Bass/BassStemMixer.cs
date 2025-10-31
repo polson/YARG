@@ -371,7 +371,10 @@ namespace YARG.Audio.BASS
 
             foreach (var sourceHandle in _sourceHandles)
             {
-                Bass.StreamFree(sourceHandle);
+                if (!Bass.StreamFree(sourceHandle))
+                {
+                    YargLogger.LogFormatError("Failed to free source stream (THIS WILL LEAK MEMORY!): {0}!", Bass.LastError);
+                };
             }
         }
 

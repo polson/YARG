@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using ManagedBass;
@@ -453,7 +453,6 @@ namespace YARG.Audio.BASS
             float relativeSpeed = percentageSpeed - 100;
 
 
-                !Bass.ChannelSetAttribute(reverbHandle, ChannelAttribute.Tempo, relativeSpeed))
             if (!Bass.ChannelSetAttribute(streamHandle, ChannelAttribute.Tempo, relativeSpeed))
             {
                 YargLogger.LogFormatError("Failed to set channel speed: {0}!", Bass.LastError);
