@@ -27,7 +27,7 @@ namespace YARG.Audio.BASS
         private          double          _positionOffset = 0.0;
         private          bool            _didSetPosition = false;
         private          int             _songEndHandle;
-        private          float           _speed;
+        private          float           _speed = 1.0f;
         private          Timer           _whammySyncTimer;
 
         public override event Action SongEnd
@@ -67,9 +67,9 @@ namespace YARG.Audio.BASS
             }
 
             _mixerHandle = handle;
-            _speed = speed;
             _whammySyncTimer = new Timer();
             SetVolume_Internal(volume);
+            SetSpeed_Internal(speed, true);
         }
 
         protected override int Play_Internal()
@@ -246,26 +246,9 @@ namespace YARG.Audio.BASS
             {
                 return;
             }
-
             _speed = speed;
 
-            float percentageSpeed = speed * 100;
-            float relativeSpeed = percentageSpeed - 100;
-
-            if (!Bass.ChannelSetAttribute(_tempoStreamHandle, ChannelAttribute.Tempo, relativeSpeed))
-            {
-                YargLogger.LogFormatError("Failed to set channel speed: {0}!", Bass.LastError);
-            }
-
-            if (GlobalAudioHandler.IsChipmunkSpeedup && shiftPitch)
-            {
-                double accurateSemitoneShift = 12 * Math.Log(speed, 2);
-                float finalSemitoneShift = (float) Math.Clamp(accurateSemitoneShift, -60, 60);
-                if (!Bass.ChannelSetAttribute(_tempoStreamHandle, ChannelAttribute.Pitch, finalSemitoneShift))
-                {
-                    YargLogger.LogFormatError("Failed to set channel pitch: {0}!", Bass.LastError);
-                }
-            }
+            BassAudioManager.SetSpeed(speed, _tempoStreamHandle, shiftPitch);
         }
 
         protected override bool AddChannels_Internal(Stream stream, params StemInfo[] stemInfos)

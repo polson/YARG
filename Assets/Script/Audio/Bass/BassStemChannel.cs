@@ -97,35 +97,6 @@ namespace YARG.Audio.BASS
             }
         }
 
-        protected override double GetPosition_Internal()
-        {
-            if (_streamHandles.Stream == 0)
-            {
-                return 0.0;
-            }
-
-            long position = BassMix.ChannelGetPosition(_streamHandles.Stream);
-            if (position < 0)
-            {
-                YargLogger.LogFormatError("Failed to get byte position: {0}!", Bass.LastError);
-                return 0.0;
-            }
-
-            double seconds = Bass.ChannelBytes2Seconds(_streamHandles.Stream, position);
-            if (seconds < 0)
-            {
-                YargLogger.LogFormatError("Failed to convert bytes to seconds: {0}!", Bass.LastError);
-                return 0.0;
-            }
-
-            return seconds;
-        }
-
-        protected override void SetSpeed_Internal(float speed, bool shiftPitch)
-        {
-            BassAudioManager.SetSpeed(speed, _streamHandles.Stream, _reverbHandles.Stream, shiftPitch);
-        }
-
         protected override void SetVolume_Internal(double volume)
         {
             _volume = volume;

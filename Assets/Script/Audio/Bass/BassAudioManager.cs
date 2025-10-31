@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using ManagedBass;
@@ -446,21 +446,22 @@ namespace YARG.Audio.BASS
             return true;
         }
 
-        internal static void SetSpeed(float speed, int streamHandle, int reverbHandle, bool shiftPitch)
+        internal static void SetSpeed(float speed, int streamHandle, bool shiftPitch)
         {
             // Gets relative speed from 100% (so 1.05f = 5% increase)
             float percentageSpeed = speed * 100;
             float relativeSpeed = percentageSpeed - 100;
 
-            if (!Bass.ChannelSetAttribute(streamHandle, ChannelAttribute.Tempo, relativeSpeed) ||
+
                 !Bass.ChannelSetAttribute(reverbHandle, ChannelAttribute.Tempo, relativeSpeed))
+            if (!Bass.ChannelSetAttribute(streamHandle, ChannelAttribute.Tempo, relativeSpeed))
             {
                 YargLogger.LogFormatError("Failed to set channel speed: {0}!", Bass.LastError);
             }
 
             if (GlobalAudioHandler.IsChipmunkSpeedup && shiftPitch)
             {
-                SetChipmunking(speed, streamHandle, reverbHandle);
+                SetChipmunking(speed, streamHandle);
             }
         }
 
@@ -498,21 +499,14 @@ namespace YARG.Audio.BASS
                     SetupPitchBend(pitchParams, reverbHandles);
                 }
             }
-
-            speed = (float) Math.Clamp(speed, 0.05, 50);
-            if (!Mathf.Approximately(speed, 1))
-            {
-                SetSpeed(speed, streamHandles.Stream, reverbHandles.Stream, true);
-            }
             return pitchParams;
         }
 
-        internal static void SetChipmunking(float speed, int streamHandle, int reverbHandle)
+        internal static void SetChipmunking(float speed, int streamHandle)
         {
             double accurateSemitoneShift = 12 * Math.Log(speed, 2);
             float finalSemitoneShift = (float) Math.Clamp(accurateSemitoneShift, -60, 60);
-            if (!Bass.ChannelSetAttribute(streamHandle, ChannelAttribute.Pitch, finalSemitoneShift) ||
-                !Bass.ChannelSetAttribute(reverbHandle, ChannelAttribute.Pitch, finalSemitoneShift))
+            if (!Bass.ChannelSetAttribute(streamHandle, ChannelAttribute.Pitch, finalSemitoneShift))
             {
                 YargLogger.LogFormatError("Failed to set channel pitch: {0}!", Bass.LastError);
             }
