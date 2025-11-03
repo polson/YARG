@@ -16,14 +16,14 @@ namespace YARG.Audio.BASS
 {
     public sealed class BassStemMixer : StemMixer
     {
-        private struct StemStreamData
+        private struct StemData
         {
             public SongStem     Stem;
             public float[,]?    VolumeMatrix;
             public StreamHandle StreamHandles;
             public StreamHandle ReverbHandles;
 
-            public StemStreamData(SongStem stem, float[,]? volumeMatrix, StreamHandle streamHandles, StreamHandle reverbHandles)
+            public StemData(SongStem stem, float[,]? volumeMatrix, StreamHandle streamHandles, StreamHandle reverbHandles)
             {
                 Stem = stem;
                 VolumeMatrix = volumeMatrix;
@@ -35,6 +35,7 @@ namespace YARG.Audio.BASS
         private const    float WHAMMY_SYNC_INTERVAL_SECONDS = 1f;
 
         private       bool  IsWhammyEnabled => SettingsManager.Settings.UseWhammyFx.Value;
+        private bool IsPlaying => Bass.ChannelIsActive(_tempoStreamHandle) == PlaybackState.Playing;
 
         private readonly int                  _mixerHandle;
         private readonly List<int>            _sourceHandles = new();
@@ -44,7 +45,7 @@ namespace YARG.Audio.BASS
         private          int                  _songEndHandle;
         private          float                _speed = 1.0f;
         private          Timer                _whammySyncTimer;
-        private readonly List<StemStreamData> _stemDatas = new();
+        private readonly List<StemData> _stemDatas = new();
 
         public override event Action SongEnd
         {
@@ -90,8 +91,7 @@ namespace YARG.Audio.BASS
 
         protected override int Play_Internal()
         {
-            var playbackState = Bass.ChannelIsActive(_tempoStreamHandle);
-            if (playbackState != PlaybackState.Playing)
+            if (!IsPlaying)
             {
                 if (!Bass.ChannelPlay(_tempoStreamHandle, _didSetPosition))
                 {
@@ -180,6 +180,7 @@ namespace YARG.Audio.BASS
 
         protected override void SetPosition_Internal(double position)
         {
+            var wasPlaying = !IsPlaying;
             Pause_Internal();
 
             var channels = BassMix.MixerGetChannels(_mixerHandle);
@@ -198,7 +199,11 @@ namespace YARG.Audio.BASS
             }
             _didSetPosition = true;
             _positionOffset = position;
-            Play_Internal();
+
+            if (wasPlaying)
+            {
+                Play_Internal();
+            }
         }
 
         protected override void SetVolume_Internal(double volume)
@@ -289,7 +294,7 @@ namespace YARG.Audio.BASS
             }
 
             _sourceHandles.Add(sourceStream);
-            List<StemStreamData> stemDatas = new();
+            List<StemData> stemDatas = new();
             foreach (var stemInfo in stemInfos)
             {
                 if (!BassAudioManager.CreateSplitStreams(sourceStream, stemInfo.Indices, out var streamHandles,
@@ -298,7 +303,7 @@ namespace YARG.Audio.BASS
                     YargLogger.LogFormatError("Failed to load stem {0}: {1}!", stemInfo.Stem, Bass.LastError);
                     return false;
                 }
-                stemDatas.Add(new StemStreamData(stemInfo.Stem, stemInfo.GetVolumeMatrix(), streamHandles, reverbHandles));
+                stemDatas.Add(new StemData(stemInfo.Stem, stemInfo.GetVolumeMatrix(), streamHandles, reverbHandles));
             }
 
             if (!AddChannelsToMixer(stemDatas))
@@ -320,7 +325,7 @@ namespace YARG.Audio.BASS
             return true;
         }
 
-        private bool AddChannelsToMixer(List<StemStreamData> stemStreamDataList)
+        private bool AddChannelsToMixer(List<StemData> stemStreamDataList)
         {
             foreach (var stemStreamData in stemStreamDataList)
             {
