@@ -138,13 +138,14 @@ namespace YARG.Audio.BASS
 
         protected override int Pause_Internal()
         {
-            var playbackState = Bass.ChannelIsActive(_tempoStreamHandle);
-            if (playbackState == PlaybackState.Playing)
+            if (!IsPlaying)
             {
-                if (!Bass.ChannelPause(_tempoStreamHandle))
-                {
-                    return (int) Bass.LastError;
-                }
+                return 0;
+            }
+
+            if (!Bass.ChannelPause(_tempoStreamHandle))
+            {
+                return (int) Bass.LastError;
             }
 
             return 0;
