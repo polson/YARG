@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using ManagedBass;
 using ManagedBass.Fx;
 using ManagedBass.Mix;
@@ -15,20 +16,35 @@ namespace YARG.Audio.BASS
 {
     public sealed class BassStemMixer : StemMixer
     {
+        private struct StemStreamData
+        {
+            public SongStem     Stem;
+            public float[,]?    VolumeMatrix;
+            public StreamHandle StreamHandles;
+            public StreamHandle ReverbHandles;
+
+            public StemStreamData(SongStem stem, float[,]? volumeMatrix, StreamHandle streamHandles, StreamHandle reverbHandles)
+            {
+                Stem = stem;
+                VolumeMatrix = volumeMatrix;
+                StreamHandles = streamHandles;
+                ReverbHandles = reverbHandles;
+            }
+        }
+
         private const    float WHAMMY_SYNC_INTERVAL_SECONDS = 1f;
 
-        //The delay which is introduced by the pitch shift effect, in seconds
-        private const float PITCH_DELAY_SECONDS = GlobalAudioHandler.WHAMMY_FFT_DEFAULT / 44100f;
         private       bool  IsWhammyEnabled => SettingsManager.Settings.UseWhammyFx.Value;
 
-        private readonly int             _mixerHandle;
-        private readonly List<int>       _sourceHandles = new();
-        private          int             _tempoStreamHandle;
-        private          double          _positionOffset = 0.0;
-        private          bool            _didSetPosition = false;
-        private          int             _songEndHandle;
-        private          float           _speed = 1.0f;
-        private          Timer           _whammySyncTimer;
+        private readonly int                  _mixerHandle;
+        private readonly List<int>            _sourceHandles = new();
+        private          int                  _tempoStreamHandle;
+        private          double               _positionOffset = 0.0;
+        private          bool                 _didSetPosition = false;
+        private          int                  _songEndHandle;
+        private          float                _speed = 1.0f;
+        private          Timer                _whammySyncTimer;
+        private readonly List<StemStreamData> _stemDatas = new();
 
         public override event Action SongEnd
         {
@@ -164,12 +180,25 @@ namespace YARG.Audio.BASS
 
         protected override void SetPosition_Internal(double position)
         {
+            Pause_Internal();
+
+            var channels = BassMix.MixerGetChannels(_mixerHandle);
+            foreach (var channel in channels)
+            {
+                if (!BassMix.MixerRemoveChannel(channel))
+                {
+                    YargLogger.LogDebug("Failed to remove channel from mixer");
+                };
+            }
+            AddChannelsToMixer(_stemDatas.ToList());
+
             foreach (var channel in _channels)
             {
                 channel.SetPosition(position);
             }
             _didSetPosition = true;
             _positionOffset = position;
+            Play_Internal();
         }
 
         protected override void SetVolume_Internal(double volume)
@@ -260,27 +289,56 @@ namespace YARG.Audio.BASS
             }
 
             _sourceHandles.Add(sourceStream);
-
-            foreach (var (stem, indices, panning) in stemInfos)
+            List<StemStreamData> stemDatas = new();
+            foreach (var stemInfo in stemInfos)
             {
-                if (!BassAudioManager.CreateSplitStreams(sourceStream, indices, out var streamHandles,
+                if (!BassAudioManager.CreateSplitStreams(sourceStream, stemInfo.Indices, out var streamHandles,
                     out var reverbHandles))
                 {
-                    YargLogger.LogFormatError("Failed to load stem {0}: {1}!", stem, Bass.LastError);
+                    YargLogger.LogFormatError("Failed to load stem {0}: {1}!", stemInfo.Stem, Bass.LastError);
                     return false;
                 }
+                stemDatas.Add(new StemStreamData(stemInfo.Stem, stemInfo.GetVolumeMatrix(), streamHandles, reverbHandles));
+            }
 
-                var isMultiChannel = indices != null && panning != null;
-                var flags = isMultiChannel ? BassFlags.MixerChanMatrix : BassFlags.Default;
+            if (!AddChannelsToMixer(stemDatas))
+            {
+                return false;
+            }
+            _stemDatas.AddRange(stemDatas);
 
+            foreach (var stemStreamData in stemDatas)
+            {
+                CreateChannel(
+                    stem: stemStreamData.Stem,
+                    sourceHandle: sourceStream,
+                    streamHandles: stemStreamData.StreamHandles,
+                    reverbHandles: stemStreamData.ReverbHandles
+                );
+            }
 
-                //Delay any non-pitch bended stem by Whammy FFT size samples to align with pitch bended stems
+            return true;
+        }
+
+        private bool AddChannelsToMixer(List<StemStreamData> stemStreamDataList)
+        {
+            foreach (var stemStreamData in stemStreamDataList)
+            {
+                var stem = stemStreamData.Stem;
+                var streamHandles = stemStreamData.StreamHandles;
+                var reverbHandles = stemStreamData.ReverbHandles;
+                var volumeMatrix = stemStreamData.VolumeMatrix;
+
+                // Delay any non-pitch bended stem by Whammy FFT size samples to align with pitch bended stems
                 long bytes = 0;
                 if (GlobalAudioHandler.UseWhammyFx && !AudioHelpers.PitchBendAllowedStems.Contains(stem))
                 {
-                    bytes = Bass.ChannelSeconds2Bytes(_mixerHandle, PITCH_DELAY_SECONDS);
+                    Bass.ChannelGetAttribute(streamHandles.Stream, ChannelAttribute.Frequency, out var freq);
+                    var seconds = GlobalAudioHandler.WHAMMY_FFT_DEFAULT / freq;
+                    bytes = Bass.ChannelSeconds2Bytes(_mixerHandle, seconds);
                 }
 
+                var flags = volumeMatrix != null ? BassFlags.MixerChanMatrix : BassFlags.Default;
                 if (!BassMix.MixerAddChannel(_mixerHandle, streamHandles.Stream, flags, bytes, 0) ||
                     !BassMix.MixerAddChannel(_mixerHandle, reverbHandles.Stream, flags, bytes, 0))
                 {
@@ -288,34 +346,17 @@ namespace YARG.Audio.BASS
                     return false;
                 }
 
-                if (isMultiChannel)
+                if (volumeMatrix == null)
                 {
-                    // First array = left pan, second = right pan
-                    float[,] volumeMatrix = new float[2, indices.Length];
-
-                    const int LEFT_PAN = 0;
-                    const int RIGHT_PAN = 1;
-                    for (int i = 0; i < indices.Length; ++i)
-                    {
-                        volumeMatrix[LEFT_PAN, i] = panning[2 * i];
-                    }
-
-                    for (int i = 0; i < indices.Length; ++i)
-                    {
-                        volumeMatrix[RIGHT_PAN, i] = panning[2 * i + 1];
-                    }
-
-                    if (!BassMix.ChannelSetMatrix(streamHandles.Stream, volumeMatrix) ||
-                        !BassMix.ChannelSetMatrix(reverbHandles.Stream, volumeMatrix))
-                    {
-                        YargLogger.LogFormatError("Failed to set {stem} matrices: {0}!", Bass.LastError);
-                        return false;
-                    }
+                    continue;
                 }
 
-                CreateChannel(stem, sourceStream, streamHandles, reverbHandles);
+                if (!BassMix.ChannelSetMatrix(streamHandles.Stream, volumeMatrix) || !BassMix.ChannelSetMatrix(reverbHandles.Stream, volumeMatrix))
+                {
+                    YargLogger.LogFormatError("Failed to set {stem} matrices: {0}!", Bass.LastError);
+                    return false;
+                }
             }
-
             return true;
         }
 
@@ -328,6 +369,7 @@ namespace YARG.Audio.BASS
             }
             _channels[index].Dispose();
             _channels.RemoveAt(index);
+            _stemDatas.RemoveAll(stem => stem.Stem == stemToRemove);
             UpdateThreading();
             return true;
         }
@@ -359,6 +401,7 @@ namespace YARG.Audio.BASS
         {
             _whammySyncTimer.Stop();
             _whammySyncTimer = null;
+            _stemDatas.Clear();
             if (_channels.Count == 0)
             {
                 return;
@@ -400,7 +443,7 @@ namespace YARG.Audio.BASS
         private void CreateChannel(SongStem stem, int sourceHandle, StreamHandle streamHandles, StreamHandle reverbHandles)
         {
             var pitchparams = BassAudioManager.SetPitchParams(stem, _speed, streamHandles, reverbHandles);
-            var stemchannel = new BassStemChannel(_manager, stem, _clampStemVolume, pitchparams, streamHandles, reverbHandles);
+            var stemchannel = new BassStemChannel(_manager, stem, _clampStemVolume, sourceHandle, pitchparams, streamHandles, reverbHandles);
             _length = BassAudioManager.GetLengthInSeconds(_tempoStreamHandle);
             _channels.Add(stemchannel);
             UpdateThreading();
@@ -417,6 +460,33 @@ namespace YARG.Audio.BASS
                     YargLogger.LogFormatError("Failed to set mixer processing threads: {0}!", Bass.LastError);
                 }
             }
+        }
+    }
+    public static class StreamInfoExtensions
+    {
+        public static float[,]? GetVolumeMatrix(this StemMixer.StemInfo streamInfo)
+        {
+            var (_, indices, panning) = streamInfo;
+
+            // Return null if this isn't a multi-channel stream
+            if (indices == null || panning == null)
+            {
+                return null;
+            }
+
+            // First array = left pan, second = right pan
+            float[,] volumeMatrix = new float[2, indices.Length];
+
+            const int LEFT_PAN = 0;
+            const int RIGHT_PAN = 1;
+
+            for (int i = 0; i < indices.Length; ++i)
+            {
+                volumeMatrix[LEFT_PAN, i] = panning[2 * i];
+                volumeMatrix[RIGHT_PAN, i] = panning[2 * i + 1];
+            }
+
+            return volumeMatrix;
         }
     }
 }

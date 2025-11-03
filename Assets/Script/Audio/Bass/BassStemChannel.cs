@@ -8,19 +8,19 @@ namespace YARG.Audio.BASS
 {
     public sealed class BassStemChannel : StemChannel
     {
-        private StreamHandle _streamHandles;
-        private StreamHandle _reverbHandles;
-        private PitchShiftParametersStruct _pitchParams;
+        private readonly int                        _sourceHandle;
+        private          StreamHandle               _streamHandles;
+        private          StreamHandle               _reverbHandles;
+        private          PitchShiftParametersStruct _pitchParams;
 
         private          double _volume;
         private          bool   _isReverbing;
         private readonly long   _length;
 
-        internal BassStemChannel(AudioManager manager, SongStem stem, bool clampStemVolume,
-            in PitchShiftParametersStruct pitchParams, in StreamHandle streamHandles,
-            in StreamHandle reverbHandles)
+        internal BassStemChannel(AudioManager manager, SongStem stem, bool clampStemVolume, int sourceStream, in PitchShiftParametersStruct pitchParams, in StreamHandle streamHandles, in StreamHandle reverbHandles)
             : base(manager, stem, clampStemVolume)
         {
+            _sourceHandle = sourceStream;
             _streamHandles = streamHandles;
             _reverbHandles = reverbHandles;
             _pitchParams = pitchParams;
@@ -73,9 +73,10 @@ namespace YARG.Audio.BASS
 
         protected override void SetPosition_Internal(double position)
         {
-            // Flush the buffer to prevent us from hearing stale audio briefly
-            // This retains the mixer delay when adding channels, vs using SplitStreamReset
-            Bass.ChannelUpdate(_streamHandles.Stream, 0);
+            if (_sourceHandle != 0)
+            {
+                BassMix.SplitStreamReset(_sourceHandle);
+            }
 
             long bytes = Bass.ChannelSeconds2Bytes(_streamHandles.Stream, position);
             if (bytes < 0)
@@ -89,6 +90,7 @@ namespace YARG.Audio.BASS
             {
                 bytes = _length - 1;
             }
+
 
             bool success = BassMix.ChannelSetPosition(_streamHandles.Stream, bytes, PositionFlags.Bytes | PositionFlags.MixerReset);
             if (!success)
