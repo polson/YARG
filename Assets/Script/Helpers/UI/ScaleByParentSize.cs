@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 
 namespace YARG.Helpers.UI
 {
@@ -30,11 +30,14 @@ namespace YARG.Helpers.UI
 
         public void Initialize()
         {
-            _initialSize = ParentRectTransform.rect.size;
         }
 
         private void Update()
         {
+            if (_initialSize == Vector2.one)
+            {
+                _initialSize = ParentRectTransform.rect.size;
+            }
             UpdateScale();
         }
 

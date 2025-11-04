@@ -1,6 +1,7 @@
 ﻿using UnityEngine;
 using UnityEngine.UI;
 using YARG.Core.Engine;
+using YARG.Core.Logging;
 using YARG.Gameplay.Player;
 using YARG.Gameplay.Visuals;
 using YARG.Player;
@@ -56,14 +57,20 @@ namespace YARG.Gameplay.HUD
             float hudOffset = HighwayCameraRendering.GetMultiplayerXOffset(highwayIndex, highwayCount,
                 SettingsManager.Settings.HighwayTiltMultiplier.Value / 4);
 
+            // Correct for non-16:9 aspect ratios
+            const float baseAspectRatio = 16f / 9f;
+            var aspectRatio = Screen.width / (float) Screen.height;
+            float aspectCorrection = aspectRatio / baseAspectRatio;
+            float adjustedHudOffset = hudOffset / aspectCorrection;
+
             // Adjust the screen's viewport position to the rect's viewport position
             // -0.5f as our position is relative to center, not the corner
             _topElementContainer.localPosition = _topElementContainer.localPosition
-                .WithX(rectRect.width * (topViewportPos.x - 0.5f - hudOffset))
+                .WithX(rectRect.width * (topViewportPos.x - 0.5f - adjustedHudOffset))
                 .WithY(rectRect.height * (topViewportPos.y - 0.5f));
 
             _centerElementContainer.localPosition = _centerElementContainer.localPosition
-                .WithX(rectRect.width * (centerViewportPos.x - 0.5f - hudOffset))
+                .WithX(rectRect.width * (centerViewportPos.x - 0.5f - adjustedHudOffset))
                 .WithY(rectRect.height * (centerViewportPos.y - 0.5f));
         }
 

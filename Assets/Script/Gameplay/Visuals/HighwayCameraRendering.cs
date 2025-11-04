@@ -119,9 +119,9 @@ namespace YARG.Gameplay.Visuals
             }
 
             _renderCamera.transform.position = _renderCamera.transform.position.WithX((minWorld + maxWorld) / 2);
-            float requiredHalfWidth = Math.Max(25, (maxWorld - minWorld) / 2f);
             float safeAspect = Mathf.Max(_renderCamera.aspect, 0.001f);
-            _renderCamera.orthographicSize = requiredHalfWidth / safeAspect;
+            float requiredHalfWidth = Math.Max(25, (maxWorld - minWorld) / safeAspect / 2f);
+            _renderCamera.orthographicSize = requiredHalfWidth;
         }
 
         public static float CalculateScale(int count)
