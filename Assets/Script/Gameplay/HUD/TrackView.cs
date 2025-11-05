@@ -1,4 +1,5 @@
-﻿using UnityEngine;
+﻿using System;
+using UnityEngine;
 using UnityEngine.UI;
 using YARG.Core.Engine;
 using YARG.Core.Logging;
@@ -35,17 +36,23 @@ namespace YARG.Gameplay.HUD
 
         private void Start()
         {
-            _aspectRatioFitter.aspectRatio = (float) Screen.width / Screen.height;
             _UIScaler.Initialize();
         }
 
         public void Initialize(TrackPlayer trackPlayer)
         {
+            _aspectRatioFitter.aspectRatio = (float) Screen.width / Screen.height;
             _trackPlayer = trackPlayer;
+        }
+
+        public void Update()
+        {
+            // YargLogger.LogDebug($">>Aspect ratio: {(float) Screen.width / Screen.height}");
         }
 
         public void UpdateHUDPosition(int highwayIndex, int highwayCount)
         {
+
             var rect = GetComponent<RectTransform>();
             var topViewportPos = _trackPlayer.HUDTopElementViewportPosition;
             var centerViewportPos = _trackPlayer.HUDCenterElementViewportPosition;
@@ -57,10 +64,7 @@ namespace YARG.Gameplay.HUD
             float hudOffset = HighwayCameraRendering.GetMultiplayerXOffset(highwayIndex, highwayCount,
                 SettingsManager.Settings.HighwayTiltMultiplier.Value / 4);
 
-            // Correct for non-16:9 aspect ratios
-            const float baseAspectRatio = 16f / 9f;
-            var aspectRatio = Screen.width / (float) Screen.height;
-            float aspectCorrection = aspectRatio / baseAspectRatio;
+            var aspectCorrection = HighwayCameraRendering.GetAspectCorrectionFactor();
             float adjustedHudOffset = hudOffset / aspectCorrection;
 
             // Adjust the screen's viewport position to the rect's viewport position
@@ -71,7 +75,7 @@ namespace YARG.Gameplay.HUD
 
             _centerElementContainer.localPosition = _centerElementContainer.localPosition
                 .WithX(rectRect.width * (centerViewportPos.x - 0.5f - adjustedHudOffset))
-                .WithY(rectRect.height * (centerViewportPos.y - 0.5f));
+                .WithY(rectRect.height * (centerViewportPos.y - 0.5f) * aspectCorrection);
         }
 
         public void UpdateCountdown(double countdownLength, double endTime)

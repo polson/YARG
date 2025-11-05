@@ -1,4 +1,5 @@
-using UnityEngine;
+﻿using UnityEngine;
+using YARG.Core.Logging;
 
 namespace YARG.Helpers.UI
 {
@@ -30,8 +31,15 @@ namespace YARG.Helpers.UI
 
         public void Initialize()
         {
-        }
+            if (ParentRectTransform.GetComponentInParent<Canvas>() is Canvas rootCanvas)
+            {
+                Canvas.ForceUpdateCanvases();
+            }
 
+            // 2. Now, the size should be correct.
+            _initialSize = ParentRectTransform.rect.size;
+            UpdateScale();
+        }
         private void Update()
         {
             if (_initialSize == Vector2.one)
@@ -54,6 +62,8 @@ namespace YARG.Helpers.UI
                 scale = size.y / _initialSize.y;
             }
 
+            scale = 1.0f;
+            // YargLogger.LogDebug($">>INitial size x: {_initialSize.x}, y: {_initialSize.y}, scale calculated: {scale}");
             transform.localScale = new Vector3(scale, scale, 1f);
         }
 

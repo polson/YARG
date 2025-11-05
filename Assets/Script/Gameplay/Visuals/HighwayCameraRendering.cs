@@ -5,6 +5,7 @@ using UnityEngine.Rendering;
 using UnityEngine.Rendering.RendererUtils;
 using UnityEngine.Rendering.Universal;
 using UnityEngine.UI;
+using YARG.Core.Logging;
 using YARG.Gameplay.Player;
 using YARG.Settings;
 
@@ -34,7 +35,14 @@ namespace YARG.Gameplay.Visuals
         private Matrix4x4[] _camViewMatrices = new Matrix4x4[MAX_MATRICES];
         private Matrix4x4[] _camInvViewMatrices = new Matrix4x4[MAX_MATRICES];
         private Matrix4x4[] _camProjMatrices = new Matrix4x4[MAX_MATRICES];
-        public float Scale { get; private set; } = 1.0f;
+
+        private int _lastScreenWidth = 0;
+        private int _lastScreenHeight = 0;
+
+        public float Scale
+        {
+            get => CalculateScale(_cameras.Count);
+        }
 
         public static readonly int YargHighwaysNumberID = Shader.PropertyToID("_YargHighwaysN");
         public static readonly int YargHighwayCamViewMatricesID = Shader.PropertyToID("_YargCamViewMatrices");
@@ -46,16 +54,14 @@ namespace YARG.Gameplay.Visuals
 
         public RenderTexture GetHighwayOutputTexture()
         {
-            if (_highwaysOutputTexture == null)
-            {
-                // Set up render texture
-                var descriptor = new RenderTextureDescriptor(
-                    Screen.width, Screen.height,
-                    RenderTextureFormat.DefaultHDR);
-                descriptor.mipCount = 0;
-                _highwaysOutputTexture = new RenderTexture(descriptor);
-                _highwaysOutput.texture = _highwaysOutputTexture;
-            }
+            YargLogger.LogDebug($">>Recreating highway output texture with screen size: {Screen.width}x{Screen.height}");
+            // Set up render texture
+            var descriptor = new RenderTextureDescriptor(
+                Screen.width, Screen.height,
+                RenderTextureFormat.DefaultHDR);
+            descriptor.mipCount = 0;
+            _highwaysOutputTexture = new RenderTexture(descriptor);
+            _highwaysOutput.texture = _highwaysOutputTexture;
             return _highwaysOutputTexture;
         }
 
@@ -129,13 +135,18 @@ namespace YARG.Gameplay.Visuals
             // This equation calculates a good scale for all of the tracks.
             // It was made with experimentation; there's probably a "real" formula for this.
             float baseScale = 1f - Mathf.Max(0.7f * Mathf.Log10(count), 0f);
+            YargLogger.LogDebug($">>SCALE: count={count}, baseScale={baseScale}, aspectCorrection={GetAspectCorrectionFactor()}, finalScale={baseScale * GetAspectCorrectionFactor()}");
+            return baseScale * GetAspectCorrectionFactor();
+        }
+
+
+        // On a 9:16 screen, this will be ~0.56.
+        // On a 16:9 screen, this will be 1.0.
+        public static float GetAspectCorrectionFactor()
+        {
             const float baseAspectRatio = 16f / 9f;
             var aspectRatio = Screen.width / (float) Screen.height;
-
-            // On a 9:16 screen, this will be ~0.56.
-            // On a 16:9 screen, this will be 1.0.
-            float aspectCorrection = aspectRatio / baseAspectRatio;
-            return baseScale * aspectCorrection;
+            return aspectRatio / baseAspectRatio;
         }
 
         // This is only directly used for fake track player really
@@ -143,7 +154,7 @@ namespace YARG.Gameplay.Visuals
         public void AddPlayerParams(Vector3 position, Camera TrackCamera, float CurveFactor, float ZeroFadePosition, float FadeSize)
         {
             var index = _cameras.Count;
-            Scale = CalculateScale(index);
+            // Scale = CalculateScale(index);
 
             _cameras.Add(TrackCamera);
             _highwayPositions.Add(position);
@@ -204,15 +215,7 @@ namespace YARG.Gameplay.Visuals
 
             if (_highwaysAlphaTexture == null)
             {
-                // For perf
-                // float scaling = 0.5f;
-                float scaling = 1.0f;
-                var descriptor = new RenderTextureDescriptor(
-                    (int)(Screen.width * scaling), (int)(Screen.height * scaling),
-                    RenderTextureFormat.RFloat);
-                descriptor.mipCount = 0;
-                _highwaysAlphaTexture = new RenderTexture(descriptor);
-                Shader.SetGlobalTexture(YargHighwaysAlphaTextureID, _highwaysAlphaTexture);
+                ResetHighwayAlphaTexture();
             }
 
             if (_fadeCalcPass == null)
@@ -223,6 +226,18 @@ namespace YARG.Gameplay.Visuals
             Shader.SetGlobalInteger(YargHighwaysNumberID, 0);
             RenderPipelineManager.beginCameraRendering += OnPreCameraRender;
             RenderPipelineManager.endCameraRendering += OnEndCameraRender;
+        }
+
+        private void ResetHighwayAlphaTexture()
+        {
+            _highwaysAlphaTexture?.Release();
+            float scaling = 1.0f;
+            var descriptor = new RenderTextureDescriptor(
+                (int) (Screen.width * scaling), (int) (Screen.height * scaling),
+                RenderTextureFormat.RFloat);
+            descriptor.mipCount = 0;
+            _highwaysAlphaTexture = new RenderTexture(descriptor);
+            Shader.SetGlobalTexture(YargHighwaysAlphaTextureID, _highwaysAlphaTexture);
         }
 
         private void OnDisable()
@@ -252,16 +267,29 @@ namespace YARG.Gameplay.Visuals
                 return;
             }
 
-            // TODO: This should probably be done when track position changes rather than every frame
             RecalculateFadeParams();
-
+            // Check camera's actual pixel rect instead of Screen
             if (_highwaysOutputTexture != null)
             {
-                if (Screen.width != _highwaysOutputTexture.width || Screen.height != _highwaysOutputTexture.height)
+                if (Screen.width != _lastScreenWidth || Screen.height != _lastScreenHeight)
                 {
+                    _lastScreenWidth = Screen.width;
+                    _lastScreenHeight = Screen.height;
+
+                    foreach (var camera in _cameras)
+                    {
+                        camera.aspect = (float) Screen.width / Screen.height;
+                    }
+
+                    // Recreate the output texture
                     _highwaysOutputTexture.Release();
                     _highwaysOutputTexture.DiscardContents();
                     _renderCamera.targetTexture = GetHighwayOutputTexture();
+                    UpdateCameraProjectionMatrices();
+
+                    // Also recreate the alpha texture with the new screen size
+                    ResetHighwayAlphaTexture();
+
                 }
             }
 
@@ -276,6 +304,7 @@ namespace YARG.Gameplay.Visuals
                 _camViewMatrices[i] = camera.worldToCameraMatrix;
                 _camInvViewMatrices[i] = camera.cameraToWorldMatrix;
             }
+
             Shader.SetGlobalMatrixArray(YargHighwayCamViewMatricesID, _camViewMatrices);
             Shader.SetGlobalMatrixArray(YargHighwayCamInvViewMatricesID, _camInvViewMatrices);
             Shader.SetGlobalInteger(YargHighwaysNumberID, _cameras.Count);
@@ -382,6 +411,12 @@ namespace YARG.Gameplay.Visuals
         // Offset is defined from -1f to 1f
         public static float GetMultiplayerXOffset(int playerIndex, int totalPlayers, float magnitude)
         {
+            return 0.0f;
+            // Correct for non-16:9 aspect ratios
+            const float baseAspectRatio = 16f / 9f;
+            var aspectRatio = Screen.width / (float) Screen.height;
+            float aspectCorrection = aspectRatio / baseAspectRatio;
+
             // No need to offset if only one or fewer players
             if (totalPlayers < 2)
             {
