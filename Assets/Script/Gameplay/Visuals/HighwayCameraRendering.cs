@@ -38,6 +38,7 @@ namespace YARG.Gameplay.Visuals
 
         private int _lastScreenWidth = 0;
         private int _lastScreenHeight = 0;
+        private bool _needsTextureRecreation = false;
 
         public float Scale
         {
@@ -280,16 +281,8 @@ namespace YARG.Gameplay.Visuals
                     {
                         camera.aspect = (float) Screen.width / Screen.height;
                     }
-
-                    // Recreate the output texture
-                    _highwaysOutputTexture.Release();
-                    _highwaysOutputTexture.DiscardContents();
-                    _renderCamera.targetTexture = GetHighwayOutputTexture();
+                    _needsTextureRecreation = true;
                     UpdateCameraProjectionMatrices();
-
-                    // Also recreate the alpha texture with the new screen size
-                    ResetHighwayAlphaTexture();
-
                 }
             }
 
@@ -310,6 +303,21 @@ namespace YARG.Gameplay.Visuals
             Shader.SetGlobalInteger(YargHighwaysNumberID, _cameras.Count);
             var renderer = _renderCamera.GetUniversalAdditionalCameraData().scriptableRenderer;
             renderer.EnqueuePass(_fadeCalcPass);
+        }
+
+
+        private void LateUpdate()
+        {
+            if (!_needsTextureRecreation)
+            {
+                return;
+            }
+
+            _needsTextureRecreation = false;
+            _highwaysOutputTexture.Release();
+            _highwaysOutputTexture.DiscardContents();
+            _renderCamera.targetTexture = GetHighwayOutputTexture();
+            ResetHighwayAlphaTexture();
         }
 
         public void UpdateCameraProjectionMatrices()
@@ -411,12 +419,6 @@ namespace YARG.Gameplay.Visuals
         // Offset is defined from -1f to 1f
         public static float GetMultiplayerXOffset(int playerIndex, int totalPlayers, float magnitude)
         {
-            return 0.0f;
-            // Correct for non-16:9 aspect ratios
-            const float baseAspectRatio = 16f / 9f;
-            var aspectRatio = Screen.width / (float) Screen.height;
-            float aspectCorrection = aspectRatio / baseAspectRatio;
-
             // No need to offset if only one or fewer players
             if (totalPlayers < 2)
             {
