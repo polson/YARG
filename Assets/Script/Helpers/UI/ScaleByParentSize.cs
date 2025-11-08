@@ -25,27 +25,12 @@ namespace YARG.Helpers.UI
         }
 
         [SerializeField]
-        private Vector2 _initialSize = Vector2.one;
+        private Vector2 _initialSize = new Vector2(1920, 1080);
         [SerializeField]
         private ScaleMode _scaleMode = ScaleMode.ScaleByHeight;
 
-        public void Initialize()
-        {
-            if (ParentRectTransform.GetComponentInParent<Canvas>() is Canvas rootCanvas)
-            {
-                Canvas.ForceUpdateCanvases();
-            }
-
-            // 2. Now, the size should be correct.
-            _initialSize = ParentRectTransform.rect.size;
-            UpdateScale();
-        }
         private void Update()
         {
-            if (_initialSize == Vector2.one)
-            {
-                _initialSize = ParentRectTransform.rect.size;
-            }
             UpdateScale();
         }
 
@@ -61,9 +46,7 @@ namespace YARG.Helpers.UI
             {
                 scale = size.y / _initialSize.y;
             }
-
-            scale = 1.0f;
-            // YargLogger.LogDebug($">>INitial size x: {_initialSize.x}, y: {_initialSize.y}, scale calculated: {scale}");
+            YargLogger.LogDebug($">>SCale information: parent size: {size}, initial size: {_initialSize}, scale mode: {_scaleMode}, computed scale: {scale}");
             transform.localScale = new Vector3(scale, scale, 1f);
         }
 

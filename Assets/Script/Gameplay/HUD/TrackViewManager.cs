@@ -38,7 +38,7 @@ namespace YARG.Gameplay.HUD
             var trackView = Instantiate(_trackViewPrefab, transform).GetComponent<TrackView>();
 
             // Setup track view to show the correct track
-            trackView.Initialize(trackPlayer);
+            trackView.Initialize(trackPlayer, _highwayCameraRendering);
 
             trackPlayer.TrackCamera.targetTexture  = _highwayCameraRendering.GetHighwayOutputTexture();
 

@@ -135,7 +135,7 @@ namespace YARG.Gameplay.Visuals
         {
             // This equation calculates a good scale for all of the tracks.
             // It was made with experimentation; there's probably a "real" formula for this.
-            float baseScale = 1f - Mathf.Max(0.7f * Mathf.Log10(count), 0f);
+            float baseScale = 1f - Mathf.Max(0.7f * Mathf.Log10(count-1), 0f);
             YargLogger.LogDebug($">>SCALE: count={count}, baseScale={baseScale}, aspectCorrection={GetAspectCorrectionFactor()}, finalScale={baseScale * GetAspectCorrectionFactor()}");
             return baseScale * GetAspectCorrectionFactor();
         }
@@ -147,6 +147,7 @@ namespace YARG.Gameplay.Visuals
         {
             const float baseAspectRatio = 16f / 9f;
             var aspectRatio = Screen.width / (float) Screen.height;
+            YargLogger.LogDebug($">>SCREEN WIDTH: {Screen.width}, HEIGHT: {Screen.height}, RATIO: {aspectRatio}, BASE RATIO: {baseAspectRatio}, CORRECTION FACTOR: {aspectRatio / baseAspectRatio}");
             return aspectRatio / baseAspectRatio;
         }
 
@@ -269,7 +270,6 @@ namespace YARG.Gameplay.Visuals
             }
 
             RecalculateFadeParams();
-            // Check camera's actual pixel rect instead of Screen
             if (_highwaysOutputTexture != null)
             {
                 if (Screen.width != _lastScreenWidth || Screen.height != _lastScreenHeight)
@@ -283,6 +283,7 @@ namespace YARG.Gameplay.Visuals
                     }
                     _needsTextureRecreation = true;
                     UpdateCameraProjectionMatrices();
+                    RecalculateCameraBounds();
                 }
             }
 

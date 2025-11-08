@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Runtime.InteropServices;
 using UnityEngine;
 using UnityEngine.UI;
 using YARG.Core.Engine;
@@ -13,10 +14,6 @@ namespace YARG.Gameplay.HUD
 {
     public class TrackView : MonoBehaviour
     {
-        [SerializeField]
-        private AspectRatioFitter _aspectRatioFitter;
-        [SerializeField]
-        private ScaleByParentSize _UIScaler;
         [SerializeField]
         private RectTransform _topElementContainer;
         [SerializeField]
@@ -33,49 +30,39 @@ namespace YARG.Gameplay.HUD
         private PlayerNameDisplay _playerNameDisplay;
 
         private TrackPlayer _trackPlayer;
+        private HighwayCameraRendering      _highwayRenderer;
+
+        //TODO: serialize
+        private RectTransform _scaleContainer;
+
+        public void Initialize(TrackPlayer trackPlayer, HighwayCameraRendering highwayRenderer)
+        {
+            _trackPlayer     = trackPlayer;
+            _highwayRenderer = highwayRenderer;
+        }
 
         private void Start()
         {
-            _UIScaler.Initialize();
-        }
-
-        public void Initialize(TrackPlayer trackPlayer)
-        {
-            _aspectRatioFitter.aspectRatio = (float) Screen.width / Screen.height;
-            _trackPlayer = trackPlayer;
-        }
-
-        public void Update()
-        {
-            // YargLogger.LogDebug($">>Aspect ratio: {(float) Screen.width / Screen.height}");
+            _scaleContainer = transform.GetChild(0).GetComponent<RectTransform>();
         }
 
         public void UpdateHUDPosition(int highwayIndex, int highwayCount)
         {
+            Vector3 worldPos = _trackPlayer.transform.position;
+            Vector2 viewportPos = _highwayRenderer.WorldToViewport(worldPos, highwayIndex);
+            float screenY = (1.0f - viewportPos.y) * Screen.height;
 
-            var rect = GetComponent<RectTransform>();
-            var topViewportPos = _trackPlayer.HUDTopElementViewportPosition;
-            var centerViewportPos = _trackPlayer.HUDCenterElementViewportPosition;
+            // --- X Offset Calculations (as you had them) ---
+            // var tiltMultiplier = SettingsManager.Settings.HighwayTiltMultiplier.Value / 4;
+            // var xOffsetWorld = HighwayCameraRendering.GetMultiplayerXOffset(highwayIndex, highwayCount, tiltMultiplier);
+            // var xOffsetViewport = _highwayRenderer.WorldToViewport(worldPos, highwayIndex).x - 0.5f;
+            // var xOffsetScreen = xOffsetViewport * Screen.width;
+            // YargLogger.LogDebug($">> x offsets: current position: {rect.position.x} world {xOffsetWorld}, viewport {xOffsetViewport}, screen {xOffsetScreen}");
+            float screenX = (viewportPos.x) * Screen.width;
 
-            // Caching this is faster
-            var rectRect = rect.rect;
+            YargLogger.LogDebug($">>Viewport x: {viewportPos.x}, viewport y: {viewportPos.y} screenX: {screenX}, screenY: {screenY}");
 
-            // Divide tilt by 4; if highway tilt is maxed out, we want the bounds to be (-0.25, 0.25)
-            float hudOffset = HighwayCameraRendering.GetMultiplayerXOffset(highwayIndex, highwayCount,
-                SettingsManager.Settings.HighwayTiltMultiplier.Value / 4);
-
-            var aspectCorrection = HighwayCameraRendering.GetAspectCorrectionFactor();
-            float adjustedHudOffset = hudOffset / aspectCorrection;
-
-            // Adjust the screen's viewport position to the rect's viewport position
-            // -0.5f as our position is relative to center, not the corner
-            _topElementContainer.localPosition = _topElementContainer.localPosition
-                .WithX(rectRect.width * (topViewportPos.x - 0.5f - adjustedHudOffset))
-                .WithY(rectRect.height * (topViewportPos.y - 0.5f));
-
-            _centerElementContainer.localPosition = _centerElementContainer.localPosition
-                .WithX(rectRect.width * (centerViewportPos.x - 0.5f - adjustedHudOffset))
-                .WithY(rectRect.height * (centerViewportPos.y - 0.5f) * aspectCorrection);
+            _scaleContainer.position = new Vector2(screenX, screenY);
         }
 
         public void UpdateCountdown(double countdownLength, double endTime)
