@@ -20,8 +20,9 @@ namespace YARG.Gameplay.Visuals
         [SerializeField]
         private RawImage _highwaysOutput;
 
-        private List<Camera> _cameras = new();
+        private List<Camera>  _cameras          = new();
         private List<Vector3> _highwayPositions = new();
+        private List<float>   _raisedRotations  = new();
 
         private Camera _renderCamera;
         private RenderTexture _highwaysOutputTexture;
@@ -35,15 +36,11 @@ namespace YARG.Gameplay.Visuals
         private Matrix4x4[] _camViewMatrices = new Matrix4x4[MAX_MATRICES];
         private Matrix4x4[] _camInvViewMatrices = new Matrix4x4[MAX_MATRICES];
         private Matrix4x4[] _camProjMatrices = new Matrix4x4[MAX_MATRICES];
+        private float[] _laneScales             = new float[MAX_MATRICES];
 
-        private int _lastScreenWidth = 0;
-        private int _lastScreenHeight = 0;
-        private bool _needsTextureRecreation = false;
-
-        public float Scale
-        {
-            get => CalculateScale(_cameras.Count);
-        }
+        private int     _lastScreenWidth        = 0;
+        private int     _lastScreenHeight       = 0;
+        private bool    _needsTextureRecreation = false;
 
         public static readonly int YargHighwaysNumberID = Shader.PropertyToID("_YargHighwaysN");
         public static readonly int YargHighwayCamViewMatricesID = Shader.PropertyToID("_YargCamViewMatrices");
@@ -53,9 +50,12 @@ namespace YARG.Gameplay.Visuals
         public static readonly int YargFadeParamsID = Shader.PropertyToID("_YargFadeParams");
         public static readonly int YargHighwaysAlphaTextureID = Shader.PropertyToID("_YargHighwaysAlphaMask");
 
+        // On a 9:16 screen, this will be ~0.316.
+        // On a 16:9 screen, this will be 1.0.
+        public float AspectCorrectionFactor => Screen.width / (float)Screen.height / (16f / 9f);
+
         public RenderTexture GetHighwayOutputTexture()
         {
-            YargLogger.LogDebug($">>Recreating highway output texture with screen size: {Screen.width}x{Screen.height}");
             // Set up render texture
             var descriptor = new RenderTextureDescriptor(
                 Screen.width, Screen.height,
@@ -131,36 +131,57 @@ namespace YARG.Gameplay.Visuals
             _renderCamera.orthographicSize = requiredHalfWidth;
         }
 
-        public static float CalculateScale(int count)
+        public void RecalculateScaleFactors()
         {
-            // This equation calculates a good scale for all of the tracks.
-            // It was made with experimentation; there's probably a "real" formula for this.
-            float baseScale = 1f - Mathf.Max(0.7f * Mathf.Log10(count-1), 0f);
-            YargLogger.LogDebug($">>SCALE: count={count}, baseScale={baseScale}, aspectCorrection={GetAspectCorrectionFactor()}, finalScale={baseScale * GetAspectCorrectionFactor()}");
-            return baseScale * GetAspectCorrectionFactor();
-        }
+            if (_cameras.Count == 0)
+            {
+                return;
+            }
 
+            //First pass, just scale according to aspect ratio, then recalc matrices
+            for (int i = 0; i < _cameras.Count; i++)
+            {
+                _laneScales[i] = AspectCorrectionFactor;
+            }
+            UpdateCameraProjectionMatrices();
 
-        // On a 9:16 screen, this will be ~0.56.
-        // On a 16:9 screen, this will be 1.0.
-        public static float GetAspectCorrectionFactor()
-        {
-            const float baseAspectRatio = 16f / 9f;
-            var aspectRatio = Screen.width / (float) Screen.height;
-            YargLogger.LogDebug($">>SCREEN WIDTH: {Screen.width}, HEIGHT: {Screen.height}, RATIO: {aspectRatio}, BASE RATIO: {baseAspectRatio}, CORRECTION FACTOR: {aspectRatio / baseAspectRatio}");
-            return aspectRatio / baseAspectRatio;
+            // Second pass, use screen width of the lane to adjust scale again
+            if (_cameras.Count == 1)
+            {
+                // Special case for single lane, just make it fit the screen width
+                var raisedRotation = _raisedRotations[0];
+                Vector2 screenSize = GetTrackScreenSize(0, raisedRotation);
+                float screenWidth = screenSize.x;
+                float targetScreenWidth = Math.Min(Screen.width, screenWidth);
+                float scaleFactor = targetScreenWidth / screenWidth;
+                _laneScales[0] *= scaleFactor;
+                return;
+            }
+
+            //For multiple lanes, fit to 45% of screen or available width
+            for (int i = 0; i < _cameras.Count; i++)
+            {
+                var raisedRotation = _raisedRotations[i];
+                Vector2 screenSize = GetTrackScreenSize(i, raisedRotation);
+                float screenWidth = screenSize.x;
+                float targetScreenWidth = Math.Min(Screen.width * 0.45f, (float) Screen.width / _cameras.Count * 0.95f);
+                float scaleFactor = targetScreenWidth / screenWidth;
+
+                _laneScales[i] *= scaleFactor;
+            }
         }
 
         // This is only directly used for fake track player really
         // Rest should go through AddPlayer
-        public void AddPlayerParams(Vector3 position, Camera TrackCamera, float CurveFactor, float ZeroFadePosition, float FadeSize)
+        public void AddPlayerParams(Vector3 position, Camera TrackCamera, float CurveFactor, float ZeroFadePosition, float FadeSize, float raisedRotation)
         {
             var index = _cameras.Count;
-            // Scale = CalculateScale(index);
 
             _cameras.Add(TrackCamera);
+            _raisedRotations.Add(raisedRotation);
             _highwayPositions.Add(position);
 
+            RecalculateScaleFactors();
             UpdateCameraProjectionMatrices();
             UpdateCurveFactor(CurveFactor, index);
             UpdateFadeParams(index, ZeroFadePosition, FadeSize);
@@ -197,13 +218,8 @@ namespace YARG.Gameplay.Visuals
             var cameraData = trackPlayer.TrackCamera.GetUniversalAdditionalCameraData();
             cameraData.renderType = CameraRenderType.Overlay;
 
-            AddPlayerParams(trackPlayer.transform.position, trackPlayer.TrackCamera, trackPlayer.Player.CameraPreset.CurveFactor, trackPlayer.ZeroFadePosition, trackPlayer.FadeSize);
+            AddPlayerParams(trackPlayer.transform.position, trackPlayer.TrackCamera, trackPlayer.Player.CameraPreset.CurveFactor, trackPlayer.ZeroFadePosition, trackPlayer.FadeSize, trackPlayer.Player.CameraPreset.Rotation);
             RecalculateCameraBounds();
-        }
-
-
-        private void Awake()
-        {
         }
 
         private void OnEnable()
@@ -282,6 +298,7 @@ namespace YARG.Gameplay.Visuals
                         camera.aspect = (float) Screen.width / Screen.height;
                     }
                     _needsTextureRecreation = true;
+                    RecalculateScaleFactors();
                     UpdateCameraProjectionMatrices();
                     RecalculateCameraBounds();
                 }
@@ -329,8 +346,8 @@ namespace YARG.Gameplay.Visuals
                 _camViewMatrices[i] = camera.worldToCameraMatrix;
                 _camInvViewMatrices[i] = camera.cameraToWorldMatrix;
                 var projMatrix = GetModifiedProjectionMatrix(camera.projectionMatrix,
-                                                             i, _cameras.Count, Scale);
-                _camProjMatrices[i] = GL.GetGPUProjectionMatrix(projMatrix, SystemInfo.graphicsUVStartsAtTop /* if we're not rendering to render texture this has to be changed to always false */);
+                    i, _cameras.Count, _laneScales[i]);
+                _camProjMatrices[i] = GL.GetGPUProjectionMatrix(projMatrix, SystemInfo.graphicsUVStartsAtTop);
                 Shader.SetGlobalMatrixArray(YargHighwayCamProjMatricesID, _camProjMatrices);
             }
         }
@@ -436,6 +453,81 @@ namespace YARG.Gameplay.Visuals
         public static void OffsetLocalPosition(Transform transform, float xOffset)
         {
             transform.localPosition = new Vector3(xOffset, transform.localPosition.y, transform.localPosition.z);
+        }
+
+        /// <summary>
+        /// Calculates the width and height of the track in screen space (pixels).
+        /// </summary>
+        /// <param name="cameraIndex">The index of the camera to use for the calculation.</param>
+        /// <param name="camRotation">Optional camera rotation (X-axis) to apply during calculation.
+        /// If null, uses the camera's current rotation.
+        /// This is useful for knowing the screen size of the raised track ahead of time</param>
+        /// <returns>A Vector2 containing the lane width (x) and height (y) in screen pixels or Vector2.zero if the camera index is invalid.</returns>
+        public Vector2 GetTrackScreenSize(int cameraIndex, float? camRotation = null)
+        {
+            if (cameraIndex < 0 || cameraIndex >= _cameras.Count)
+            {
+                YargLogger.LogError($"Invalid camera index: {cameraIndex}");
+                return Vector2.zero;
+            }
+
+            var camera = _cameras[cameraIndex];
+            var trackPosition = _highwayPositions[cameraIndex];
+            var originalRotation = camera.transform.localRotation;
+
+            // Apply custom rotation for the calculation if needed (e.g. for raised highway position)
+            if (camRotation.HasValue)
+            {
+                var newRotation = Quaternion.Euler(new Vector3().WithX(camRotation.Value));
+                camera.transform.localRotation = newRotation;
+                _camViewMatrices[cameraIndex] = camera.worldToCameraMatrix;
+            }
+
+            // Get the world space positions of the track corners assuming the screen bottom is the widest part of the track
+            float halfWidth = TrackPlayer.TRACK_WIDTH / 2f;
+            var trackBottom = FindTrackBottom(camera, trackPosition.y);
+            Vector3 bottomLeft = new Vector3(trackPosition.x - halfWidth, trackPosition.y, trackBottom);
+            Vector3 bottomRight = new Vector3(trackPosition.x + halfWidth, trackPosition.y, trackBottom);
+            Vector3 topLeft = new Vector3(trackPosition.x - halfWidth, trackPosition.y, trackBottom + TrackPlayer.TRACK_HEIGHT);
+
+            // Viewport space
+            Vector2 viewportBottomLeft = WorldToViewport(bottomLeft, cameraIndex);
+            Vector2 viewportBottomRight = WorldToViewport(bottomRight, cameraIndex);
+            Vector2 viewportTopLeft = WorldToViewport(topLeft, cameraIndex);
+            float viewportWidth = Mathf.Abs(viewportBottomRight.x - viewportBottomLeft.x);
+            float viewportHeight = Mathf.Abs(viewportTopLeft.y - viewportBottomLeft.y);
+
+            // Screen space
+            float widthPixels = viewportWidth * Screen.width;
+            float heightPixels = viewportHeight * Screen.height;
+
+            // Restore the original camera rotation
+            camera.transform.localRotation = originalRotation;
+            _camViewMatrices[cameraIndex] = camera.worldToCameraMatrix;
+
+            return new Vector2(widthPixels, heightPixels);
+        }
+
+        // Find the actual bottom z value of the track by raycasting from the bottom center of the screen.  Some camera presets might have the bottom
+        // of the track off screen.
+        private float FindTrackBottom(Camera camera, float trackY)
+        {
+            Plane trackPlane = new Plane(Vector3.up, new Vector3(0, trackY,
+                0));
+            Ray bottomRay = camera.ViewportPointToRay(new Vector3(0.5f, 0f, 0f));
+            float enter;
+            float trackBottom;
+            if (trackPlane.Raycast(bottomRay, out enter))
+            {
+                Vector3 bottomIntersection = bottomRay.GetPoint(enter);
+                trackBottom = bottomIntersection.z;
+            }
+            else
+            {
+                trackBottom = TrackPlayer.STRIKE_LINE_POS - 0.75f;
+                YargLogger.LogWarning($"Failed to find bottom z position of track, using estimate as fallback");
+            }
+            return trackBottom;
         }
     }
 }

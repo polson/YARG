@@ -46,7 +46,6 @@ namespace YARG.Helpers.UI
             {
                 scale = size.y / _initialSize.y;
             }
-            YargLogger.LogDebug($">>SCale information: parent size: {size}, initial size: {_initialSize}, scale mode: {_scaleMode}, computed scale: {scale}");
             transform.localScale = new Vector3(scale, scale, 1f);
         }
 

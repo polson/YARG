@@ -67,11 +67,11 @@ namespace YARG.Gameplay.HUD
 
         public void SetAllHUDScale()
         {
-            _horizontalLayoutGroup.enabled = false;
-            var rect = GetComponent<RectTransform>();
-            var rectRect = rect.rect;
-            _horizontalLayoutGroup.padding.top = (int)(rectRect.height * (1.0f - _highwayCameraRendering.Scale));
-            _horizontalLayoutGroup.enabled = true;
+            // _horizontalLayoutGroup.enabled = false;
+            // var rect = GetComponent<RectTransform>();
+            // var rectRect = rect.rect;
+            // _horizontalLayoutGroup.padding.top = (int)(rectRect.height * (1.0f - _highwayCameraRendering.Scale));
+            // _horizontalLayoutGroup.enabled = true;
         }
     }
 }

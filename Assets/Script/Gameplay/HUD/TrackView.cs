@@ -31,6 +31,7 @@ namespace YARG.Gameplay.HUD
 
         private TrackPlayer _trackPlayer;
         private HighwayCameraRendering      _highwayRenderer;
+        private Vector2 _lastTrackPlayerPosition;
 
         //TODO: serialize
         private RectTransform _scaleContainer;
@@ -50,6 +51,12 @@ namespace YARG.Gameplay.HUD
         {
             Vector3 worldPos = _trackPlayer.transform.position;
             Vector2 viewportPos = _highwayRenderer.WorldToViewport(worldPos, highwayIndex);
+            if (_lastTrackPlayerPosition == viewportPos)
+            {
+                return;
+            }
+            _lastTrackPlayerPosition = viewportPos;
+
             float screenY = (1.0f - viewportPos.y) * Screen.height;
 
             // --- X Offset Calculations (as you had them) ---
@@ -59,9 +66,11 @@ namespace YARG.Gameplay.HUD
             // var xOffsetScreen = xOffsetViewport * Screen.width;
             // YargLogger.LogDebug($">> x offsets: current position: {rect.position.x} world {xOffsetWorld}, viewport {xOffsetViewport}, screen {xOffsetScreen}");
             float screenX = (viewportPos.x) * Screen.width;
-
-            YargLogger.LogDebug($">>Viewport x: {viewportPos.x}, viewport y: {viewportPos.y} screenX: {screenX}, screenY: {screenY}");
-
+            var raisedRotation = _trackPlayer.Player.CameraPreset.Rotation;
+            Vector2 size = _highwayRenderer.GetTrackScreenSize(highwayIndex, raisedRotation);
+            YargLogger.LogDebug($"Track screen size: {size.x}, {size.y}, rotation: {raisedRotation}");
+            _scaleContainer.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, size.x);
+            _scaleContainer.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, size.y);
             _scaleContainer.position = new Vector2(screenX, screenY);
         }
 
