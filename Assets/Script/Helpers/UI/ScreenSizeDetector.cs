@@ -1,0 +1,30 @@
+﻿using System;
+using UnityEngine;
+
+namespace YARG.Helpers.UI
+{
+    public class ScreenSizeDetector : MonoSingleton<ScreenSizeDetector>
+    {
+        public static event Action<int, int> OnScreenSizeChanged;
+
+        private int _lastWidth;
+        private int _lastHeight;
+
+        protected override void SingletonAwake()
+        {
+            // Put your original Awake logic here
+            _lastWidth = Screen.width;
+            _lastHeight = Screen.height;
+        }
+
+        void Update()
+        {
+            if (Screen.width != _lastWidth || Screen.height != _lastHeight)
+            {
+                _lastWidth = Screen.width;
+                _lastHeight = Screen.height;
+                OnScreenSizeChanged?.Invoke(_lastWidth, _lastHeight);
+            }
+        }
+    }
+}

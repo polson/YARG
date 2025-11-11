@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using UnityEngine;
 using UnityEngine.UI;
 using YARG.Core.Engine;
+using YARG.Core.Game;
 using YARG.Core.Logging;
 using YARG.Gameplay.Player;
 using YARG.Gameplay.Visuals;
@@ -18,6 +19,8 @@ namespace YARG.Gameplay.HUD
         private RectTransform _topElementContainer;
         [SerializeField]
         private RectTransform _centerElementContainer;
+        [SerializeField]
+        private RectTransform _scaleContainer;
 
         [Space]
         [SerializeField]
@@ -31,10 +34,13 @@ namespace YARG.Gameplay.HUD
 
         private TrackPlayer _trackPlayer;
         private HighwayCameraRendering      _highwayRenderer;
-        private Vector2 _lastTrackPlayerPosition;
+        private Vector3 _lastTrackPlayerPosition;
+        private RectTransform _rect;
 
-        //TODO: serialize
-        private RectTransform _scaleContainer;
+        void Awake()
+        {
+            _rect = GetComponent<RectTransform>();
+        }
 
         public void Initialize(TrackPlayer trackPlayer, HighwayCameraRendering highwayRenderer)
         {
@@ -42,36 +48,22 @@ namespace YARG.Gameplay.HUD
             _highwayRenderer = highwayRenderer;
         }
 
-        private void Start()
-        {
-            _scaleContainer = transform.GetChild(0).GetComponent<RectTransform>();
-        }
-
         public void UpdateHUDPosition(int highwayIndex, int highwayCount)
         {
-            Vector3 worldPos = _trackPlayer.transform.position;
-            Vector2 viewportPos = _highwayRenderer.WorldToViewport(worldPos, highwayIndex);
-            if (_lastTrackPlayerPosition == viewportPos)
-            {
-                return;
-            }
-            _lastTrackPlayerPosition = viewportPos;
+            //Scale ui according to number of highways
+            var newScale = highwayCount > 3 ? Math.Max(0.5f, 1f / highwayCount) : 1f;
+            _scaleContainer.localScale = _scaleContainer.localScale.WithX(newScale).WithY(newScale);
 
-            float screenY = (1.0f - viewportPos.y) * Screen.height;
+            //Set center element position to 75% of the track depth
+            Vector2 position = _highwayRenderer.GetTrackDepthByPercent(highwayIndex, 0.5f);
+            _centerElementContainer.transform.position = position;
 
-            // --- X Offset Calculations (as you had them) ---
-            // var tiltMultiplier = SettingsManager.Settings.HighwayTiltMultiplier.Value / 4;
-            // var xOffsetWorld = HighwayCameraRendering.GetMultiplayerXOffset(highwayIndex, highwayCount, tiltMultiplier);
-            // var xOffsetViewport = _highwayRenderer.WorldToViewport(worldPos, highwayIndex).x - 0.5f;
-            // var xOffsetScreen = xOffsetViewport * Screen.width;
-            // YargLogger.LogDebug($">> x offsets: current position: {rect.position.x} world {xOffsetWorld}, viewport {xOffsetViewport}, screen {xOffsetScreen}");
-            float screenX = (viewportPos.x) * Screen.width;
-            var raisedRotation = _trackPlayer.Player.CameraPreset.Rotation;
-            Vector2 size = _highwayRenderer.GetTrackScreenSize(highwayIndex, raisedRotation);
-            YargLogger.LogDebug($"Track screen size: {size.x}, {size.y}, rotation: {raisedRotation}");
-            _scaleContainer.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, size.x);
-            _scaleContainer.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, size.y);
-            _scaleContainer.position = new Vector2(screenX, screenY);
+            // Place top elements at 100% depth plus 3% of the track screen space height so it doesn't overlap the track
+            var trackSize = _highwayRenderer.GetTrackScreenSize(highwayIndex, _trackPlayer.Player.CameraPreset.Rotation);
+            float trackHeightPixels = trackSize.y;
+            var extraOffset = 0.03f * trackHeightPixels;
+            Vector2 position2 = _highwayRenderer.GetTrackDepthByPercent(highwayIndex, 1.0f).AddY(extraOffset);
+            _topElementContainer.position = position2;
         }
 
         public void UpdateCountdown(double countdownLength, double endTime)

@@ -10,6 +10,7 @@ using YARG.Core.Logging;
 using YARG.Core.Replays;
 using YARG.Gameplay.HUD;
 using YARG.Helpers.Extensions;
+using YARG.Helpers.UI;
 using YARG.Input;
 using YARG.Playback;
 using YARG.Player;
@@ -104,6 +105,9 @@ namespace YARG.Gameplay.Player
 
         protected EngineManager.EngineContainer EngineContainer;
 
+        private int _lastScreenWidth;
+        private int _lastScreenHeight;
+
         protected override void GameplayAwake()
         {
             _replayInputs = new List<GameInput>();
@@ -113,6 +117,13 @@ namespace YARG.Gameplay.Player
             InputViewer = FindFirstObjectByType<BaseInputViewer>();
 
             IsFc = true;
+
+            ScreenSizeDetector.OnScreenSizeChanged += OnScreenSizeChanged;
+        }
+
+        private void OnScreenSizeChanged(int width, int height)
+        {
+            UpdateVisuals(GameManager.VisualTime);
         }
 
         protected void Start()
@@ -210,6 +221,7 @@ namespace YARG.Gameplay.Player
             {
                 UnsubscribeFromInputEvents();
             }
+            ScreenSizeDetector.OnScreenSizeChanged -= OnScreenSizeChanged;
 
             FinishDestruction();
         }

@@ -145,28 +145,28 @@ namespace YARG.Gameplay.Visuals
             }
             UpdateCameraProjectionMatrices();
 
-            // Second pass, use screen width of the lane to adjust scale again
-            if (_cameras.Count == 1)
-            {
-                // Special case for single lane, just make it fit the screen width
-                var raisedRotation = _raisedRotations[0];
-                Vector2 screenSize = GetTrackScreenSize(0, raisedRotation);
-                float screenWidth = screenSize.x;
-                float targetScreenWidth = Math.Min(Screen.width, screenWidth);
-                float scaleFactor = targetScreenWidth / screenWidth;
-                _laneScales[0] *= scaleFactor;
-                return;
-            }
-
-            //For multiple lanes, fit to 45% of screen or available width
+            // Second pass, use screen width and height of the lane to adjust scale again
             for (int i = 0; i < _cameras.Count; i++)
             {
                 var raisedRotation = _raisedRotations[i];
                 Vector2 screenSize = GetTrackScreenSize(i, raisedRotation);
                 float screenWidth = screenSize.x;
-                float targetScreenWidth = Math.Min(Screen.width * 0.45f, (float) Screen.width / _cameras.Count * 0.95f);
-                float scaleFactor = targetScreenWidth / screenWidth;
+                float screenHeight = screenSize.y;
 
+                float targetScreenWidth = _cameras.Count == 1
+                    // Special case for single player
+                    ? Math.Min(Screen.width, screenWidth)
+                    // For multiple lanes, cap to 45% of screen or 95% of max lane width
+                    : Math.Min(Screen.width * 0.45f, (float)Screen.width / _cameras.Count * 0.95f);
+
+                float scaleFactorWidth = targetScreenWidth / screenWidth;
+
+                // Also calculate scale factor needed to fit within 50% of screen height
+                float targetScreenHeight = Screen.height * 0.55f;
+                float scaleFactorHeight = targetScreenHeight / screenHeight;
+
+                // Use the smaller scale factor
+                float scaleFactor = Math.Min(scaleFactorWidth, scaleFactorHeight);
                 _laneScales[i] *= scaleFactor;
             }
         }
@@ -456,7 +456,8 @@ namespace YARG.Gameplay.Visuals
         }
 
         /// <summary>
-        /// Calculates the width and height of the track in screen space (pixels).
+        /// Calculates the width and height of the visible track in screen space (pixels).
+        /// This considers the top of the track to be the zero fade position.
         /// </summary>
         /// <param name="cameraIndex">The index of the camera to use for the calculation.</param>
         /// <param name="camRotation">Optional camera rotation (X-axis) to apply during calculation.
@@ -485,10 +486,12 @@ namespace YARG.Gameplay.Visuals
 
             // Get the world space positions of the track corners assuming the screen bottom is the widest part of the track
             float halfWidth = TrackPlayer.TRACK_WIDTH / 2f;
-            var trackBottom = FindTrackBottom(camera, trackPosition.y);
+            var trackBottom = FindTrackBottom(camera, trackPosition);
+            var trackTop = _zeroFadePositions[cameraIndex]; // Use zero fade position for the top
+
             Vector3 bottomLeft = new Vector3(trackPosition.x - halfWidth, trackPosition.y, trackBottom);
             Vector3 bottomRight = new Vector3(trackPosition.x + halfWidth, trackPosition.y, trackBottom);
-            Vector3 topLeft = new Vector3(trackPosition.x - halfWidth, trackPosition.y, trackBottom + TrackPlayer.TRACK_HEIGHT);
+            Vector3 topLeft = new Vector3(trackPosition.x - halfWidth, trackPosition.y, trackTop);
 
             // Viewport space
             Vector2 viewportBottomLeft = WorldToViewport(bottomLeft, cameraIndex);
@@ -508,26 +511,95 @@ namespace YARG.Gameplay.Visuals
             return new Vector2(widthPixels, heightPixels);
         }
 
+        public Vector2 GetTrackPosition(int trackIndex)
+        {
+            if (trackIndex < 0 || trackIndex >= _cameras.Count)
+            {
+                YargLogger.LogError($"Invalid track index: {trackIndex}");
+                return Vector2.zero;
+            }
+
+            var trackPosition = _highwayPositions[trackIndex];
+
+            // Convert the track's world position to viewport space
+            Vector2 viewportPosition = WorldToViewport(trackPosition, trackIndex);
+
+            // Convert viewport space to screen space
+            float screenX = viewportPosition.x * Screen.width;
+            float screenY = (1.0f - viewportPosition.y) * Screen.height; // Invert Y
+
+            return new Vector2(screenX, screenY);
+        }
+
+        public Vector2 GetTrackDepthByPercent(int trackIndex, float percent)
+        {
+            if (trackIndex < 0 || trackIndex >= _cameras.Count)
+            {
+                YargLogger.LogError($"Invalid track index: {trackIndex}");
+                return Vector2.zero;
+            }
+
+            var camera = _cameras[trackIndex];
+            var trackPosition = _highwayPositions[trackIndex];
+
+            // Calculate the bottom and top z positions of the track
+            float trackBottom = FindTrackBottom(camera, trackPosition);
+
+            float trackTop = _zeroFadePositions[trackIndex];
+
+            YargLogger.LogDebug($">>Track bottom and top z positions: {trackBottom}, {trackTop}");
+
+            // Calculate the z position at the given percent (0% = bottom, 100% = top)
+            float zPositionAtPercent = Mathf.LerpUnclamped(trackBottom, trackTop, percent);
+
+            // Create a world position at the center of the track at the calculated z
+            Vector3 worldPositionAtPercent = new Vector3(trackPosition.x, trackPosition.y, zPositionAtPercent);
+
+            // Convert to viewport space
+            Vector2 viewportPosition = WorldToViewport(worldPositionAtPercent, trackIndex);
+
+            // Convert viewport space to screen space
+            float screenX = viewportPosition.x * Screen.width;
+            float screenY = (1.0f - viewportPosition.y) * Screen.height;
+
+            return new Vector2(screenX, screenY);
+        }
+
+        public Vector2 GetTrackPositionScreenSpace(int trackIndex)
+        {
+            if (trackIndex < 0 || trackIndex >= _cameras.Count)
+            {
+                YargLogger.LogError($"Invalid track index: {trackIndex}");
+                return Vector2.zero;
+            }
+
+            var trackPosition = _highwayPositions[trackIndex];
+
+            // Convert the track's world position to viewport space
+            Vector2 viewportPosition = WorldToViewport(trackPosition, trackIndex);
+
+            // Convert viewport space to screen space
+            float screenX = viewportPosition.x * Screen.width;
+            float screenY = (1.0f - viewportPosition.y) * Screen.height; // Invert Y
+
+            return new Vector2(screenX, screenY);
+        }
+
         // Find the actual bottom z value of the track by raycasting from the bottom center of the screen.  Some camera presets might have the bottom
         // of the track off screen.
-        private float FindTrackBottom(Camera camera, float trackY)
+        private float FindTrackBottom(Camera camera, Vector3 trackPosition)
         {
-            Plane trackPlane = new Plane(Vector3.up, new Vector3(0, trackY,
-                0));
-            Ray bottomRay = camera.ViewportPointToRay(new Vector3(0.5f, 0f, 0f));
-            float enter;
-            float trackBottom;
-            if (trackPlane.Raycast(bottomRay, out enter))
+            var trackPlane = new Plane(Vector3.up, new Vector3(0, trackPosition.y, 0));
+            var bottomRay = camera.ViewportPointToRay(new Vector3(trackPosition.x, 0f, 0f));
+            if (!trackPlane.Raycast(bottomRay, out var enter))
             {
-                Vector3 bottomIntersection = bottomRay.GetPoint(enter);
-                trackBottom = bottomIntersection.z;
+                //Track is off the screen at bottom position, default to the position as a best guess
+                return trackPosition.z;
             }
-            else
-            {
-                trackBottom = TrackPlayer.STRIKE_LINE_POS - 0.75f;
-                YargLogger.LogWarning($"Failed to find bottom z position of track, using estimate as fallback");
-            }
-            return trackBottom;
+
+            var bottomIntersection = bottomRay.GetPoint(enter);
+            YargLogger.LogDebug($">>Found track bottom at z={bottomIntersection.z}, trackY={trackPosition.y}");
+            return bottomIntersection.z;
         }
     }
 }
