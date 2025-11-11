@@ -192,7 +192,7 @@ namespace YARG.Audio.BASS
                     YargLogger.LogDebug("Failed to remove channel from mixer");
                 };
             }
-            AddChannelsToMixer(_stemDatas.ToList());
+            AddChannelsToMixer(_stemDatas);
 
             foreach (var channel in _channels)
             {
@@ -326,7 +326,7 @@ namespace YARG.Audio.BASS
             return true;
         }
 
-        private bool AddChannelsToMixer(List<StemData> stemStreamDataList)
+        private bool AddChannelsToMixer(IEnumerable<StemData> stemStreamDataList)
         {
             foreach (var stemStreamData in stemStreamDataList)
             {
