@@ -29,21 +29,14 @@ namespace YARG.Gameplay.HUD
         [SerializeField]
         HorizontalLayoutGroup _horizontalLayoutGroup;
 
-        private RenderTexture _highwaysOutputTexture;
         private readonly List<TrackView> _trackViews = new();
 
         public TrackView CreateTrackView(TrackPlayer trackPlayer, YargPlayer player)
         {
             // Create a track view
             var trackView = Instantiate(_trackViewPrefab, transform).GetComponent<TrackView>();
-
-            // Setup track view to show the correct track
             trackView.Initialize(trackPlayer, _highwayCameraRendering);
-
-            trackPlayer.TrackCamera.targetTexture  = _highwayCameraRendering.GetHighwayOutputTexture();
-
             _trackViews.Add(trackView);
-
             return trackView;
         }
 
@@ -56,7 +49,12 @@ namespace YARG.Gameplay.HUD
             float ratio = rect.width / rect.height;
 
             // Apply the vocal track texture
-            GameManager.VocalTrack.InitializeRenderTexture(ratio, _highwayCameraRendering.GetHighwayOutputTexture());
+            GameManager.VocalTrack.InitializeRenderTexture(ratio, _highwayCameraRendering.HighwaysOutputTexture);
+
+            _highwayCameraRendering.OnRenderTextureRecreated += texture =>
+            {
+                GameManager.VocalTrack.InitializeRenderTexture(ratio, texture);
+            };
         }
 
         public VocalsPlayerHUD CreateVocalsPlayerHUD()

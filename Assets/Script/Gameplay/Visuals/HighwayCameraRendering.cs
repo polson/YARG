@@ -25,8 +25,9 @@ namespace YARG.Gameplay.Visuals
         private List<float>   _raisedRotations  = new();
 
         private Camera _renderCamera;
-        private RenderTexture _highwaysOutputTexture;
-        private RenderTexture _highwaysAlphaTexture;
+
+        public  RenderTexture        HighwaysOutputTexture { get; private set; }
+        private RenderTexture        _highwaysAlphaTexture;
         private ScriptableRenderPass _fadeCalcPass;
 
         private float[] _curveFactors = new float[MAX_MATRICES];
@@ -54,16 +55,19 @@ namespace YARG.Gameplay.Visuals
         // On a 16:9 screen, this will be 1.0.
         public float AspectCorrectionFactor => Screen.width / (float)Screen.height / (16f / 9f);
 
-        public RenderTexture GetHighwayOutputTexture()
+        public event Action<RenderTexture> OnRenderTextureRecreated;
+
+        public RenderTexture CreateHighwayOutputTexture()
         {
             // Set up render texture
             var descriptor = new RenderTextureDescriptor(
                 Screen.width, Screen.height,
                 RenderTextureFormat.DefaultHDR);
             descriptor.mipCount = 0;
-            _highwaysOutputTexture = new RenderTexture(descriptor);
-            _highwaysOutput.texture = _highwaysOutputTexture;
-            return _highwaysOutputTexture;
+            HighwaysOutputTexture = new RenderTexture(descriptor);
+            _highwaysOutput.texture = HighwaysOutputTexture;
+            OnRenderTextureRecreated?.Invoke(HighwaysOutputTexture);
+            return HighwaysOutputTexture;
         }
 
         public Vector2 WorldToViewport(Vector3 positionWS, int index)
@@ -149,21 +153,21 @@ namespace YARG.Gameplay.Visuals
             for (int i = 0; i < _cameras.Count; i++)
             {
                 var raisedRotation = _raisedRotations[i];
-                Vector2 screenSize = GetTrackScreenSize(i, raisedRotation);
-                float screenWidth = screenSize.x;
-                float screenHeight = screenSize.y;
+                Vector2 trackSize = GetTrackScreenSize(i, raisedRotation);
+                float trackWidth = trackSize.x;
+                float trackHeight = trackSize.y;
 
                 float targetScreenWidth = _cameras.Count == 1
                     // Special case for single player
-                    ? Math.Min(Screen.width, screenWidth)
-                    // For multiple lanes, cap to 45% of screen or 95% of max lane width
-                    : Math.Min(Screen.width * 0.45f, (float)Screen.width / _cameras.Count * 0.95f);
+                    ? Math.Min(Screen.width, trackWidth)
+                    // For multiple lanes, cap to 45% of screen or 90% of max lane width
+                    : Math.Min(Screen.width * 0.45f, (float)Screen.width / _cameras.Count * 0.90f);
 
-                float scaleFactorWidth = targetScreenWidth / screenWidth;
+                float scaleFactorWidth = targetScreenWidth / trackWidth;
 
                 // Also calculate scale factor needed to fit within 50% of screen height
                 float targetScreenHeight = Screen.height * 0.55f;
-                float scaleFactorHeight = targetScreenHeight / screenHeight;
+                float scaleFactorHeight = targetScreenHeight / trackHeight;
 
                 // Use the smaller scale factor
                 float scaleFactor = Math.Min(scaleFactorWidth, scaleFactorHeight);
@@ -228,7 +232,7 @@ namespace YARG.Gameplay.Visuals
 
             if (_highwaysOutput != null)
             {
-                _renderCamera.targetTexture = GetHighwayOutputTexture();
+                _renderCamera.targetTexture = CreateHighwayOutputTexture();
             }
 
             if (_highwaysAlphaTexture == null)
@@ -286,7 +290,7 @@ namespace YARG.Gameplay.Visuals
             }
 
             RecalculateFadeParams();
-            if (_highwaysOutputTexture != null)
+            if (HighwaysOutputTexture != null)
             {
                 if (Screen.width != _lastScreenWidth || Screen.height != _lastScreenHeight)
                 {
@@ -332,9 +336,9 @@ namespace YARG.Gameplay.Visuals
             }
 
             _needsTextureRecreation = false;
-            _highwaysOutputTexture.Release();
-            _highwaysOutputTexture.DiscardContents();
-            _renderCamera.targetTexture = GetHighwayOutputTexture();
+            HighwaysOutputTexture.Release();
+            HighwaysOutputTexture.DiscardContents();
+            _renderCamera.targetTexture = CreateHighwayOutputTexture();
             ResetHighwayAlphaTexture();
         }
 

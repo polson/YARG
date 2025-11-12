@@ -51,17 +51,15 @@ namespace YARG.Gameplay.HUD
         public void UpdateHUDPosition(int highwayIndex, int highwayCount)
         {
             //Scale ui according to number of highways
-            var newScale = highwayCount > 3 ? Math.Max(0.5f, 1f / highwayCount) : 1f;
+            var newScale = Math.Max(0.5f, 1.1f - (0.1f * highwayCount));
             _scaleContainer.localScale = _scaleContainer.localScale.WithX(newScale).WithY(newScale);
 
             //Set center element position to 75% of the track depth
             Vector2 position = _highwayRenderer.GetTrackDepthByPercent(highwayIndex, 0.5f);
             _centerElementContainer.transform.position = position;
 
-            // Place top elements at 100% depth plus 3% of the track screen space height so it doesn't overlap the track
-            var trackSize = _highwayRenderer.GetTrackScreenSize(highwayIndex, _trackPlayer.Player.CameraPreset.Rotation);
-            float trackHeightPixels = trackSize.y;
-            var extraOffset = 0.03f * trackHeightPixels;
+            // Place top elements at 100% depth plus 5 screen independent units
+            var extraOffset = 5 * Screen.height / 1000f;
             Vector2 position2 = _highwayRenderer.GetTrackDepthByPercent(highwayIndex, 1.0f).AddY(extraOffset);
             _topElementContainer.position = position2;
         }
