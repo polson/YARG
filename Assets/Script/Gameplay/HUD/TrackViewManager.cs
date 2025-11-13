@@ -1,6 +1,7 @@
 ﻿using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
+using YARG.Core.Logging;
 using YARG.Gameplay.Player;
 using YARG.Gameplay.Visuals;
 using YARG.Helpers.Extensions;
@@ -44,16 +45,14 @@ namespace YARG.Gameplay.HUD
         {
             _vocalImage.gameObject.SetActive(true);
 
-            // Get the aspect ratio of the vocal image
-            var rect = _vocalImage.ToScreenSpace();
-            float ratio = rect.width / rect.height;
-
             // Apply the vocal track texture
-            GameManager.VocalTrack.InitializeRenderTexture(ratio, _highwayCameraRendering.HighwaysOutputTexture);
+            GameManager.VocalTrack.InitializeRenderTexture(_vocalImage, _highwayCameraRendering.HighwaysOutputTexture);
 
+            //TODO: -= this
             _highwayCameraRendering.OnRenderTextureRecreated += texture =>
             {
-                GameManager.VocalTrack.InitializeRenderTexture(ratio, texture);
+                YargLogger.LogDebug(">>TEXTURE RECREATED");
+                GameManager.VocalTrack.InitializeRenderTexture(_vocalImage, texture);
             };
         }
 
@@ -61,15 +60,6 @@ namespace YARG.Gameplay.HUD
         {
             var go = Instantiate(_vocalHudPrefab, _vocalHudParent);
             return go.GetComponent<VocalsPlayerHUD>();
-        }
-
-        public void SetAllHUDScale()
-        {
-            // _horizontalLayoutGroup.enabled = false;
-            // var rect = GetComponent<RectTransform>();
-            // var rectRect = rect.rect;
-            // _horizontalLayoutGroup.padding.top = (int)(rectRect.height * (1.0f - _highwayCameraRendering.Scale));
-            // _horizontalLayoutGroup.enabled = true;
         }
     }
 }

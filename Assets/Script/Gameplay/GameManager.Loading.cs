@@ -490,8 +490,6 @@ namespace YARG.Gameplay
                         state.Audible += 2;
                     }
                 }
-                // Set the hud scale (position is handled by TrackPlayer)
-                _trackViewManager.SetAllHUDScale();
             }
             catch (Exception ex)
             {

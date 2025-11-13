@@ -166,7 +166,7 @@ namespace YARG.Gameplay.Visuals
                 float scaleFactorWidth = targetScreenWidth / trackWidth;
 
                 // Also calculate scale factor needed to fit within 50% of screen height
-                float targetScreenHeight = Screen.height * 0.55f;
+                float targetScreenHeight = Screen.height * 0.5f;
                 float scaleFactorHeight = targetScreenHeight / trackHeight;
 
                 // Use the smaller scale factor
@@ -301,6 +301,9 @@ namespace YARG.Gameplay.Visuals
                     {
                         camera.aspect = (float) Screen.width / Screen.height;
                     }
+
+                    //TODO: when screen size changes, we should always recreate the texture, but we should not always be doing the other stuff if there are no highways
+                    //TODO: move text recreation into its own thing
                     _needsTextureRecreation = true;
                     RecalculateScaleFactors();
                     UpdateCameraProjectionMatrices();
