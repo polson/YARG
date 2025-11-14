@@ -529,15 +529,12 @@ namespace YARG.Gameplay.Visuals
             var camera = _cameras[trackIndex];
             var trackPosition = _highwayPositions[trackIndex];
 
-            // Calculate the bottom and top z positions of the track
-            float trackBottom = FindTrackBottom(camera, trackPosition);
-
+            // Start from the strikeline position (-2f) instead of track bottom
+            float strikelineZ = TrackPlayer.STRIKE_LINE_POS;
             float trackTop = _zeroFadePositions[trackIndex];
 
-            YargLogger.LogDebug($">>Track bottom and top z positions: {trackBottom}, {trackTop}");
-
-            // Calculate the z position at the given percent (0% = bottom, 100% = top)
-            float zPositionAtPercent = Mathf.LerpUnclamped(trackBottom, trackTop, percent);
+            // Calculate the z position at the given percent (0% = strikeline, 100% = top)
+            float zPositionAtPercent = Mathf.LerpUnclamped(strikelineZ, trackTop, percent);
 
             // Create a world position at the center of the track at the calculated z
             Vector3 worldPositionAtPercent = new Vector3(trackPosition.x, trackPosition.y, zPositionAtPercent);

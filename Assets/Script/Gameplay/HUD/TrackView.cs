@@ -37,6 +37,8 @@ namespace YARG.Gameplay.HUD
         private Vector3 _lastTrackPlayerPosition;
         private RectTransform _rect;
 
+        private const float CENTER_ELEMENT_DEPTH = 0.35f;
+
         void Awake()
         {
             _rect = GetComponent<RectTransform>();
@@ -50,12 +52,13 @@ namespace YARG.Gameplay.HUD
 
         public void UpdateHUDPosition(int highwayIndex, int highwayCount)
         {
-            //Scale ui according to number of highways
+            //Scale ui according to number of highways,
+            //1 highway = 1.0 scale, 2 highways = 0.9 scale, 3 highways = 0.8 scale, etc, minimum of 0.5
             var newScale = Math.Max(0.5f, 1.1f - (0.1f * highwayCount));
             _scaleContainer.localScale = _scaleContainer.localScale.WithX(newScale).WithY(newScale);
 
-            //Set center element position to 75% of the track depth
-            Vector2 position = _highwayRenderer.GetTrackDepthByPercent(highwayIndex, 0.5f);
+            //Set center element position to 35% of the track depth
+            Vector2 position = _highwayRenderer.GetTrackDepthByPercent(highwayIndex, CENTER_ELEMENT_DEPTH);
             _centerElementContainer.transform.position = position;
 
             // Place top elements at 100% depth plus 5 screen independent units
