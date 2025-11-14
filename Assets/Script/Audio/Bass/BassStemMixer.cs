@@ -37,15 +37,16 @@ namespace YARG.Audio.BASS
         private       bool  IsWhammyEnabled => SettingsManager.Settings.UseWhammyFx.Value;
         private bool IsPlaying => Bass.ChannelIsActive(_tempoStreamHandle) == PlaybackState.Playing;
 
-        private readonly int                  _mixerHandle;
-        private readonly List<int>            _sourceHandles = new();
-        private          int                  _tempoStreamHandle;
-        private          double               _positionOffset = 0.0;
-        private          bool                 _didSetPosition = false;
-        private          int                  _songEndHandle;
-        private          float                _speed = 1.0f;
-        private          Timer                _whammySyncTimer;
+        private readonly int            _mixerHandle;
+        private readonly List<int>      _sourceHandles = new();
+        private          int            _tempoStreamHandle;
+        private          double         _positionOffset = 0.0;
+        private          bool           _didSetPosition = false;
+        private          int            _songEndHandle;
+        private          float          _speed = 1.0f;
+        private          Timer          _whammySyncTimer;
         private readonly List<StemData> _stemDatas = new();
+        private          int            _longestHandle;
 
         public override event Action SongEnd
         {
@@ -62,7 +63,7 @@ namespace YARG.Audio.BASS
                             UnityMainThreadCallback.QueueEvent(end.Invoke);
                         }
                     }
-                    _songEndHandle = BassMix.ChannelSetSync(_tempoStreamHandle, SyncFlags.End, 0, sync);
+                    _songEndHandle = BassMix.ChannelSetSync(_longestHandle, SyncFlags.End, 0, sync);
                 }
 
                 _songEnd += value;
@@ -450,7 +451,12 @@ namespace YARG.Audio.BASS
         {
             var pitchparams = BassAudioManager.SetPitchParams(stem, _speed, streamHandles, reverbHandles);
             var stemchannel = new BassStemChannel(_manager, stem, _clampStemVolume, sourceHandle, pitchparams, streamHandles, reverbHandles);
-            _length = BassAudioManager.GetLengthInSeconds(_tempoStreamHandle);
+            double length = BassAudioManager.GetLengthInSeconds(streamHandles.Stream);
+            if (length > _length)
+            {
+                _longestHandle = streamHandles.Stream;
+                _length = length;
+            }
             _channels.Add(stemchannel);
             UpdateThreading();
         }
