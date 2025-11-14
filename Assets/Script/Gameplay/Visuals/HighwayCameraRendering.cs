@@ -518,26 +518,6 @@ namespace YARG.Gameplay.Visuals
             return new Vector2(widthPixels, heightPixels);
         }
 
-        public Vector2 GetTrackPosition(int trackIndex)
-        {
-            if (trackIndex < 0 || trackIndex >= _cameras.Count)
-            {
-                YargLogger.LogError($"Invalid track index: {trackIndex}");
-                return Vector2.zero;
-            }
-
-            var trackPosition = _highwayPositions[trackIndex];
-
-            // Convert the track's world position to viewport space
-            Vector2 viewportPosition = WorldToViewport(trackPosition, trackIndex);
-
-            // Convert viewport space to screen space
-            float screenX = viewportPosition.x * Screen.width;
-            float screenY = (1.0f - viewportPosition.y) * Screen.height; // Invert Y
-
-            return new Vector2(screenX, screenY);
-        }
-
         public Vector2 GetTrackDepthByPercent(int trackIndex, float percent)
         {
             if (trackIndex < 0 || trackIndex >= _cameras.Count)
@@ -568,26 +548,6 @@ namespace YARG.Gameplay.Visuals
             // Convert viewport space to screen space
             float screenX = viewportPosition.x * Screen.width;
             float screenY = (1.0f - viewportPosition.y) * Screen.height;
-
-            return new Vector2(screenX, screenY);
-        }
-
-        public Vector2 GetTrackPositionScreenSpace(int trackIndex)
-        {
-            if (trackIndex < 0 || trackIndex >= _cameras.Count)
-            {
-                YargLogger.LogError($"Invalid track index: {trackIndex}");
-                return Vector2.zero;
-            }
-
-            var trackPosition = _highwayPositions[trackIndex];
-
-            // Convert the track's world position to viewport space
-            Vector2 viewportPosition = WorldToViewport(trackPosition, trackIndex);
-
-            // Convert viewport space to screen space
-            float screenX = viewportPosition.x * Screen.width;
-            float screenY = (1.0f - viewportPosition.y) * Screen.height; // Invert Y
 
             return new Vector2(screenX, screenY);
         }
