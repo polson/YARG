@@ -105,9 +105,6 @@ namespace YARG.Gameplay.Player
 
         protected EngineManager.EngineContainer EngineContainer;
 
-        private int _lastScreenWidth;
-        private int _lastScreenHeight;
-
         protected override void GameplayAwake()
         {
             _replayInputs = new List<GameInput>();

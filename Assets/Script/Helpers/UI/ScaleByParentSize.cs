@@ -1,5 +1,4 @@
 ﻿using UnityEngine;
-using YARG.Core.Logging;
 
 namespace YARG.Helpers.UI
 {
@@ -25,9 +24,13 @@ namespace YARG.Helpers.UI
         }
 
         [SerializeField]
-        private Vector2 _initialSize = new Vector2(1920, 1080);
+        private Vector2 _initialSize = Vector2.one;
         [SerializeField]
         private ScaleMode _scaleMode = ScaleMode.ScaleByHeight;
+        public void Initialize()
+        {
+            _initialSize = ParentRectTransform.rect.size;
+        }
 
         private void Update()
         {

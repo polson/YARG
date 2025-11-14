@@ -12,7 +12,6 @@ namespace YARG.Helpers.UI
 
         protected override void SingletonAwake()
         {
-            // Put your original Awake logic here
             _lastWidth = Screen.width;
             _lastHeight = Screen.height;
         }

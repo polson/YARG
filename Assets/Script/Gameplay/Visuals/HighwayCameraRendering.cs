@@ -66,9 +66,6 @@ namespace YARG.Gameplay.Visuals
         public float AspectCorrectionFactor => Screen.width / (float)Screen.height / (16f / 9f);
         public event Action<RenderTexture> OnRenderTextureRecreated;
 
-        //45% of screen width
-
-
         public RenderTexture CreateHighwayOutputTexture()
         {
             // Set up render texture
