@@ -15,7 +15,17 @@ namespace YARG.Gameplay.Visuals
     [RequireComponent(typeof(Camera))]
     public class HighwayCameraRendering : MonoBehaviour
     {
-        public const int MAX_MATRICES = 32;
+        public const int   MAX_MATRICES                  = 32;
+
+        //For multiple lanes, cap the lane width to a percentage of the screen width, 1.0f = 100% of screen width
+        private const float MAX_LANE_SCREEN_WIDTH_PERCENT  = 0.45f;
+
+        //For all lanes, cap the lane height to a percentage of the screen height, 1.0f = 100% of screen height
+        private const float MAX_LANE_SCREEN_HEIGHT_PERCENT = 0.6f;
+
+        //This controls padding between lanes for multiple lanes by shrinking each lane from its full width
+        //1.0f = no padding (full width), 0.9f means 90% of full width
+        private const float MULTI_LANE_SCALE_FACTOR = 0.90f;
 
         [SerializeField]
         private RawImage _highwaysOutput;
@@ -54,8 +64,10 @@ namespace YARG.Gameplay.Visuals
         // On a 9:16 screen, this will be ~0.316.
         // On a 16:9 screen, this will be 1.0.
         public float AspectCorrectionFactor => Screen.width / (float)Screen.height / (16f / 9f);
-
         public event Action<RenderTexture> OnRenderTextureRecreated;
+
+        //45% of screen width
+
 
         public RenderTexture CreateHighwayOutputTexture()
         {
@@ -160,16 +172,16 @@ namespace YARG.Gameplay.Visuals
                 float targetScreenWidth = _cameras.Count == 1
                     // Special case for single player
                     ? Math.Min(Screen.width, trackWidth)
-                    // For multiple lanes, cap to 45% of screen or 90% of max lane width
-                    : Math.Min(Screen.width * 0.45f, (float)Screen.width / _cameras.Count * 0.90f);
+                    // For multiple lanes, cap to a percentage of screen width and the scale factor to ensure padding
+                    : Math.Min(Screen.width * MAX_LANE_SCREEN_WIDTH_PERCENT, (float)Screen.width / _cameras.Count * MULTI_LANE_SCALE_FACTOR);
 
                 float scaleFactorWidth = targetScreenWidth / trackWidth;
 
                 // Also calculate scale factor needed to fit within 50% of screen height
-                float targetScreenHeight = Screen.height * 0.5f;
+                float targetScreenHeight = Screen.height * MAX_LANE_SCREEN_HEIGHT_PERCENT;
                 float scaleFactorHeight = targetScreenHeight / trackHeight;
 
-                // Use the smaller scale factor
+                // Use the more restrictive scale factor
                 float scaleFactor = Math.Min(scaleFactorWidth, scaleFactorHeight);
                 _laneScales[i] *= scaleFactor;
             }

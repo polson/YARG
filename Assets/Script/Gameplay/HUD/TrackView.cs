@@ -61,8 +61,8 @@ namespace YARG.Gameplay.HUD
             Vector2 position = _highwayRenderer.GetTrackDepthByPercent(highwayIndex, CENTER_ELEMENT_DEPTH);
             _centerElementContainer.transform.position = position;
 
-            // Place top elements at 100% depth plus 5 screen independent units
-            var extraOffset = 5 * Screen.height / 1000f;
+            // Place top elements at 100% depth plus 8 screen independent units
+            var extraOffset = 8 * Screen.height / 1000f;
             Vector2 position2 = _highwayRenderer.GetTrackDepthByPercent(highwayIndex, 1.0f).AddY(extraOffset);
             _topElementContainer.position = position2;
         }
