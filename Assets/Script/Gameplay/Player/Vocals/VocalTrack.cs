@@ -10,6 +10,7 @@ using YARG.Core.Logging;
 using YARG.Gameplay.HUD;
 using YARG.Gameplay.Visuals;
 using YARG.Helpers.Extensions;
+using YARG.Helpers.UI;
 using YARG.Menu.Persistent;
 using YARG.Player;
 using YARG.Settings;
@@ -198,55 +199,30 @@ namespace YARG.Gameplay.Player
         //TODO: this doesnt work when vocals only because callback doesnt happen
         public void InitializeRenderTexture(RectTransform vocalsImage, RenderTexture renderTexture)
         {
+            const float minAspectRatio = 8.0f;
+            const float maxAspectRatio = 13.0f;
+
             var vocalsSize = vocalsImage.ToScreenSpace();
-            var aspectRatio = vocalsSize.width / vocalsSize.height;
+            var imageAspectRatio = vocalsSize.width / vocalsSize.height;
+            var clampedAspectRatio = Math.Clamp(imageAspectRatio, minAspectRatio, maxAspectRatio);
 
-            YargLogger.LogDebug(">>ASPECT RATIO: " + aspectRatio);
+            // Calculate dimensions that respect aspect ratio and fit within screen
+            float heightPixels = vocalsSize.height;
+            float widthPixels = heightPixels * clampedAspectRatio;
 
-            //Clamp aspect ratio to reasonable values - 8:1 to 13:1
-            //Minimum is the default at 16:9 which it was designed for
-            //Maximum value is was determined by trial and error before the track falls apart visually
-            var vocalAspectRatio = Math.Clamp(aspectRatio, 8f, 13f);
+            // Convert to normalized coordinates
+            float heightNormalized = heightPixels / Screen.height;
+            float widthNormalized = widthPixels / Screen.width;
 
-            // Calculate the width needed for 25% height
-            float desiredHeightPercent = 0.25f;
-            float requiredWidth = Screen.height * desiredHeightPercent * vocalAspectRatio / Screen.width;
-
-            YargLogger.LogDebug($">>Required width: {requiredWidth}");
-
-            float heightNormalized;
-            float widthNormalized;
-
-            // If the required width exceeds screen width, scale down the height to fit the screen (1.0 is screen width in normalized coordinates)
-            widthNormalized = Mathf.Min(requiredWidth, 1.0f);
-
-            heightNormalized = (requiredWidth > 1.0f) ? Screen.width / (Screen.height * vocalAspectRatio) : desiredHeightPercent;
-
-            // Center horizontally
+            // Center horizontally and position below stats overlay
             float xPos = (1.0f - widthNormalized) / 2.0f;
-            var cameraRect = new Rect(xPos, 1.0f - heightNormalized, widthNormalized, heightNormalized);
+            var statsHeightNormalized = StatsManager.Instance.GetComponent<RectTransform>().ToScreenSpace().height / Screen.height;
+            float yPos = 1.0f - heightNormalized - statsHeightNormalized;
 
-            // Push vocals track down to account for stats overlay
-            //TODO: serialize field this
-            var statsRect = StatsManager.Instance.GetComponent<RectTransform>();
-            var size = statsRect.ToScreenSpace();
-            var height = size.height;
-            var statsHeightNormalized = height / Screen.height;
+            _trackCamera.rect = new Rect(xPos, yPos, widthNormalized, heightNormalized);
 
-            YargLogger.LogDebug($">>Stats height normalized: {statsHeightNormalized}");
-            cameraRect.y -= statsHeightNormalized;
-            _trackCamera.rect = cameraRect;
-
-            // Apply the render texture
+            YargLogger.LogDebug($">>Track camera rect: {_trackCamera.rect.width}, {_trackCamera.rect.height}, target texture size: {renderTexture.width}, {renderTexture.height}");
             _trackCamera.targetTexture = renderTexture;
-
-            RepositionHud(vocalsImage);
-        }
-
-        private void RepositionHud(RectTransform vocalsImage)
-        {
-            var size = vocalsImage.ToScreenSpace();
-
         }
 
         public void Initialize(VocalsTrack vocalsTrack, YargPlayer primaryPlayer, float? trackSpeed)

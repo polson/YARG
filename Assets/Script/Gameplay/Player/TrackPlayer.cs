@@ -72,16 +72,6 @@ namespace YARG.Gameplay.Player
         [SerializeField]
         protected StarPowerEffectElement StarPowerEffect;
 
-        // Multiply by the reciprocal of 1 / player count to prevent the HUD from being too close to the highway;
-        public Vector2 HUDTopElementViewportPosition =>
-            TrackCamera.WorldToViewportPoint(_hudLocation.position.WithY(
-                HUD_TOP_ELEMENT_HEIGHT * (1 / HighwayCameraRendering.CalculateScale(HighwayCount)) + TRACK_HEIGHT));
-
-        public Vector2 HUDCenterElementViewportPosition =>
-            TrackCamera.WorldToViewportPoint(_hudLocation.position
-                .WithY(TRACK_HEIGHT)
-                .WithZ(STRIKE_LINE_POS + HUD_CENTER_ELEMENT_DEPTH));
-
         protected List<Beatline> Beatlines;
 
         protected int BeatlineIndex;
