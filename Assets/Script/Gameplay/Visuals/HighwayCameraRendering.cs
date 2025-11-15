@@ -31,25 +31,23 @@ namespace YARG.Gameplay.Visuals
         [SerializeField]
         private RawImage _highwaysOutput;
 
-        private List<Camera>  _cameras          = new();
-        private List<Vector3> _highwayPositions = new();
-        private List<float>   _raisedRotations  = new();
+        private readonly List<Camera>  _cameras          = new();
+        private readonly List<Vector3> _highwayPositions = new();
+        private readonly List<float>   _raisedRotations  = new();
 
         private Camera _renderCamera;
-
         public  RenderTexture        HighwaysOutputTexture { get; private set; }
         private RenderTexture        _highwaysAlphaTexture;
         private ScriptableRenderPass _fadeCalcPass;
 
-        private float[] _curveFactors = new float[MAX_MATRICES];
-        private float[] _zeroFadePositions = new float[MAX_MATRICES];
-        private float[] _fadeSize = new float[MAX_MATRICES];
-        private float[] _fadeParams = new float[MAX_MATRICES * 2];
-        private Matrix4x4[] _camViewMatrices = new Matrix4x4[MAX_MATRICES];
-        private Matrix4x4[] _camInvViewMatrices = new Matrix4x4[MAX_MATRICES];
-        private Matrix4x4[] _camProjMatrices = new Matrix4x4[MAX_MATRICES];
-        private float[] _laneScales             = new float[MAX_MATRICES];
-        private bool    _needsTextureRecreation = true;
+        private readonly float[]     _curveFactors       = new float[MAX_MATRICES];
+        private readonly float[]     _zeroFadePositions  = new float[MAX_MATRICES];
+        private readonly float[]     _fadeSize           = new float[MAX_MATRICES];
+        private readonly float[]     _fadeParams         = new float[MAX_MATRICES * 2];
+        private readonly Matrix4x4[] _camViewMatrices    = new Matrix4x4[MAX_MATRICES];
+        private readonly Matrix4x4[] _camInvViewMatrices = new Matrix4x4[MAX_MATRICES];
+        private readonly Matrix4x4[] _camProjMatrices    = new Matrix4x4[MAX_MATRICES];
+        private readonly float[]     _laneScales         = new float[MAX_MATRICES];
 
         public static readonly int YargHighwaysNumberID = Shader.PropertyToID("_YargHighwaysN");
         public static readonly int YargHighwayCamViewMatricesID = Shader.PropertyToID("_YargCamViewMatrices");
@@ -64,22 +62,59 @@ namespace YARG.Gameplay.Visuals
         public float AspectCorrectionFactor => Screen.width / (float)Screen.height / (16f / 9f);
         public event Action<RenderTexture> OnRenderTextureRecreated;
 
-        public RenderTexture CreateHighwayOutputTexture()
+        private void OnEnable()
         {
-            // Set up render texture
-            var descriptor = new RenderTextureDescriptor(
-                Screen.width, Screen.height,
-                RenderTextureFormat.DefaultHDR);
-            descriptor.mipCount = 0;
-            HighwaysOutputTexture = new RenderTexture(descriptor);
-            _highwaysOutput.texture = HighwaysOutputTexture;
-            OnRenderTextureRecreated?.Invoke(HighwaysOutputTexture);
-            return HighwaysOutputTexture;
+            _renderCamera = GetComponent<Camera>();
+            RecreateHighwayOutputTexture();
+            ResetHighwayAlphaTexture();
+
+            _fadeCalcPass ??= new FadePass(this);
+
+            Shader.SetGlobalInteger(YargHighwaysNumberID, 0);
+            RenderPipelineManager.beginCameraRendering += OnPreCameraRender;
+            RenderPipelineManager.endCameraRendering += OnEndCameraRender;
         }
 
-        public Vector2 WorldToViewport(Vector3 positionWS, int index)
+        private void ResetCameras()
         {
-            Vector4 clipSpacePos = (_camProjMatrices[index] * _camViewMatrices[index]) * new Vector4(positionWS.x, positionWS.y, positionWS.z, 1.0f);
+            if (_cameras.Count == 0)
+            {
+                return;
+            }
+
+            RecalculateScaleFactors();
+            UpdateCameraProjectionMatrices();
+            RecalculateCameraBounds();
+        }
+
+        private void RecreateHighwayOutputTexture()
+        {
+            HighwaysOutputTexture?.Release();
+            HighwaysOutputTexture?.DiscardContents();
+            var descriptor = new RenderTextureDescriptor(
+                Screen.width, Screen.height,
+                RenderTextureFormat.DefaultHDR)
+            {
+                mipCount = 0,
+            };
+            HighwaysOutputTexture = new RenderTexture(descriptor);
+
+            // Add null check before accessing the RawImage
+            if (_highwaysOutput != null)
+            {
+                _highwaysOutput.texture = HighwaysOutputTexture;
+            }
+
+            if (_renderCamera != null)
+            {
+                _renderCamera.targetTexture = HighwaysOutputTexture;
+                OnRenderTextureRecreated?.Invoke(HighwaysOutputTexture);
+            }
+        }
+
+        public Vector2 WorldToViewport(Vector3 positionWs, int index)
+        {
+            Vector4 clipSpacePos = (_camProjMatrices[index] * _camViewMatrices[index]) * new Vector4(positionWs.x, positionWs.y, positionWs.z, 1.0f);
             // Perspective divide to get NDC
             float ndcX = clipSpacePos.x / clipSpacePos.w;
             float ndcY = clipSpacePos.y / clipSpacePos.w;
@@ -92,10 +127,10 @@ namespace YARG.Gameplay.Visuals
             return viewportPos;
         }
 
-        private Vector2 CalculateFadeParams(int index, Vector3 trackPosition, float ZeroFadePosition, float FadeSize)
+        private Vector2 CalculateFadeParams(int index, Vector3 trackPosition, float zeroFadePosition, float fadeSize)
         {
-            var worldZeroFadePosition = new Vector3(trackPosition.x, trackPosition.y, ZeroFadePosition - FadeSize);
-            var worldFullFadePosition = new Vector3(trackPosition.x, trackPosition.y, ZeroFadePosition);
+            var worldZeroFadePosition = new Vector3(trackPosition.x, trackPosition.y, zeroFadePosition - fadeSize);
+            var worldFullFadePosition = new Vector3(trackPosition.x, trackPosition.y, zeroFadePosition);
 
             // Use the individual highway camera instead of the main render camera
             var highwayCamera = _cameras[index];
@@ -149,6 +184,11 @@ namespace YARG.Gameplay.Visuals
                 return;
             }
 
+            foreach (var camera in _cameras)
+            {
+                camera.aspect = (float) Screen.width / Screen.height;
+            }
+
             //First pass, just scale according to aspect ratio, then recalc matrices
             for (int i = 0; i < _cameras.Count; i++)
             {
@@ -184,23 +224,21 @@ namespace YARG.Gameplay.Visuals
 
         // This is only directly used for fake track player really
         // Rest should go through AddPlayer
-        public void AddPlayerParams(Vector3 position, Camera TrackCamera, float CurveFactor, float ZeroFadePosition, float FadeSize, float raisedRotation)
+        public void AddPlayerParams(Vector3 position, Camera trackCamera, float curveFactor, float zeroFadePosition, float fadeSize, float raisedRotation)
         {
             var index = _cameras.Count;
 
-            _cameras.Add(TrackCamera);
+            _cameras.Add(trackCamera);
             _raisedRotations.Add(raisedRotation);
             _highwayPositions.Add(position);
-
-            RecalculateScaleFactors();
-            UpdateCameraProjectionMatrices();
-            UpdateCurveFactor(CurveFactor, index);
-            UpdateFadeParams(index, ZeroFadePosition, FadeSize);
+            UpdateCurveFactor(curveFactor, index);
+            UpdateFadeParams(index, zeroFadePosition, fadeSize);
+            ResetCameras();
         }
 
-        public void UpdateCurveFactor(float CurveFactor, int index)
+        public void UpdateCurveFactor(float curveFactor, int index)
         {
-            _curveFactors[index] = CurveFactor;
+            _curveFactors[index] = curveFactor;
             Shader.SetGlobalFloatArray(YargCurveFactorsID, _curveFactors);
         }
 
@@ -211,15 +249,14 @@ namespace YARG.Gameplay.Visuals
                 var fadeParams = CalculateFadeParams(index, _highwayPositions[index], _zeroFadePositions[index], _fadeSize[index]);
                 _fadeParams[index * 2] = fadeParams.x;
                 _fadeParams[index * 2 + 1] = fadeParams.y;
-
             }
             Shader.SetGlobalFloatArray(YargFadeParamsID, _fadeParams);
         }
 
-        public void UpdateFadeParams(int index, float ZeroFadePosition, float FadeSize)
+        public void UpdateFadeParams(int index, float zeroFadePosition, float fadeSize)
         {
-            _fadeSize[index] = FadeSize > 0.0 ? FadeSize : 0.0001f;
-            _zeroFadePositions[index] = ZeroFadePosition;
+            _fadeSize[index] = fadeSize > 0.0 ? fadeSize : 0.0001f;
+            _zeroFadePositions[index] = zeroFadePosition;
             RecalculateFadeParams();
         }
 
@@ -230,31 +267,6 @@ namespace YARG.Gameplay.Visuals
             cameraData.renderType = CameraRenderType.Overlay;
 
             AddPlayerParams(trackPlayer.transform.position, trackPlayer.TrackCamera, trackPlayer.Player.CameraPreset.CurveFactor, trackPlayer.ZeroFadePosition, trackPlayer.FadeSize, trackPlayer.Player.CameraPreset.Rotation);
-            RecalculateCameraBounds();
-        }
-
-        private void OnEnable()
-        {
-            _renderCamera = GetComponent<Camera>();
-
-            if (_highwaysOutput != null)
-            {
-                _renderCamera.targetTexture = CreateHighwayOutputTexture();
-            }
-
-            if (_highwaysAlphaTexture == null)
-            {
-                ResetHighwayAlphaTexture();
-            }
-
-            if (_fadeCalcPass == null)
-            {
-                _fadeCalcPass = new FadePass(this);
-            }
-
-            Shader.SetGlobalInteger(YargHighwaysNumberID, 0);
-            RenderPipelineManager.beginCameraRendering += OnPreCameraRender;
-            RenderPipelineManager.endCameraRendering += OnEndCameraRender;
         }
 
         private void ResetHighwayAlphaTexture()
@@ -263,8 +275,10 @@ namespace YARG.Gameplay.Visuals
             float scaling = 1.0f;
             var descriptor = new RenderTextureDescriptor(
                 (int) (Screen.width * scaling), (int) (Screen.height * scaling),
-                RenderTextureFormat.RFloat);
-            descriptor.mipCount = 0;
+                RenderTextureFormat.RFloat)
+            {
+                mipCount = 0,
+            };
             _highwaysAlphaTexture = new RenderTexture(descriptor);
             Shader.SetGlobalTexture(YargHighwaysAlphaTextureID, _highwaysAlphaTexture);
         }
@@ -291,29 +305,17 @@ namespace YARG.Gameplay.Visuals
                 return;
             }
 
-            if (ScreenSizeDetector.HasScreenSizeChanged)
-            {
-                _needsTextureRecreation = true;
-            }
-
             if (_cameras.Count == 0)
             {
                 return;
             }
 
-            RecalculateFadeParams();
-            if (HighwaysOutputTexture != null && _needsTextureRecreation)
+            if (ScreenSizeDetector.HasScreenSizeChanged)
             {
-
-                foreach (var camera in _cameras)
-                {
-                    camera.aspect = (float) Screen.width / Screen.height;
-                }
-                RecalculateScaleFactors();
-                UpdateCameraProjectionMatrices();
-                RecalculateCameraBounds();
+                ResetCameras();
             }
 
+            RecalculateFadeParams();
             for (int i = 0; i < _cameras.Count; ++i)
             {
                 var camera = _cameras[i];
@@ -333,19 +335,12 @@ namespace YARG.Gameplay.Visuals
             renderer.EnqueuePass(_fadeCalcPass);
         }
 
-
         private void LateUpdate()
         {
-            if (!_needsTextureRecreation)
+            if (ScreenSizeDetector.HasScreenSizeChanged)
             {
-                return;
+                RecreateHighwayOutputTexture();
             }
-
-            _needsTextureRecreation = false;
-            HighwaysOutputTexture.Release();
-            HighwaysOutputTexture.DiscardContents();
-            _renderCamera.targetTexture = CreateHighwayOutputTexture();
-            ResetHighwayAlphaTexture();
         }
 
         public void UpdateCameraProjectionMatrices()
@@ -405,10 +400,10 @@ namespace YARG.Gameplay.Visuals
         // Calculate Alpha mask for the highways rt
         private sealed class FadePass : ScriptableRenderPass
         {
-            private ProfilingSampler _ProfilingSampler = new ProfilingSampler("CalcFadeAlphaMask");
-            private CommandBuffer _cmd;
-            private HighwayCameraRendering _highwayCameraRendering;
-            private Material _material;
+            private readonly ProfilingSampler       _profilingSampler = new ProfilingSampler("CalcFadeAlphaMask");
+            private          CommandBuffer          _cmd;
+            private readonly HighwayCameraRendering _highwayCameraRendering;
+            private readonly Material               _material;
 
             public FadePass(HighwayCameraRendering highCamRend)
             {
@@ -419,13 +414,12 @@ namespace YARG.Gameplay.Visuals
 
             public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
             {
-                ScriptableRenderer renderer = renderingData.cameraData.renderer;
                 CommandBuffer cmd = CommandBufferPool.Get("CalcFadeAlphaMask");
 
-                using (new ProfilingScope(cmd, _ProfilingSampler))
+                using (new ProfilingScope(cmd, _profilingSampler))
                 {
                     cmd.SetRenderTarget(_highwayCameraRendering._highwaysAlphaTexture);
-                    var shaderTagIds = new ShaderTagId[] { new ShaderTagId("UniversalForward") };
+                    var shaderTagIds = new[] { new ShaderTagId("UniversalForward") };
                     var desc = new RendererListDesc(shaderTagIds, renderingData.cullResults, renderingData.cameraData.camera)
                     {
                         sortingCriteria = SortingCriteria.RenderQueue,
@@ -466,6 +460,50 @@ namespace YARG.Gameplay.Visuals
         }
 
         /// <summary>
+        /// Calculates the screen space position of any normalized coordinate on the track, from the strikeline.
+        /// </summary>
+        /// <param name="trackIndex">The index of the highway to get the position for, 0 is left most highway</param>
+        /// <param name="y">The normalized position down the track (0.0 = strikeline, 1.0 is zero fade position)</param>
+        /// <param name="x">The normalized position across the track width (0.0 is leftmost track edge, 1.0 is rightmost track edge)</param>
+        public Vector2 GetTrackPositionScreenSpace(int trackIndex, float x, float y)
+        {
+            if (trackIndex < 0 || trackIndex >= _cameras.Count)
+            {
+                YargLogger.LogError($"Invalid track index: {trackIndex}");
+                return Vector2.zero;
+            }
+
+            var trackPosition = _highwayPositions[trackIndex];
+
+            // Calculate Z position based on yPercent (depth along the track)
+            // Start from the strikeline position (-2f)
+            float strikelineZ = TrackPlayer.STRIKE_LINE_POS;
+            float zeroFadeZ = _zeroFadePositions[trackIndex];
+            float zPositionAtPercent = Mathf.LerpUnclamped(strikelineZ, zeroFadeZ, y);
+
+            // Calculate X position based on xPercent (position across the track width)
+            // xPercent of 0.5 is center, 0.0 is left edge, 1.0 is right edge
+            float trackWidth = TrackPlayer.TRACK_WIDTH;
+            float xOffset = Mathf.LerpUnclamped(-trackWidth / 2f, trackWidth / 2f, x);
+
+            // Create a world position with the calculated x and z
+            Vector3 worldPositionAtPercent = new Vector3(
+                trackPosition.x + xOffset,
+                trackPosition.y,
+                zPositionAtPercent
+            );
+
+            // Convert to viewport space
+            Vector2 viewportPosition = WorldToViewport(worldPositionAtPercent, trackIndex);
+
+            // Convert viewport space to screen space
+            float screenX = viewportPosition.x * Screen.width;
+            float screenY = (1.0f - viewportPosition.y) * Screen.height;
+
+            return new Vector2(screenX, screenY);
+        }
+
+        /// <summary>
         /// Calculates the width and height of the visible track in screen space (pixels).
         /// This considers the top of the track to be the zero fade position.
         /// </summary>
@@ -474,7 +512,7 @@ namespace YARG.Gameplay.Visuals
         /// If null, uses the camera's current rotation.
         /// This is useful for knowing the screen size of the raised track ahead of time</param>
         /// <returns>A Vector2 containing the lane width (x) and height (y) in screen pixels or Vector2.zero if the camera index is invalid.</returns>
-        public Vector2 GetTrackScreenSize(int cameraIndex, float? camRotation = null)
+        private Vector2 GetTrackScreenSize(int cameraIndex, float? camRotation = null)
         {
             if (cameraIndex < 0 || cameraIndex >= _cameras.Count)
             {
@@ -489,8 +527,7 @@ namespace YARG.Gameplay.Visuals
             // Apply custom rotation for the calculation if needed (e.g. for raised highway position)
             if (camRotation.HasValue)
             {
-                var newRotation = Quaternion.Euler(new Vector3().WithX(camRotation.Value));
-                camera.transform.localRotation = newRotation;
+                camera.transform.localRotation = Quaternion.Euler(new Vector3().WithX(camRotation.Value));
                 _camViewMatrices[cameraIndex] = camera.worldToCameraMatrix;
             }
 
@@ -521,40 +558,9 @@ namespace YARG.Gameplay.Visuals
             return new Vector2(widthPixels, heightPixels);
         }
 
-        public Vector2 GetTrackDepthByPercent(int trackIndex, float percent)
-        {
-            if (trackIndex < 0 || trackIndex >= _cameras.Count)
-            {
-                YargLogger.LogError($"Invalid track index: {trackIndex}");
-                return Vector2.zero;
-            }
-
-            var camera = _cameras[trackIndex];
-            var trackPosition = _highwayPositions[trackIndex];
-
-            // Start from the strikeline position (-2f) instead of track bottom
-            float strikelineZ = TrackPlayer.STRIKE_LINE_POS;
-            float trackTop = _zeroFadePositions[trackIndex];
-
-            // Calculate the z position at the given percent (0% = strikeline, 100% = top)
-            float zPositionAtPercent = Mathf.LerpUnclamped(strikelineZ, trackTop, percent);
-
-            // Create a world position at the center of the track at the calculated z
-            Vector3 worldPositionAtPercent = new Vector3(trackPosition.x, trackPosition.y, zPositionAtPercent);
-
-            // Convert to viewport space
-            Vector2 viewportPosition = WorldToViewport(worldPositionAtPercent, trackIndex);
-
-            // Convert viewport space to screen space
-            float screenX = viewportPosition.x * Screen.width;
-            float screenY = (1.0f - viewportPosition.y) * Screen.height;
-
-            return new Vector2(screenX, screenY);
-        }
-
         // Find the actual bottom z value of the track by raycasting from the bottom center of the screen.  Some camera presets might have the bottom
-        // of the track off screen.
-        private float FindTrackBottom(Camera camera, Vector3 trackPosition)
+        // of the track off-screen.
+        private static float FindTrackBottom(Camera camera, Vector3 trackPosition)
         {
             var trackPlane = new Plane(Vector3.up, new Vector3(0, trackPosition.y, 0));
             var bottomRay = camera.ViewportPointToRay(new Vector3(trackPosition.x, 0f, 0f));
@@ -565,7 +571,6 @@ namespace YARG.Gameplay.Visuals
             }
 
             var bottomIntersection = bottomRay.GetPoint(enter);
-            YargLogger.LogDebug($">>Found track bottom at z={bottomIntersection.z}, trackY={trackPosition.y}");
             return bottomIntersection.z;
         }
     }

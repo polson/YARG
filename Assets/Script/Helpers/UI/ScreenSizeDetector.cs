@@ -1,12 +1,11 @@
 ﻿using System;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace YARG.Helpers.UI
 {
     public class ScreenSizeDetector : MonoSingleton<ScreenSizeDetector>
     {
-        public static event Action<int, int> OnScreenSizeChanged;
-
         public static bool HasScreenSizeChanged { get; private set; }
 
         private int _lastWidth;
@@ -19,14 +18,28 @@ namespace YARG.Helpers.UI
             HasScreenSizeChanged = false;
         }
 
-        void Update()
+        private void OnEnable()
+        {
+            RenderPipelineManager.beginFrameRendering += OnBeginFrameRendering;
+        }
+
+        private void OnDisable()
+        {
+            RenderPipelineManager.beginFrameRendering -= OnBeginFrameRendering;
+        }
+
+        private void OnBeginFrameRendering(ScriptableRenderContext context, Camera[] cameras)
+        {
+            CheckScreenSize();
+        }
+
+        private void CheckScreenSize()
         {
             if (Screen.width != _lastWidth || Screen.height != _lastHeight)
             {
                 _lastWidth = Screen.width;
                 _lastHeight = Screen.height;
                 HasScreenSizeChanged = true;
-                OnScreenSizeChanged?.Invoke(_lastWidth, _lastHeight);
             }
         }
     }

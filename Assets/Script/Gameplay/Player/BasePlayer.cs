@@ -114,13 +114,15 @@ namespace YARG.Gameplay.Player
             InputViewer = FindFirstObjectByType<BaseInputViewer>();
 
             IsFc = true;
-
-            ScreenSizeDetector.OnScreenSizeChanged += OnScreenSizeChanged;
         }
 
-        private void OnScreenSizeChanged(int width, int height)
+        private void Update()
         {
-            UpdateVisuals(GameManager.VisualTime);
+            //Ensure hud elements get repositioned on screen size change
+            if (ScreenSizeDetector.HasScreenSizeChanged)
+            {
+                UpdateVisuals(GameManager.VisualTime);
+            }
         }
 
         protected void Start()
@@ -218,7 +220,6 @@ namespace YARG.Gameplay.Player
             {
                 UnsubscribeFromInputEvents();
             }
-            ScreenSizeDetector.OnScreenSizeChanged -= OnScreenSizeChanged;
 
             FinishDestruction();
         }

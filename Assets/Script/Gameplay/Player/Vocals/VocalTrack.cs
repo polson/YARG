@@ -10,7 +10,6 @@ using YARG.Core.Logging;
 using YARG.Gameplay.HUD;
 using YARG.Gameplay.Visuals;
 using YARG.Helpers.Extensions;
-using YARG.Helpers.UI;
 using YARG.Menu.Persistent;
 using YARG.Player;
 using YARG.Settings;
@@ -110,6 +109,16 @@ namespace YARG.Gameplay.Player
         /// </summary>
         private const float STANDARD_SCROLL_SPEED = 5f;
 
+        /// <summary>
+        /// The minimum allowed aspect ratio for the vocal track
+        /// </summary>
+        private const float MIN_ASPECT_RATIO = 8.0f;
+
+        /// <summary>
+        /// The maximum allowed aspect ratio for the vocal track
+        /// </summary>
+        private const float MAX_ASPECT_RATIO = 13.0f;
+
         [SerializeField]
         private VocalsPlayer _vocalPlayerPrefab;
         [SerializeField]
@@ -196,17 +205,12 @@ namespace YARG.Gameplay.Player
                 "Note pools must be of length three (one for each harmony part).");
         }
 
-        //TODO: this doesnt work when vocals only because callback doesnt happen
         public void InitializeRenderTexture(RectTransform vocalsImage, RenderTexture renderTexture)
         {
-            const float minAspectRatio = 8.0f;
-            const float maxAspectRatio = 13.0f;
-
             var vocalsSize = vocalsImage.ToScreenSpace();
             var imageAspectRatio = vocalsSize.width / vocalsSize.height;
-            var clampedAspectRatio = Math.Clamp(imageAspectRatio, minAspectRatio, maxAspectRatio);
+            var clampedAspectRatio = Math.Clamp(imageAspectRatio, MIN_ASPECT_RATIO, MAX_ASPECT_RATIO);
 
-            // Calculate dimensions that respect aspect ratio and fit within screen
             float heightPixels = vocalsSize.height;
             float widthPixels = heightPixels * clampedAspectRatio;
 

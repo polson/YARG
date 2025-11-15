@@ -25,7 +25,6 @@ namespace YARG.Gameplay.Player
         public const float NOTE_SPAWN_OFFSET     = 5f;
 
         public const float TRACK_WIDTH  = 2f;
-        public const float TRACK_HEIGHT = 6f;
 
         public static int HighwayCount = 1;
 
