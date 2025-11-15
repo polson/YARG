@@ -7,6 +7,8 @@ namespace YARG.Helpers.UI
     {
         public static event Action<int, int> OnScreenSizeChanged;
 
+        public static bool HasScreenSizeChanged { get; private set; }
+
         private int _lastWidth;
         private int _lastHeight;
 
@@ -14,6 +16,7 @@ namespace YARG.Helpers.UI
         {
             _lastWidth = Screen.width;
             _lastHeight = Screen.height;
+            HasScreenSizeChanged = false;
         }
 
         void Update()
@@ -22,6 +25,7 @@ namespace YARG.Helpers.UI
             {
                 _lastWidth = Screen.width;
                 _lastHeight = Screen.height;
+                HasScreenSizeChanged = true;
                 OnScreenSizeChanged?.Invoke(_lastWidth, _lastHeight);
             }
         }

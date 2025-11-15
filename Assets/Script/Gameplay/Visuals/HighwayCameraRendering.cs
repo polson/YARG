@@ -7,6 +7,7 @@ using UnityEngine.Rendering.Universal;
 using UnityEngine.UI;
 using YARG.Core.Logging;
 using YARG.Gameplay.Player;
+using YARG.Helpers.UI;
 using YARG.Settings;
 
 namespace YARG.Gameplay.Visuals
@@ -48,10 +49,7 @@ namespace YARG.Gameplay.Visuals
         private Matrix4x4[] _camInvViewMatrices = new Matrix4x4[MAX_MATRICES];
         private Matrix4x4[] _camProjMatrices = new Matrix4x4[MAX_MATRICES];
         private float[] _laneScales             = new float[MAX_MATRICES];
-
-        private int     _lastScreenWidth        = 0;
-        private int     _lastScreenHeight       = 0;
-        private bool    _needsTextureRecreation = false;
+        private bool    _needsTextureRecreation = true;
 
         public static readonly int YargHighwaysNumberID = Shader.PropertyToID("_YargHighwaysN");
         public static readonly int YargHighwayCamViewMatricesID = Shader.PropertyToID("_YargCamViewMatrices");
@@ -293,31 +291,27 @@ namespace YARG.Gameplay.Visuals
                 return;
             }
 
+            if (ScreenSizeDetector.HasScreenSizeChanged)
+            {
+                _needsTextureRecreation = true;
+            }
+
             if (_cameras.Count == 0)
             {
                 return;
             }
 
             RecalculateFadeParams();
-            if (HighwaysOutputTexture != null)
+            if (HighwaysOutputTexture != null && _needsTextureRecreation)
             {
-                if (Screen.width != _lastScreenWidth || Screen.height != _lastScreenHeight)
+
+                foreach (var camera in _cameras)
                 {
-                    _lastScreenWidth = Screen.width;
-                    _lastScreenHeight = Screen.height;
-
-                    foreach (var camera in _cameras)
-                    {
-                        camera.aspect = (float) Screen.width / Screen.height;
-                    }
-
-                    //TODO: when screen size changes, we should always recreate the texture, but we should not always be doing the other stuff if there are no highways
-                    //TODO: move text recreation into its own thing
-                    _needsTextureRecreation = true;
-                    RecalculateScaleFactors();
-                    UpdateCameraProjectionMatrices();
-                    RecalculateCameraBounds();
+                    camera.aspect = (float) Screen.width / Screen.height;
                 }
+                RecalculateScaleFactors();
+                UpdateCameraProjectionMatrices();
+                RecalculateCameraBounds();
             }
 
             for (int i = 0; i < _cameras.Count; ++i)

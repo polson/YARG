@@ -220,8 +220,6 @@ namespace YARG.Gameplay.Player
             float yPos = 1.0f - heightNormalized - statsHeightNormalized;
 
             _trackCamera.rect = new Rect(xPos, yPos, widthNormalized, heightNormalized);
-
-            YargLogger.LogDebug($">>Track camera rect: {_trackCamera.rect.width}, {_trackCamera.rect.height}, target texture size: {renderTexture.width}, {renderTexture.height}");
             _trackCamera.targetTexture = renderTexture;
         }
 

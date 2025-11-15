@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using System.Transactions;
 using UnityEngine;
 using UnityEngine.UI;
 using YARG.Core.Logging;
@@ -17,7 +18,7 @@ namespace YARG.Gameplay.HUD
         [SerializeField]
         private GameObject _vocalHudPrefab;
         [SerializeField]
-        public HighwayCameraRendering _highwayCameraRendering;
+        private HighwayCameraRendering _highwayCameraRendering;
 
         [Header("References")]
         [SerializeField]
@@ -44,22 +45,29 @@ namespace YARG.Gameplay.HUD
         public void CreateVocalTrackView()
         {
             _vocalImage.gameObject.SetActive(true);
+            InitializeRenderTexture(_highwayCameraRendering.HighwaysOutputTexture);
+            _highwayCameraRendering.OnRenderTextureRecreated += InitializeRenderTexture;
+        }
 
-            // Apply the vocal track texture
-            GameManager.VocalTrack.InitializeRenderTexture(_vocalImage, _highwayCameraRendering.HighwaysOutputTexture);
-
-            //TODO: -= this
-            _highwayCameraRendering.OnRenderTextureRecreated += texture =>
-            {
-                YargLogger.LogDebug(">>TEXTURE RECREATED");
-                GameManager.VocalTrack.InitializeRenderTexture(_vocalImage, texture);
-            };
+        private void InitializeRenderTexture(RenderTexture texture)
+        {
+            GameManager.VocalTrack.InitializeRenderTexture(_vocalImage, texture);
         }
 
         public VocalsPlayerHUD CreateVocalsPlayerHUD()
         {
             var go = Instantiate(_vocalHudPrefab, _vocalHudParent);
             return go.GetComponent<VocalsPlayerHUD>();
+        }
+
+        public void AddTrackPlayer(TrackPlayer trackPlayer)
+        {
+            _highwayCameraRendering.AddTrackPlayer(trackPlayer);
+        }
+
+        protected override void GameplayDestroy()
+        {
+            _highwayCameraRendering.OnRenderTextureRecreated -= InitializeRenderTexture;
         }
     }
 }
