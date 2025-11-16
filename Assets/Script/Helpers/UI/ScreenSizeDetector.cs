@@ -18,7 +18,7 @@ namespace YARG.Helpers.UI
             HasScreenSizeChanged = false;
         }
 
-        private void LateUpdate()
+        private void Update()
         {
             CheckScreenSize();
         }

@@ -1,11 +1,10 @@
-﻿using System.Collections.Generic;
-using System.Transactions;
+﻿using System;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
-using YARG.Core.Logging;
 using YARG.Gameplay.Player;
 using YARG.Gameplay.Visuals;
-using YARG.Helpers.Extensions;
+using YARG.Helpers.UI;
 using YARG.Player;
 
 namespace YARG.Gameplay.HUD
@@ -42,14 +41,19 @@ namespace YARG.Gameplay.HUD
             return trackView;
         }
 
-        protected override void GameplayAwake()
+        private bool isInit = false;
+        private void LateUpdate()
         {
-            _highwayCameraRendering.OnRenderTextureRecreated += InitializeRenderTexture;
+            if (ScreenSizeDetector.HasScreenSizeChanged)
+            {
+                InitializeRenderTexture(_highwayCameraRendering.HighwaysOutputTexture);
+            }
         }
 
         public void CreateVocalTrackView()
         {
             _vocalImage.gameObject.SetActive(true);
+            InitializeRenderTexture(_highwayCameraRendering.HighwaysOutputTexture);
         }
 
         private void InitializeRenderTexture(RenderTexture texture)
@@ -66,11 +70,6 @@ namespace YARG.Gameplay.HUD
         public void AddTrackPlayer(TrackPlayer trackPlayer)
         {
             _highwayCameraRendering.AddTrackPlayer(trackPlayer);
-        }
-
-        protected override void GameplayDestroy()
-        {
-            _highwayCameraRendering.OnRenderTextureRecreated -= InitializeRenderTexture;
         }
     }
 }

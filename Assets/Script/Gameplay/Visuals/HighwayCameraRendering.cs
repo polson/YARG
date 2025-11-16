@@ -35,10 +35,11 @@ namespace YARG.Gameplay.Visuals
         private readonly List<Vector3> _highwayPositions = new();
         private readonly List<float>   _raisedRotations  = new();
 
-        private Camera _renderCamera;
+        private Camera               _renderCamera;
         public  RenderTexture        HighwaysOutputTexture { get; private set; }
         private RenderTexture        _highwaysAlphaTexture;
         private ScriptableRenderPass _fadeCalcPass;
+        private bool                 _didInitialize = false;
 
         private readonly float[]     _curveFactors       = new float[MAX_MATRICES];
         private readonly float[]     _zeroFadePositions  = new float[MAX_MATRICES];
@@ -60,12 +61,10 @@ namespace YARG.Gameplay.Visuals
         // On a 9:16 screen, this will be ~0.316.
         // On a 16:9 screen, this will be 1.0.
         public float AspectCorrectionFactor => Screen.width / (float)Screen.height / (16f / 9f);
-        public event Action<RenderTexture> OnRenderTextureRecreated;
-
         private void OnEnable()
         {
             _renderCamera = GetComponent<Camera>();
-            RecreateHighwayOutputTexture();
+            // RecreateHighwayOutputTexture();
             ResetHighwayAlphaTexture();
 
             _fadeCalcPass ??= new FadePass(this);
@@ -91,15 +90,13 @@ namespace YARG.Gameplay.Visuals
         {
             HighwaysOutputTexture?.Release();
             HighwaysOutputTexture?.DiscardContents();
-            var descriptor = new RenderTextureDescriptor(
-                Screen.width, Screen.height,
-                RenderTextureFormat.DefaultHDR)
+
+            var descriptor = new RenderTextureDescriptor(Screen.width, Screen.height, RenderTextureFormat.DefaultHDR)
             {
                 mipCount = 0,
             };
-            HighwaysOutputTexture = new RenderTexture(descriptor);
 
-            // Add null check before accessing the RawImage
+            HighwaysOutputTexture = new RenderTexture(descriptor);
             if (_highwaysOutput != null)
             {
                 _highwaysOutput.texture = HighwaysOutputTexture;
@@ -108,7 +105,6 @@ namespace YARG.Gameplay.Visuals
             if (_renderCamera != null)
             {
                 _renderCamera.targetTexture = HighwaysOutputTexture;
-                OnRenderTextureRecreated?.Invoke(HighwaysOutputTexture);
             }
         }
 
@@ -305,14 +301,14 @@ namespace YARG.Gameplay.Visuals
                 return;
             }
 
-            if (_cameras.Count == 0)
-            {
-                return;
-            }
-
             if (ScreenSizeDetector.HasScreenSizeChanged)
             {
                 ResetCameras();
+            }
+
+            if (_cameras.Count == 0)
+            {
+                return;
             }
 
             RecalculateFadeParams();
@@ -334,12 +330,12 @@ namespace YARG.Gameplay.Visuals
             var renderer = _renderCamera.GetUniversalAdditionalCameraData().scriptableRenderer;
             renderer.EnqueuePass(_fadeCalcPass);
         }
-
         private void LateUpdate()
         {
-            if (ScreenSizeDetector.HasScreenSizeChanged)
+            if (!_didInitialize || ScreenSizeDetector.HasScreenSizeChanged)
             {
                 RecreateHighwayOutputTexture();
+                _didInitialize = true;
             }
         }
 
