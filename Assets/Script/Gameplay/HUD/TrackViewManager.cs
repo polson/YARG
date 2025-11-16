@@ -32,11 +32,11 @@ namespace YARG.Gameplay.HUD
 
         private readonly List<TrackView> _trackViews = new();
 
-        public TrackView CreateTrackView(TrackPlayer trackPlayer, YargPlayer player)
+        public TrackView CreateTrackView()
         {
             // Create a track view
             var trackView = Instantiate(_trackViewPrefab, transform).GetComponent<TrackView>();
-            trackView.Initialize(trackPlayer, _highwayCameraRendering);
+            trackView.Initialize(_highwayCameraRendering);
             _trackViews.Add(trackView);
             return trackView;
         }

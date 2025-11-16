@@ -32,21 +32,13 @@ namespace YARG.Gameplay.HUD
         [SerializeField]
         private PlayerNameDisplay _playerNameDisplay;
 
-        private TrackPlayer _trackPlayer;
         private HighwayCameraRendering      _highwayRenderer;
         private Vector3 _lastTrackPlayerPosition;
-        private RectTransform _rect;
 
         private const float CENTER_ELEMENT_DEPTH = 0.35f;
 
-        void Awake()
+        public void Initialize(HighwayCameraRendering highwayRenderer)
         {
-            _rect = GetComponent<RectTransform>();
-        }
-
-        public void Initialize(TrackPlayer trackPlayer, HighwayCameraRendering highwayRenderer)
-        {
-            _trackPlayer     = trackPlayer;
             _highwayRenderer = highwayRenderer;
         }
 
