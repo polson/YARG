@@ -61,7 +61,7 @@ namespace YARG.Gameplay.HUD
             Vector2 position = _highwayRenderer.GetTrackPositionScreenSpace(highwayIndex, 0.5f, CENTER_ELEMENT_DEPTH);
             _centerElementContainer.transform.position = position;
 
-            // Place top elements at 100% depth plus 8 screen independent units up to avoid highway overlap
+            // Place top elements at 100% depth plus screen independent units up to avoid highway overlap
             var extraOffset = 8 * Screen.height / 1000f;
             Vector2 position2 = _highwayRenderer.GetTrackPositionScreenSpace(highwayIndex, 0.5f, 1.0f).AddY(extraOffset);
             _topElementContainer.position = position2;

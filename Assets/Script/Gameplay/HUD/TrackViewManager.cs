@@ -42,18 +42,20 @@ namespace YARG.Gameplay.HUD
         }
 
         private bool isInit = false;
-        private void LateUpdate()
+
+        protected override void GameplayAwake()
         {
-            if (ScreenSizeDetector.HasScreenSizeChanged)
-            {
-                InitializeRenderTexture(_highwayCameraRendering.HighwaysOutputTexture);
-            }
+            _highwayCameraRendering.OnHighwaysTextureCreated += OnTextureCreated;
+        }
+
+        private void OnTextureCreated(RenderTexture obj)
+        {
+            InitializeRenderTexture(_highwayCameraRendering.HighwaysOutputTexture);
         }
 
         public void CreateVocalTrackView()
         {
             _vocalImage.gameObject.SetActive(true);
-            InitializeRenderTexture(_highwayCameraRendering.HighwaysOutputTexture);
         }
 
         private void InitializeRenderTexture(RenderTexture texture)
@@ -70,6 +72,11 @@ namespace YARG.Gameplay.HUD
         public void AddTrackPlayer(TrackPlayer trackPlayer)
         {
             _highwayCameraRendering.AddTrackPlayer(trackPlayer);
+        }
+
+        protected override void GameplayDestroy()
+        {
+            _highwayCameraRendering.OnHighwaysTextureCreated -= OnTextureCreated;
         }
     }
 }
