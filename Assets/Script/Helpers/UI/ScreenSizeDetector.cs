@@ -18,17 +18,7 @@ namespace YARG.Helpers.UI
             HasScreenSizeChanged = false;
         }
 
-        private void OnEnable()
-        {
-            RenderPipelineManager.beginFrameRendering += OnBeginFrameRendering;
-        }
-
-        private void OnDisable()
-        {
-            RenderPipelineManager.beginFrameRendering -= OnBeginFrameRendering;
-        }
-
-        private void OnBeginFrameRendering(ScriptableRenderContext context, Camera[] cameras)
+        private void LateUpdate()
         {
             CheckScreenSize();
         }
@@ -37,10 +27,15 @@ namespace YARG.Helpers.UI
         {
             if (Screen.width != _lastWidth || Screen.height != _lastHeight)
             {
-                _lastWidth = Screen.width;
-                _lastHeight = Screen.height;
                 HasScreenSizeChanged = true;
             }
+            else
+            {
+                HasScreenSizeChanged = false;
+            }
+
+            _lastWidth = Screen.width;
+            _lastHeight = Screen.height;
         }
     }
 }

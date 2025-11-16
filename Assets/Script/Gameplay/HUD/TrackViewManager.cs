@@ -42,11 +42,14 @@ namespace YARG.Gameplay.HUD
             return trackView;
         }
 
+        protected override void GameplayAwake()
+        {
+            _highwayCameraRendering.OnRenderTextureRecreated += InitializeRenderTexture;
+        }
+
         public void CreateVocalTrackView()
         {
             _vocalImage.gameObject.SetActive(true);
-            InitializeRenderTexture(_highwayCameraRendering.HighwaysOutputTexture);
-            _highwayCameraRendering.OnRenderTextureRecreated += InitializeRenderTexture;
         }
 
         private void InitializeRenderTexture(RenderTexture texture)
