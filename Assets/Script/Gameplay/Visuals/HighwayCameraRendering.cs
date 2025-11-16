@@ -186,7 +186,7 @@ namespace YARG.Gameplay.Visuals
                 camera.aspect = (float) Screen.width / Screen.height;
             }
 
-            //First pass, just scale with 1.0f, then recalc matrices
+            //First pass, just scale according to aspect ratio, then recalculate matrices
             for (int i = 0; i < _cameras.Count; i++)
             {
                 //This works best for fake track player, but doesn't matter too much otherwise
@@ -466,9 +466,9 @@ namespace YARG.Gameplay.Visuals
         /// <summary>
         /// Calculates the screen space position of any normalized coordinate on the track, from the strikeline.
         /// </summary>
-        /// <param name="trackIndex">The index of the highway to get the position for, 0 is left most highway</param>
-        /// <param name="y">The normalized position down the track (0.0 = strikeline, 1.0 is zero fade position)</param>
-        /// <param name="x">The normalized position across the track width (0.0 is leftmost track edge, 1.0 is rightmost track edge)</param>
+        /// <param name="trackIndex">The index of the highway to get the position for. 0 is left most highway</param>
+        /// <param name="x">The normalized position across the track width (0.0 is leftmost track edge. 1.0 is rightmost track edge)</param>
+        /// <param name="y">The normalized position up the track (0.0 = strikeline, 1.0 is zero fade position)</param>
         public Vector2 GetTrackPositionScreenSpace(int trackIndex, float x, float y)
         {
             if (trackIndex < 0 || trackIndex >= _cameras.Count)
@@ -479,28 +479,22 @@ namespace YARG.Gameplay.Visuals
 
             var trackPosition = _highwayPositions[trackIndex];
 
-            // Calculate Z position based on yPercent (depth along the track)
-            // Start from the strikeline position (-2f)
+            // Calculate Z position (depth along the track)
             float strikelineZ = TrackPlayer.STRIKE_LINE_POS;
             float zeroFadeZ = _zeroFadePositions[trackIndex];
             float zPositionAtPercent = Mathf.LerpUnclamped(strikelineZ, zeroFadeZ, y);
 
-            // Calculate X position based on xPercent (position across the track width)
-            // xPercent of 0.5 is center, 0.0 is left edge, 1.0 is right edge
+            // Calculate X position (position across the track width)
             float trackWidth = TrackPlayer.TRACK_WIDTH;
             float xOffset = Mathf.LerpUnclamped(-trackWidth / 2f, trackWidth / 2f, x);
 
-            // Create a world position with the calculated x and z
+            // Calculate screen space from world position
             Vector3 worldPositionAtPercent = new Vector3(
                 trackPosition.x + xOffset,
                 trackPosition.y,
                 zPositionAtPercent
             );
-
-            // Convert to viewport space
             Vector2 viewportPosition = WorldToViewport(worldPositionAtPercent, trackIndex);
-
-            // Convert viewport space to screen space
             float screenX = viewportPosition.x * Screen.width;
             float screenY = (1.0f - viewportPosition.y) * Screen.height;
 
@@ -538,8 +532,9 @@ namespace YARG.Gameplay.Visuals
             // Get the world space positions of the track corners assuming the screen bottom is the widest part of the track
             float halfWidth = TrackPlayer.TRACK_WIDTH / 2f;
             var trackBottom = FindTrackBottom(camera, trackPosition);
-            var trackTop = _zeroFadePositions[cameraIndex]; // Use zero fade position for the top
+            var trackTop = _zeroFadePositions[cameraIndex];
 
+            // World space
             Vector3 bottomLeft = new Vector3(trackPosition.x - halfWidth, trackPosition.y, trackBottom);
             Vector3 bottomRight = new Vector3(trackPosition.x + halfWidth, trackPosition.y, trackBottom);
             Vector3 topLeft = new Vector3(trackPosition.x - halfWidth, trackPosition.y, trackTop);
@@ -562,18 +557,17 @@ namespace YARG.Gameplay.Visuals
             return new Vector2(widthPixels, heightPixels);
         }
 
-        // Find the actual bottom z value of the track by raycasting from the bottom center of the screen.  Some camera presets might have the bottom
-        // of the track off-screen.
+        // Find the actual bottom z value of the track by raycasting from the bottom center of the screen.
+        // Some camera presets might have the bottom of the track off-screen.
         private static float FindTrackBottom(Camera camera, Vector3 trackPosition)
         {
             var trackPlane = new Plane(Vector3.up, new Vector3(0, trackPosition.y, 0));
             var bottomRay = camera.ViewportPointToRay(new Vector3(trackPosition.x, 0f, 0f));
             if (!trackPlane.Raycast(bottomRay, out var enter))
             {
-                //Track is off the screen at bottom position, default to the position as a best guess
+                // Track is off the screen at bottom position, default to best guess
                 return -2f;
             }
-
             var bottomIntersection = bottomRay.GetPoint(enter);
             return bottomIntersection.z;
         }
