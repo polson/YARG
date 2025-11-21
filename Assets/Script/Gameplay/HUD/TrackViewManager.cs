@@ -24,11 +24,6 @@ namespace YARG.Gameplay.HUD
         private RectTransform _vocalImage;
         [SerializeField]
         private Transform _vocalHudParent;
-        [SerializeField]
-        private CountdownDisplay _vocalsCountdownDisplay;
-
-        [SerializeField]
-        HorizontalLayoutGroup _horizontalLayoutGroup;
 
         private readonly List<TrackView> _trackViews = new();
 
