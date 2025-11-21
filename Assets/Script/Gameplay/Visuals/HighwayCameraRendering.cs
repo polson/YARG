@@ -42,7 +42,7 @@ namespace YARG.Gameplay.Visuals
         public event Action<RenderTexture> OnHighwaysTextureCreated;
         private RenderTexture              _highwaysAlphaTexture;
         private ScriptableRenderPass       _fadeCalcPass;
-        private bool                       _allowTextureRecreation;
+        private bool                       _allowTextureRecreation = true;
         private bool                       _needsInitialization    = true;
 
         private readonly float[]           _curveFactors       = new float[MAX_MATRICES];
@@ -223,8 +223,9 @@ namespace YARG.Gameplay.Visuals
 
         // This is only directly used for fake track player really
         // Rest should go through AddPlayer
-        public void AddPlayerParams(Vector3 position, Camera trackCamera, float curveFactor, float zeroFadePosition, float fadeSize, float raisedRotation)
+        public void AddPlayerParams(Vector3 position, Camera trackCamera, float curveFactor, float zeroFadePosition, float fadeSize, float raisedRotation, bool allowTextureRecreation = true)
         {
+            _allowTextureRecreation = allowTextureRecreation;
             var index = _cameras.Count;
             _cameras.Add(trackCamera);
             _raisedRotations.Add(raisedRotation);
@@ -263,8 +264,6 @@ namespace YARG.Gameplay.Visuals
             // This effectively disables rendering it but keeps components active
             var cameraData = trackPlayer.TrackCamera.GetUniversalAdditionalCameraData();
             cameraData.renderType = CameraRenderType.Overlay;
-            _allowTextureRecreation = true;
-
             AddPlayerParams(trackPlayer.transform.position, trackPlayer.TrackCamera, trackPlayer.Player.CameraPreset.CurveFactor, trackPlayer.ZeroFadePosition, trackPlayer.FadeSize, trackPlayer.Player.CameraPreset.Rotation);
         }
 
