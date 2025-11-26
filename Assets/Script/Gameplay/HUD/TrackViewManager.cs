@@ -1,11 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.UI;
 using YARG.Gameplay.Player;
 using YARG.Gameplay.Visuals;
-using YARG.Helpers.UI;
-using YARG.Player;
 
 namespace YARG.Gameplay.HUD
 {

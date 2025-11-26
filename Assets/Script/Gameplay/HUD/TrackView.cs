@@ -1,15 +1,8 @@
 ﻿using System;
-using System.Runtime.InteropServices;
 using UnityEngine;
-using UnityEngine.UI;
 using YARG.Core.Engine;
-using YARG.Core.Game;
-using YARG.Core.Logging;
-using YARG.Gameplay.Player;
 using YARG.Gameplay.Visuals;
 using YARG.Player;
-using YARG.Helpers.UI;
-using YARG.Settings;
 
 namespace YARG.Gameplay.HUD
 {

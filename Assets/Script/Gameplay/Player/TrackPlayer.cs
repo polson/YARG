@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
-using UnityEngine.Serialization;
 using YARG.Assets.Script.Helpers;
 using YARG.Core;
 using YARG.Core.Audio;

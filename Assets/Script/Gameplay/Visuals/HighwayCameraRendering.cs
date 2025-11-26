@@ -472,7 +472,7 @@ namespace YARG.Gameplay.Visuals
         {
             if (trackIndex < 0 || trackIndex >= _cameras.Count)
             {
-                YargLogger.LogError($"Invalid track index: {trackIndex}");
+                YargLogger.LogFormatError("Invalid track index: {0}", trackIndex);
                 return Vector2.zero;
             }
 
@@ -513,7 +513,7 @@ namespace YARG.Gameplay.Visuals
         {
             if (cameraIndex < 0 || cameraIndex >= _cameras.Count)
             {
-                YargLogger.LogError($"Invalid camera index: {cameraIndex}");
+                YargLogger.LogFormatError("Invalid camera index: {0}", cameraIndex);
                 return Vector2.zero;
             }
 
