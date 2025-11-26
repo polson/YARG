@@ -148,7 +148,10 @@
             "Reset": "Reset",
             "ResetAll": "Reset All",
 
-			"Scroll" : "Scroll"
+			"Scroll" : "Scroll",
+
+            "Enabled": "Enabled",
+            "Disabled": "Disabled"
         },
         "Credits": {
             "Description": "Contributed To: {0}\n\n{1}",
@@ -1852,6 +1855,18 @@
                 },
                 "NoteHeight": {
                     "Name": "Note Height"
+                },
+                "BackgroundImage": {
+                    "Name": "Custom Background Texture"
+                },
+                "SideImage": {
+                    "Name": "Custom Side Texture (Highlighted in SP)"
+                },
+                "BaseWaviness": {
+                    "Name": "Base Texture Waviness"
+                },
+                "SideWaviness": {
+                    "Name": "Side Texture Waviness"
                 }
             },
 			"RockMeterPreset" : {
