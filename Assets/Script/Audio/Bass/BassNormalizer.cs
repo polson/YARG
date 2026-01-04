@@ -13,11 +13,19 @@ using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
 {
+    /// <summary>
+    /// Calculates a normalization gain for songs by analyzing RMS levels.
+    /// Streams are cloned and mixed into a decode-only mixer for background analysis.
+    /// Gain is adjusted incrementally toward the target RMS using clamped relative updates,
+    /// ensuring smooth transitions rather than abrupt volume changes.
+    /// </summary>
     public class BassNormalizer : IDisposable
     {
         private const int   BUFFER_SIZE        = 512 * 1024;
         private const float TARGET_RMS         = 0.175f;
         private const float MAX_GAIN           = 1.5f;
+        private const float MAX_GAIN_INCREASE  = 0.1f;
+        private const float MAX_GAIN_DECREASE  = 0.1f;
         private const int   MAX_THREADS_ATTRIB = 86017;
         private const int   START_SECONDS      = 5;
 
@@ -26,7 +34,8 @@ namespace YARG.Audio.BASS
         private readonly List<int>               _handles = new();
         private          CancellationTokenSource _gainCalcCts = new();
 
-        public float               Gain { get; private set; } = 1.0f;
+        // Initialize gain low so it usually ramps up instead of ramps down
+        public float               Gain { get; private set; } = 0.5f;
         public event Action<float> OnGainAdjusted;
 
         public bool AddStream(Stream stream, params StemMixer.StemInfo[] stemInfos)
@@ -54,7 +63,7 @@ namespace YARG.Audio.BASS
 
             foreach (var stemInfo in stemInfos)
             {
-                var volumeMatrix = stemInfo.VolumeMatrix;
+                var volumeMatrix = stemInfo.GetVolumeMatrix();
                 if (volumeMatrix != null)
                 {
                     int[] channelMap = stemInfo.Indices.Append(-1).ToArray();
@@ -187,9 +196,10 @@ namespace YARG.Audio.BASS
                     totalSamples += numSamples;
 
                     double rms = Math.Sqrt(cumulativeSumSquares / totalSamples);
-                    double gain = Math.Min(MAX_GAIN, TARGET_RMS / rms);
-                    Gain = (float) gain;
-                    progress?.Report(gain);
+                    float targetGain = (float) Math.Min(MAX_GAIN, TARGET_RMS / rms);
+                    float delta = Math.Clamp(targetGain - Gain, -MAX_GAIN_DECREASE, MAX_GAIN_INCREASE);
+                    Gain += delta;
+                    progress?.Report(Gain);
                 }
             }
         }
