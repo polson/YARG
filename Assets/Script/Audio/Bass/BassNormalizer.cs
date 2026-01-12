@@ -27,7 +27,6 @@ namespace YARG.Audio.BASS
         private const float MAX_GAIN_INCREASE  = 0.1f;
         private const float MAX_GAIN_DECREASE  = 0.1f;
         private const int   MAX_THREADS_ATTRIB = 86017;
-        private const int   START_SECONDS      = 5;
 
         private          int                     _mixer;
         private readonly List<Stream>            _streams = new();
@@ -168,7 +167,6 @@ namespace YARG.Audio.BASS
         {
             double cumulativeSumSquares = 0.0;
             long totalSamples = 0;
-            Bass.ChannelSetPosition(_mixer, START_SECONDS);
             byte[] buffer = new byte[BUFFER_SIZE * sizeof(short)];
 
             while (true)
@@ -206,6 +204,9 @@ namespace YARG.Audio.BASS
 
         public void Dispose()
         {
+            _gainCalcCts.Cancel();
+            _gainCalcCts.Dispose();
+
             foreach (var stream in _streams)
             {
                 stream.Dispose();
