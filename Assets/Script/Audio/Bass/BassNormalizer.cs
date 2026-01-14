@@ -21,22 +21,37 @@ namespace YARG.Audio.BASS
     /// </summary>
     public class BassNormalizer : IDisposable
     {
-        private const int   BUFFER_SIZE        = 512 * 1024;
-        private const float TARGET_RMS         = 0.175f;
+        // Target RMS to normalize to, typically results in around -14 LUFS
+        private const float TARGET_RMS         = 0.12f;
+
+        // Low initial gain so it typically ramps up instead of ramps down
+        private const float INITIAL_GAIN       = 0.3f;
+
+        // Maximum allowed gain to prevent excessive loudness
         private const float MAX_GAIN           = 1.5f;
-        private const float MAX_GAIN_INCREASE  = 0.1f;
-        private const float MAX_GAIN_DECREASE  = 0.1f;
+
+        // The length in ms of the sliding window for RMS calculation
+        private const int   WINDOW_MS          = 100;
+
+        //Maximum per-window gain update, but ensuring that we can still hit max gain in a 2 minute long song
+        private const float MAX_GAIN_STEP      = (MAX_GAIN - INITIAL_GAIN) / (TWO_MINUTES_MS / WINDOW_MS);
+        private const float TWO_MINUTES_MS = 2 * 60 * 1000f;
+
+        // Undocumented BASS attribute to set max processing threads for a mixer
         private const int   MAX_THREADS_ATTRIB = 86017;
 
         private          int                     _mixer;
         private readonly List<Stream>            _streams = new();
         private readonly List<int>               _handles = new();
         private          CancellationTokenSource _gainCalcCts = new();
-
-        // Initialize gain low so it usually ramps up instead of ramps down
-        public float               Gain { get; private set; } = 0.5f;
+        public float               Gain { get; private set; } = INITIAL_GAIN;
         public event Action<float> OnGainAdjusted;
 
+        /// <summary>
+        /// Adds a stream to the normalization mixer and restarts the background gain calculation.
+        /// Restarting updates with each added stream provides a head start on normalization before playback begins,
+        /// which is especially useful for modes like Practice where the mixer does not play immediately.
+        /// </summary>
         public bool AddStream(Stream stream, params StemMixer.StemInfo[] stemInfos)
         {
             if (_mixer == 0)
@@ -167,7 +182,11 @@ namespace YARG.Audio.BASS
         {
             double cumulativeSumSquares = 0.0;
             long totalSamples = 0;
-            byte[] buffer = new byte[BUFFER_SIZE * sizeof(short)];
+            Bass.ChannelSetPosition(_mixer, 0);
+            var info = Bass.ChannelGetInfo(_mixer);
+            float windowSeconds = WINDOW_MS / 1000f;
+            long samplesPerWindow = (long) (windowSeconds * info.Frequency);
+            float[] level = new float[1];
 
             while (true)
             {
@@ -176,26 +195,24 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                int bytesRead = Bass.ChannelGetData(_mixer, buffer, buffer.Length);
-                if (bytesRead <= 0)
-                    break;
-
-                var bufferSeconds = Bass.ChannelBytes2Seconds(_mixer, bytesRead);
-                float[] level = new float[1];
-                bool didGetLevel = Bass.ChannelGetLevel(_mixer, level, (float) bufferSeconds,
+                bool didGetLevel = Bass.ChannelGetLevel(_mixer, level, windowSeconds,
                     LevelRetrievalFlags.Mono | LevelRetrievalFlags.RMS);
 
-                var chunkedRms = level[0];
-                if (didGetLevel && chunkedRms > 0)
+                if (!didGetLevel)
                 {
-                    long numSamples = bytesRead / sizeof(short);
-                    double sumSquares = chunkedRms * chunkedRms * numSamples;
+                    break;
+                }
+
+                var chunkedRms = level[0];
+                if (chunkedRms > 0)
+                {
+                    double sumSquares = chunkedRms * chunkedRms * samplesPerWindow;
                     cumulativeSumSquares += sumSquares;
-                    totalSamples += numSamples;
+                    totalSamples += samplesPerWindow;
 
                     double rms = Math.Sqrt(cumulativeSumSquares / totalSamples);
                     float targetGain = (float) Math.Min(MAX_GAIN, TARGET_RMS / rms);
-                    float delta = Math.Clamp(targetGain - Gain, -MAX_GAIN_DECREASE, MAX_GAIN_INCREASE);
+                    float delta = Math.Clamp(targetGain - Gain, -MAX_GAIN_STEP, MAX_GAIN_STEP);
                     Gain += delta;
                     progress?.Report(Gain);
                 }
