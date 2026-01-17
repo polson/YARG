@@ -470,7 +470,7 @@ namespace YARG.Audio.BASS
             }
             if (_gainDspHandle != 0)
             {
-                Bass.StreamFree(_gainDspHandle);
+                Bass.ChannelRemoveDSP(_mixerHandle, _gainDspHandle);
             }
 
 
