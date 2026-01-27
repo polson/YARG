@@ -124,12 +124,7 @@ namespace YARG.Gameplay
             _venueTexture = new RenderTexture(outputWidth, outputHeight, 0, RenderTextureFormat.DefaultHDR);
             _venueOutput.texture = _venueTexture;
 
-            _trailsTexture = new RenderTexture(_venueTexture);
-            _trailsTexture.filterMode = FilterMode.Bilinear;
-            _trailsTexture.wrapMode = TextureWrapMode.Clamp;
-            _trailsTexture.Create();
-
-            Graphics.Blit(Texture2D.blackTexture, _trailsTexture);
+            _trailsTexture = CreateTrailsTexture();
 
             _trailsMaterial = CreateMaterial("Trails");
             _scanlineMaterial = CreateMaterial("Scanlines");
@@ -138,6 +133,16 @@ namespace YARG.Gameplay
             _alphaClearMaterial = CreateMaterial("Hidden/AlphaClear");
 
             _staticsCreated = true;
+        }
+
+        private RenderTexture CreateTrailsTexture()
+        {
+            var texture = new RenderTexture(_venueTexture);
+            texture.filterMode = FilterMode.Bilinear;
+            texture.wrapMode = TextureWrapMode.Clamp;
+            texture.Create();
+            Graphics.Blit(Texture2D.blackTexture, texture);
+            return texture;
         }
 
         private void RecreateTextures()
@@ -160,13 +165,32 @@ namespace YARG.Gameplay
                 _trailsTexture.DiscardContents();
             }
 
-            _trailsTexture = new RenderTexture(_venueTexture);
+            _trailsTexture = CreateTrailsTexture();
         }
 
         private void OnEnable()
         {
             FPS = SettingsManager.Settings.VenueFpsCap.Value;
             _timeSinceLastRender = 0f;
+            RenderPipelineManager.beginCameraRendering += OnPreCameraRender;
+        }
+
+        private void OnDisable()
+        {
+            RenderPipelineManager.beginCameraRendering -= OnPreCameraRender;
+        }
+
+        private void OnPreCameraRender(ScriptableRenderContext ctx, Camera cam)
+        {
+            if (cam != _renderCamera)
+            {
+                return;
+            }
+
+            if (ScreenSizeDetector.HasScreenSizeChanged)
+            {
+                RecreateTextures();
+            }
         }
 
         private void OnDestroy()
@@ -235,11 +259,6 @@ namespace YARG.Gameplay
 
         private void Update()
         {
-            if (ScreenSizeDetector.HasScreenSizeChanged)
-            {
-                RecreateTextures();
-            }
-
             var stack = VolumeManager.instance.stack;
 
             VolumeManager.instance.Update(_renderCamera.gameObject.transform, _venueLayerMask);
