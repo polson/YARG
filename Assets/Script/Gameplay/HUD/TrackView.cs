@@ -53,9 +53,8 @@ namespace YARG.Gameplay.HUD
             if (_topDraggable != null && !_topDraggable.HasCustomPosition)
             {
                 // Place top elements at 100% depth of the track, plus some extra amount above the track.
-                // Since y=0 is the top of the screen, we subtract the extra offset.
                 var extraOffset = TOP_ELEMENT_EXTRA_OFFSET * Screen.height / 1000f;
-                var topPosition = _highwayRenderer.GetTrackPositionScreenSpace(highwayIndex, 0.5f, 1.0f).AddY(-extraOffset);
+                var topPosition = _highwayRenderer.GetTrackPositionScreenSpace(highwayIndex, 0.5f, 1.0f).AddY(extraOffset);
                 _topElementContainer.position = topPosition;
             }
         }
