@@ -24,7 +24,7 @@ namespace YARG.Audio.BASS
 
             int[]? channelMap = null;
 #nullable disable
-            if (indices != null)
+            if (indices.Length > 0)
             {
                 channelMap = new int[indices.Length + 1];
                 for (int i = 0; i < indices.Length; ++i)
@@ -199,7 +199,7 @@ namespace YARG.Audio.BASS
             {
                 return null;
             }
-            return new BassStemMixer(name, this, speed, mixerVolume, handle, clampStemVolume, normalize, 
+            return new BassStemMixer(name, this, speed, mixerVolume, handle, clampStemVolume, normalize,
                 CreateOutputChannel(SettingsManager.Settings?.OutputChannelDefault.Value ?? 0));
         }
 
@@ -657,23 +657,22 @@ namespace YARG.Audio.BASS
         }
 
 #nullable enable
-        internal static bool CreateSplitStreams(int sourceStream, int[] channelMap, out StreamHandle? streamHandles, out StreamHandle? reverbHandles)
+        internal static (StreamHandle Stream, StreamHandle Reverb)? CreateSplitStreams(int sourceStream, int[] channelMap)
 #nullable disable
         {
-            streamHandles = StreamHandle.Create(sourceStream, channelMap);
+            var streamHandles = StreamHandle.Create(sourceStream, channelMap);
             if (streamHandles == null)
             {
-                reverbHandles = null;
-                return false;
+                return null;
             }
 
-            reverbHandles = StreamHandle.Create(sourceStream, channelMap);
+            var reverbHandles = StreamHandle.Create(sourceStream, channelMap);
             if (reverbHandles == null)
             {
                 streamHandles.Dispose();
-                return false;
+                return null;
             }
-            return true;
+            return (streamHandles, reverbHandles);
         }
 
         internal static PitchShiftParametersStruct SetPitchParams(SongStem stem, float speed, StreamHandle streamHandles, StreamHandle reverbHandles)
