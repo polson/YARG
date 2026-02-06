@@ -8,6 +8,7 @@ using YARG.Core.Input;
 using YARG.Core.Logging;
 using YARG.Core.Replays;
 using YARG.Menu.Navigation;
+using YARG.Settings;
 
 namespace YARG.Gameplay.HUD
 {
@@ -47,8 +48,14 @@ namespace YARG.Gameplay.HUD
 
         private bool _sliderPauseState;
 
+        private bool _previousHighwayAnimationSetting;
+
         protected override void GameplayAwake()
         {
+            // Disable highway animations during replay viewing as it causes too many issues
+            _previousHighwayAnimationSetting = SettingsManager.Settings.EnableHighwayAnimation.Value;
+            SettingsManager.Settings.EnableHighwayAnimation.Value = false;
+
             if (GameManager.ReplayInfo == null)
             {
                 Destroy(gameObject);
@@ -56,9 +63,8 @@ namespace YARG.Gameplay.HUD
             }
 
             // Get the hidden position based on the container, accounting for show button arrow height
-            YargLogger.LogDebug($"Size delta: {_container.sizeDelta}, Show button arrow size delta: {_showHudButtonArrow.sizeDelta}");
             _hudHiddenY = -_container.sizeDelta.y + _showHudButton.sizeDelta.y;
-            _container.position = _container.position.WithY(_hudHiddenY);
+            _container.position = _container.position.WithY(-_container.sizeDelta.y);
 
             // Listen for menu inputs
             Navigator.Instance.NavigationEvent += OnNavigationEvent;
@@ -66,6 +72,9 @@ namespace YARG.Gameplay.HUD
 
         protected override void GameplayDestroy()
         {
+            // Restore highway animations setting when exiting replay viewer
+            SettingsManager.Settings.EnableHighwayAnimation.Value = _previousHighwayAnimationSetting;
+
             Navigator.Instance.NavigationEvent -= OnNavigationEvent;
         }
 
