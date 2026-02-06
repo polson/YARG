@@ -48,14 +48,8 @@ namespace YARG.Gameplay.HUD
 
         private bool _sliderPauseState;
 
-        private bool _previousHighwayAnimationSetting;
-
         protected override void GameplayAwake()
         {
-            // Disable highway animations during replay viewing as it causes too many issues
-            _previousHighwayAnimationSetting = SettingsManager.Settings.EnableHighwayAnimation.Value;
-            SettingsManager.Settings.EnableHighwayAnimation.Value = false;
-
             if (GameManager.ReplayInfo == null)
             {
                 Destroy(gameObject);
@@ -72,9 +66,6 @@ namespace YARG.Gameplay.HUD
 
         protected override void GameplayDestroy()
         {
-            // Restore highway animations setting when exiting replay viewer
-            SettingsManager.Settings.EnableHighwayAnimation.Value = _previousHighwayAnimationSetting;
-
             Navigator.Instance.NavigationEvent -= OnNavigationEvent;
         }
 
