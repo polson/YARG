@@ -357,10 +357,7 @@ namespace YARG.Gameplay.Player
 
         protected virtual void OnStarPowerPhraseHit()
         {
-            if (!GameManager.Paused && !GameManager.IsSeekingReplay)
-            {
-                GlobalAudioHandler.PlaySoundEffect(SfxSample.StarPowerAward);
-            }
+            OnEvent(new StarPowerPhraseHit());
         }
 
         protected virtual void OnStarPowerPhraseMissed()
