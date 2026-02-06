@@ -225,7 +225,7 @@ namespace YARG.Audio.BASS
 
         protected override void SetPosition_Internal(double position)
         {
-            var wasPlaying = !IsPlaying;
+            var wasPlaying = IsPlaying;
             Pause_Internal();
 
             var channels = BassMix.MixerGetChannels(_mixerHandle);

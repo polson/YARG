@@ -95,6 +95,12 @@ namespace YARG.Gameplay.HUD
             {
                 UpdateTimeControls();
             }
+
+            if (_timelineSlider.value >= 1.0f)
+            {
+                //End of song, pause
+                SetPaused(true);
+            }
         }
 
         private void UpdateTimeControls()
