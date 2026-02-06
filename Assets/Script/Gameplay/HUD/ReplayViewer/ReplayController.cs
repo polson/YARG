@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Globalization;
 using DG.Tweening;
 using TMPro;
@@ -19,6 +19,8 @@ namespace YARG.Gameplay.HUD
         private RectTransform _container;
         [SerializeField]
         private RectTransform _showHudButtonArrow;
+        [SerializeField]
+        private RectTransform _showHudButton;
 
         [Space]
         [SerializeField]
@@ -53,8 +55,9 @@ namespace YARG.Gameplay.HUD
                 return;
             }
 
-            // Get the hidden position based on the container, and then move to that position
-            _hudHiddenY = -_container.sizeDelta.y;
+            // Get the hidden position based on the container, accounting for show button arrow height
+            YargLogger.LogDebug($"Size delta: {_container.sizeDelta}, Show button arrow size delta: {_showHudButtonArrow.sizeDelta}");
+            _hudHiddenY = -_container.sizeDelta.y + _showHudButton.sizeDelta.y;
             _container.position = _container.position.WithY(_hudHiddenY);
 
             // Listen for menu inputs
