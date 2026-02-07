@@ -14,6 +14,7 @@ using YARG.Helpers;
 using YARG.Input;
 using YARG.Player;
 using YARG.Settings;
+using static YARG.Gameplay.Player.PlayerEvent;
 
 namespace YARG.Gameplay.Player
 {
@@ -220,11 +221,7 @@ namespace YARG.Gameplay.Player
 
             engine.OnNoteMissed += (_, _) =>
             {
-                if (LastCombo >= 2)
-                {
-                    GlobalAudioHandler.PlaySoundEffect(SfxSample.NoteMiss);
-                }
-
+                OnEvent(new NoteMissed(LastCombo));
                 LastCombo = Combo;
             };
 
@@ -549,11 +546,6 @@ namespace YARG.Gameplay.Player
 
             Engine = CreateEngine();
             ResetPracticeSection();
-        }
-
-        public override void SetStemMuteState(bool muted)
-        {
-            // Vocals has no stem muting
         }
 
         protected override bool InterceptInput(ref GameInput input)

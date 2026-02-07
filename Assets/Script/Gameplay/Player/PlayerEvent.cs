@@ -1,0 +1,18 @@
+﻿using System;
+
+namespace YARG.Gameplay.Player
+{
+    public abstract record PlayerEvent
+    {
+        public sealed record StarPowerChanged(bool Active) : PlayerEvent;
+        public sealed record ReplayTimeChanged(double Time) : PlayerEvent;
+        public sealed record VisualsReset : PlayerEvent;
+        public sealed record NoteHit : PlayerEvent;
+        public sealed record NoteMissed(int LastCombo) : PlayerEvent;
+        public sealed record SustainBroken : PlayerEvent;
+        public sealed record Overhit : PlayerEvent;
+        public sealed record SustainEnded : PlayerEvent;
+        public sealed record StarPowerPhraseHit : PlayerEvent;
+        public sealed record WhammyDuringSustain(float WhammyFactor) : PlayerEvent;
+    }
+}
