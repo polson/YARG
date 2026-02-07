@@ -1,4 +1,5 @@
-﻿using UnityEngine;
+﻿using System;
+using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.EventSystems;
 
@@ -30,13 +31,21 @@ namespace YARG.Gameplay.HUD
 
         private DraggingDisplay _draggingDisplay;
 
-        private Vector2 _originalPosition;
+        private Vector2 _defaultPosition;
         private Vector2 _storedPosition;
 
         private bool _isSelected;
         private bool _isDragging;
 
-        public bool HasCustomPosition => _storedPosition != _originalPosition;
+        public bool HasCustomPosition =>
+            _manager.PositionProfile.HasElementPosition(_draggableElementName);
+
+        public event Action<bool> EditModeChanged;
+
+        public void SetDefaultPosition(Vector2 position)
+        {
+            _defaultPosition = position;
+        }
 
         protected override void OnSongStarted()
         {
@@ -49,11 +58,18 @@ namespace YARG.Gameplay.HUD
             _manager = GetComponentInParent<DraggableHudManager>();
             _rectTransform = GetComponent<RectTransform>();
 
-            _originalPosition = _rectTransform.anchoredPosition;
-            _storedPosition = _manager.PositionProfile
-                .GetElementPositionOrDefault(_draggableElementName, _originalPosition);
+            _defaultPosition = _rectTransform.anchoredPosition;
 
-            _rectTransform.anchoredPosition = _storedPosition;
+            var customPosition = _manager.PositionProfile.GetElementPosition(_draggableElementName);
+            if (customPosition.HasValue)
+            {
+                _storedPosition = customPosition.Value;
+                _rectTransform.anchoredPosition = _storedPosition;
+            }
+            else
+            {
+                _storedPosition = _defaultPosition;
+            }
 
             _draggingDisplay = Instantiate(_draggingDisplayPrefab, transform);
             _draggingDisplay.DraggableHud = this;
@@ -95,6 +111,7 @@ namespace YARG.Gameplay.HUD
         {
             _draggingDisplay.gameObject.SetActive(on);
             _onEditModeChanged.Invoke(on);
+            EditModeChanged?.Invoke(on);
         }
 
         public void OnBeginDrag(PointerEventData eventData)
@@ -161,8 +178,9 @@ namespace YARG.Gameplay.HUD
 
         public void ResetElement()
         {
-            _rectTransform.anchoredPosition = _originalPosition;
-            SavePosition();
+            _rectTransform.anchoredPosition = _defaultPosition;
+            _storedPosition = _defaultPosition;
+            _manager.PositionProfile.RemoveElementPosition(_draggableElementName);
         }
 
         private void SavePosition()

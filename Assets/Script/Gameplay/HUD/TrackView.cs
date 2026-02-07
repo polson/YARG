@@ -1,6 +1,7 @@
 using System;
 using UnityEngine;
 using YARG.Core.Engine;
+using YARG.Core.Logging;
 using YARG.Gameplay.Visuals;
 using YARG.Helpers.Extensions;
 using YARG.Player;
@@ -42,6 +43,8 @@ namespace YARG.Gameplay.HUD
 
         private readonly Vector3 _hiddenPosition = new(-10000f, -10000f, 0f);
 
+        private bool _isEditingHighway;
+
         public void Initialize(HighwayCameraRendering highwayRenderer)
         {
             _highwayRenderer = highwayRenderer;
@@ -49,6 +52,7 @@ namespace YARG.Gameplay.HUD
             _highwayDraggable = _highwayEditContainer.GetComponent<DraggableHudElement>();
             _highwayEditCanvas = _highwayEditContainer.GetComponentInParent<Canvas>();
             _highwayEditParentRect = _highwayEditContainer.parent as RectTransform;
+            _highwayDraggable.EditModeChanged += OnHighwayEditEnabled;
         }
 
         public void UpdateHUDPosition(int highwayIndex, int highwayCount)
@@ -65,7 +69,7 @@ namespace YARG.Gameplay.HUD
 
         private void UpdateTopHud(int highwayIndex)
         {
-            if (_topDraggable != null && !_topDraggable.HasCustomPosition)
+            if (!_topDraggable.HasCustomPosition)
             {
                 // Place top elements at 100% depth of the track, plus some extra amount above the track.
                 var extraOffset = TOP_ELEMENT_EXTRA_OFFSET * Screen.height / 1000f;
@@ -73,14 +77,15 @@ namespace YARG.Gameplay.HUD
                     _highwayRenderer.GetTrackPositionScreenSpace(highwayIndex, 0.5f, 1.0f)?.AddY(extraOffset)
                     ?? _hiddenPosition;
                 _topElementContainer.position = topPosition;
+                _topDraggable.SetDefaultPosition(_topElementContainer.anchoredPosition);
             }
         }
 
         private void UpdateCenterHud(int highwayIndex)
         {
-            var centerPosition =
-                _highwayRenderer.GetTrackPositionScreenSpace(highwayIndex, 0.5f, CENTER_ELEMENT_DEPTH)
-                ?? _hiddenPosition;
+            var trackPositionScreenSpace =
+                _highwayRenderer.GetTrackPositionScreenSpace(highwayIndex, 0.5f, CENTER_ELEMENT_DEPTH);
+            var centerPosition = trackPositionScreenSpace ?? _hiddenPosition;
             _centerElementContainer.transform.position = centerPosition;
         }
 
@@ -107,14 +112,34 @@ namespace YARG.Gameplay.HUD
                 return;
             }
 
-            if (_highwayDraggable == null || !_highwayDraggable.HasCustomPosition)
+            if (!_highwayDraggable.HasCustomPosition)
             {
                 _highwayEditContainer.anchoredPosition = localCenter.Value;
-                return;
+                _highwayDraggable?.SetDefaultPosition(localCenter.Value);
             }
+            else
+            {
+                ApplyHighwayRenderOffset(_highwayEditContainer.anchoredPosition.x);
+            }
+        }
 
-            var xOffsetLocal = _highwayEditContainer.anchoredPosition.x;
-            ApplyHighwayRenderOffset(xOffsetLocal);
+        private void OnHighwayEditEnabled(bool on)
+        {
+            _isEditingHighway = on;
+            if (!on && !_highwayDraggable.HasCustomPosition)
+            {
+                ApplyHighwayRenderOffset(0f);
+            }
+        }
+
+        private void LateUpdate()
+        {
+            if (_isEditingHighway)
+            {
+                ApplyHighwayRenderOffset(_highwayEditContainer.anchoredPosition.x);
+                UpdateTopHud(0);
+                UpdateCenterHud(0);
+            }
         }
 
         private void ApplyHighwayRenderOffset(float xOffsetLocal)
@@ -192,6 +217,11 @@ namespace YARG.Gameplay.HUD
             _soloBox.ForceReset();
             _textNotifications.ForceReset();
             _countdownDisplay.ForceReset();
+        }
+
+        private void OnDestroy()
+        {
+            _highwayDraggable.EditModeChanged -= OnHighwayEditEnabled;
         }
     }
 }
