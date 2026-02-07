@@ -567,6 +567,77 @@ namespace YARG.Gameplay.Visuals
         }
 
         /// <summary>
+        /// Calculates an axis-aligned screen-space bounds rectangle for the visible track.
+        /// This uses the same top and bottom world-space points as <see cref="GetTrackScreenSize"/>.
+        /// </summary>
+        /// <param name="cameraIndex">The index of the highway camera to use.</param>
+        /// <param name="camRotation">Optional camera rotation (X-axis) to apply during calculation.</param>
+        /// <returns>A bounds rect in screen pixels, or null if unavailable.</returns>
+        public Rect? GetTrackBoundsScreenSpace(int cameraIndex, float? camRotation = null)
+        {
+            if (cameraIndex < 0 || cameraIndex >= _cameras.Count)
+            {
+                YargLogger.LogFormatError("Invalid camera index: {0}", cameraIndex);
+                return null;
+            }
+
+            var camera = _cameras[cameraIndex];
+            var trackPosition = _highwayPositions[cameraIndex];
+            var originalRotation = camera.transform.localRotation;
+
+            if (camRotation.HasValue)
+            {
+                camera.transform.localRotation = Quaternion.Euler(new Vector3().WithX(camRotation.Value));
+                _camViewMatrices[cameraIndex] = camera.worldToCameraMatrix;
+            }
+
+            try
+            {
+                float halfWidth = TrackPlayer.TRACK_WIDTH / 2f;
+                var trackBottom = FindTrackBottom(camera, trackPosition);
+                var trackTop = _zeroFadePositions[cameraIndex];
+
+                // World space corners for the visible track segment.
+                Vector3 bottomLeft = new Vector3(trackPosition.x - halfWidth, trackPosition.y, trackBottom);
+                Vector3 bottomRight = new Vector3(trackPosition.x + halfWidth, trackPosition.y, trackBottom);
+                Vector3 topLeft = new Vector3(trackPosition.x - halfWidth, trackPosition.y, trackTop);
+                Vector3 topRight = new Vector3(trackPosition.x + halfWidth, trackPosition.y, trackTop);
+
+                // Viewport space.
+                Vector2 viewportBottomLeft = WorldToViewport(bottomLeft, cameraIndex);
+                Vector2 viewportBottomRight = WorldToViewport(bottomRight, cameraIndex);
+                Vector2 viewportTopLeft = WorldToViewport(topLeft, cameraIndex);
+                Vector2 viewportTopRight = WorldToViewport(topRight, cameraIndex);
+
+                if (float.IsNaN(viewportBottomLeft.x) || float.IsNaN(viewportBottomLeft.y) ||
+                    float.IsNaN(viewportBottomRight.x) || float.IsNaN(viewportBottomRight.y) ||
+                    float.IsNaN(viewportTopLeft.x) || float.IsNaN(viewportTopLeft.y) ||
+                    float.IsNaN(viewportTopRight.x) || float.IsNaN(viewportTopRight.y))
+                {
+                    return null;
+                }
+
+                // Screen space (same Y conversion as GetTrackPositionScreenSpace).
+                Vector2 screenBottomLeft = new Vector2(viewportBottomLeft.x * Screen.width, (1f - viewportBottomLeft.y) * Screen.height);
+                Vector2 screenBottomRight = new Vector2(viewportBottomRight.x * Screen.width, (1f - viewportBottomRight.y) * Screen.height);
+                Vector2 screenTopLeft = new Vector2(viewportTopLeft.x * Screen.width, (1f - viewportTopLeft.y) * Screen.height);
+                Vector2 screenTopRight = new Vector2(viewportTopRight.x * Screen.width, (1f - viewportTopRight.y) * Screen.height);
+
+                float minX = Mathf.Min(screenBottomLeft.x, screenBottomRight.x, screenTopLeft.x, screenTopRight.x);
+                float maxX = Mathf.Max(screenBottomLeft.x, screenBottomRight.x, screenTopLeft.x, screenTopRight.x);
+                float minY = Mathf.Min(screenBottomLeft.y, screenBottomRight.y, screenTopLeft.y, screenTopRight.y);
+                float maxY = Mathf.Max(screenBottomLeft.y, screenBottomRight.y, screenTopLeft.y, screenTopRight.y);
+
+                return Rect.MinMaxRect(minX, minY, maxX, maxY);
+            }
+            finally
+            {
+                camera.transform.localRotation = originalRotation;
+                _camViewMatrices[cameraIndex] = camera.worldToCameraMatrix;
+            }
+        }
+
+        /// <summary>
         /// Calculates the width and height of the visible track in screen space (pixels).
         /// This considers the top of the track to be the zero fade position.
         /// </summary>
@@ -575,51 +646,9 @@ namespace YARG.Gameplay.Visuals
         /// If null, uses the camera's current rotation.
         /// This is useful for knowing the screen size of the raised track ahead of time</param>
         /// <returns>A Vector2 containing the lane width (x) and height (y) in screen pixels or Vector2.zero if the camera index is invalid.</returns>
-        private Vector2 GetTrackScreenSize(int cameraIndex, float? camRotation = null)
+        public Vector2 GetTrackScreenSize(int cameraIndex, float? camRotation = null)
         {
-            if (cameraIndex < 0 || cameraIndex >= _cameras.Count)
-            {
-                YargLogger.LogFormatError("Invalid camera index: {0}", cameraIndex);
-                return Vector2.zero;
-            }
-
-            var camera = _cameras[cameraIndex];
-            var trackPosition = _highwayPositions[cameraIndex];
-            var originalRotation = camera.transform.localRotation;
-
-            // Apply custom rotation for the calculation if needed (e.g. for raised highway position)
-            if (camRotation.HasValue)
-            {
-                camera.transform.localRotation = Quaternion.Euler(new Vector3().WithX(camRotation.Value));
-                _camViewMatrices[cameraIndex] = camera.worldToCameraMatrix;
-            }
-
-            // Get the world space positions of the track corners assuming the screen bottom is the widest part of the track
-            float halfWidth = TrackPlayer.TRACK_WIDTH / 2f;
-            var trackBottom = FindTrackBottom(camera, trackPosition);
-            var trackTop = _zeroFadePositions[cameraIndex];
-
-            // World space
-            Vector3 bottomLeft = new Vector3(trackPosition.x - halfWidth, trackPosition.y, trackBottom);
-            Vector3 bottomRight = new Vector3(trackPosition.x + halfWidth, trackPosition.y, trackBottom);
-            Vector3 topLeft = new Vector3(trackPosition.x - halfWidth, trackPosition.y, trackTop);
-
-            // Viewport space
-            Vector2 viewportBottomLeft = WorldToViewport(bottomLeft, cameraIndex);
-            Vector2 viewportBottomRight = WorldToViewport(bottomRight, cameraIndex);
-            Vector2 viewportTopLeft = WorldToViewport(topLeft, cameraIndex);
-            float viewportWidth = Mathf.Abs(viewportBottomRight.x - viewportBottomLeft.x);
-            float viewportHeight = Mathf.Abs(viewportTopLeft.y - viewportBottomLeft.y);
-
-            // Screen space
-            float widthPixels = viewportWidth * Screen.width;
-            float heightPixels = viewportHeight * Screen.height;
-
-            // Restore the original camera rotation
-            camera.transform.localRotation = originalRotation;
-            _camViewMatrices[cameraIndex] = camera.worldToCameraMatrix;
-
-            return new Vector2(widthPixels, heightPixels);
+            return GetTrackBoundsScreenSpace(cameraIndex, camRotation)?.size ?? Vector2.zero;
         }
 
         // Find the actual bottom z value of the track by raycasting from the bottom center of the screen.

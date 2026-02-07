@@ -1,7 +1,8 @@
-﻿using System;
+using System;
 using UnityEngine;
 using YARG.Core.Engine;
 using YARG.Gameplay.Visuals;
+using YARG.Helpers.Extensions;
 using YARG.Player;
 
 namespace YARG.Gameplay.HUD
@@ -14,6 +15,8 @@ namespace YARG.Gameplay.HUD
         private RectTransform _centerElementContainer;
         [SerializeField]
         private RectTransform _scaleContainer;
+        [SerializeField]
+        private RectTransform _highwayEditContainer;
 
         [Space]
         [SerializeField]
@@ -25,13 +28,17 @@ namespace YARG.Gameplay.HUD
         [SerializeField]
         private PlayerNameDisplay _playerNameDisplay;
 
-        private HighwayCameraRendering      _highwayRenderer;
+
+        private HighwayCameraRendering _highwayRenderer;
         private Vector3 _lastTrackPlayerPosition;
 
         private const float CENTER_ELEMENT_DEPTH = 0.35f;
         private const float TOP_ELEMENT_EXTRA_OFFSET = 8f;
+        private const float HIGHWAY_EDIT_BOX_PADDING = 8f;
 
         private DraggableHudElement _topDraggable;
+        private Canvas _highwayEditCanvas;
+        private RectTransform _highwayEditParentRect;
 
         private Vector3 _hiddenPosition = new Vector3(-10000f, -10000f, 0f);
 
@@ -39,20 +46,24 @@ namespace YARG.Gameplay.HUD
         {
             _highwayRenderer = highwayRenderer;
             _topDraggable = _topElementContainer.GetComponent<DraggableHudElement>();
+            _highwayEditCanvas = _highwayEditContainer.GetComponentInParent<Canvas>();
+            _highwayEditParentRect = _highwayEditContainer.parent as RectTransform;
         }
 
         public void UpdateHUDPosition(int highwayIndex, int highwayCount)
         {
-            //Scale ui according to number of highways,
-            //1 highway = 1.0 scale, 2 highways = 0.9 scale, 3 highways = 0.8 scale, etc, minimum of 0.5
+            // Scale ui according to number of highways,
+            // 1 highway = 1.0 scale, 2 highways = 0.9 scale, 3 highways = 0.8 scale, etc, minimum of 0.5
             var newScale = Math.Max(0.5f, 1.1f - (0.1f * highwayCount));
             _scaleContainer.localScale = _scaleContainer.localScale.WithX(newScale).WithY(newScale);
 
-            var centerPosition =
-                _highwayRenderer.GetTrackPositionScreenSpace(highwayIndex, 0.5f, CENTER_ELEMENT_DEPTH)
-                ?? _hiddenPosition;
-            _centerElementContainer.transform.position = centerPosition;
+            UpdateTopHud(highwayIndex);
+            UpdateCenterHud(highwayIndex);
+            UpdateTrackHud(highwayIndex);
+        }
 
+        private void UpdateTopHud(int highwayIndex)
+        {
             if (_topDraggable != null && !_topDraggable.HasCustomPosition)
             {
                 // Place top elements at 100% depth of the track, plus some extra amount above the track.
@@ -61,6 +72,41 @@ namespace YARG.Gameplay.HUD
                     _highwayRenderer.GetTrackPositionScreenSpace(highwayIndex, 0.5f, 1.0f)?.AddY(extraOffset)
                     ?? _hiddenPosition;
                 _topElementContainer.position = topPosition;
+            }
+        }
+
+        private void UpdateCenterHud(int highwayIndex)
+        {
+            var centerPosition =
+                _highwayRenderer.GetTrackPositionScreenSpace(highwayIndex, 0.5f, CENTER_ELEMENT_DEPTH)
+                ?? _hiddenPosition;
+            _centerElementContainer.transform.position = centerPosition;
+        }
+
+        private void UpdateTrackHud(int highwayIndex)
+        {
+            var trackBounds = _highwayRenderer.GetTrackBoundsScreenSpace(highwayIndex);
+            if (trackBounds == null)
+            {
+                _highwayEditContainer.position = _hiddenPosition;
+                return;
+            }
+
+            //Set highway edit box size in canvas units
+            float width = trackBounds.Value.width / _highwayEditCanvas.scaleFactor;
+            float height = trackBounds.Value.height / _highwayEditCanvas.scaleFactor;
+            _highwayEditContainer.sizeDelta = new Vector2(width, height);
+
+            //Center the edit box on the highway
+            var trackCenterScreenSpace = trackBounds.Value.center;
+            var localCenter = _highwayEditParentRect.ScreenPointToLocalPoint(trackCenterScreenSpace);
+            if (localCenter != null)
+            {
+                _highwayEditContainer.anchoredPosition = localCenter.Value;
+            }
+            else
+            {
+                _highwayEditContainer.position = _hiddenPosition;
             }
         }
 
