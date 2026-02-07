@@ -34,18 +34,19 @@ namespace YARG.Gameplay.HUD
 
         private const float CENTER_ELEMENT_DEPTH = 0.35f;
         private const float TOP_ELEMENT_EXTRA_OFFSET = 8f;
-        private const float HIGHWAY_EDIT_BOX_PADDING = 8f;
 
         private DraggableHudElement _topDraggable;
+        private DraggableHudElement _highwayDraggable;
         private Canvas _highwayEditCanvas;
         private RectTransform _highwayEditParentRect;
 
-        private Vector3 _hiddenPosition = new Vector3(-10000f, -10000f, 0f);
+        private readonly Vector3 _hiddenPosition = new(-10000f, -10000f, 0f);
 
         public void Initialize(HighwayCameraRendering highwayRenderer)
         {
             _highwayRenderer = highwayRenderer;
             _topDraggable = _topElementContainer.GetComponent<DraggableHudElement>();
+            _highwayDraggable = _highwayEditContainer.GetComponent<DraggableHudElement>();
             _highwayEditCanvas = _highwayEditContainer.GetComponentInParent<Canvas>();
             _highwayEditParentRect = _highwayEditContainer.parent as RectTransform;
         }
@@ -100,14 +101,26 @@ namespace YARG.Gameplay.HUD
             //Center the edit box on the highway
             var trackCenterScreenSpace = trackBounds.Value.center;
             var localCenter = _highwayEditParentRect.ScreenPointToLocalPoint(trackCenterScreenSpace);
-            if (localCenter != null)
-            {
-                _highwayEditContainer.anchoredPosition = localCenter.Value;
-            }
-            else
+            if (localCenter == null)
             {
                 _highwayEditContainer.position = _hiddenPosition;
+                return;
             }
+
+            if (_highwayDraggable == null || !_highwayDraggable.HasCustomPosition)
+            {
+                _highwayEditContainer.anchoredPosition = localCenter.Value;
+                return;
+            }
+
+            var xOffsetLocal = _highwayEditContainer.anchoredPosition.x;
+            ApplyHighwayRenderOffset(xOffsetLocal);
+        }
+
+        private void ApplyHighwayRenderOffset(float xOffsetLocal)
+        {
+            float offsetPx = xOffsetLocal * _highwayEditCanvas.scaleFactor;
+            _highwayRenderer.SetHorizontalOffsetPx(offsetPx);
         }
 
         public void UpdateCountdown(double countdownLength, double endTime)

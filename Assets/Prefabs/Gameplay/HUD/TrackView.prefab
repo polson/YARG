@@ -467,7 +467,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::YARG.Gameplay.HUD.DraggableHudElement
   _draggableElementName: highwayTrack
-  _horizontal: 0
+  _horizontal: 1
   _vertical: 0
   _onEditModeChanged:
     m_PersistentCalls:

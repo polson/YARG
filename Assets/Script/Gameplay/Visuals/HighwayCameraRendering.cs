@@ -49,6 +49,7 @@ namespace YARG.Gameplay.Visuals
         private bool                       _allowTextureRecreation = true;
         private bool                       _needsInitialization    = true;
         private bool                       _needsCameraReset;
+        private float                      _horizontalOffsetPx;
 
         private readonly float[]           _curveFactors       = new float[MAX_MATRICES];
         private readonly float[]           _zeroFadePositions  = new float[MAX_MATRICES];
@@ -72,6 +73,7 @@ namespace YARG.Gameplay.Visuals
             _gameManager = FindAnyObjectByType<GameManager>();
             _renderCamera = GetComponent<Camera>();
             _fadeCalcPass ??= new FadePass(this);
+            _horizontalOffsetPx = 0f;
 
             RecreateHighwayOutputTexture();
             Shader.SetGlobalInteger(YargHighwaysNumberID, 0);
@@ -278,6 +280,17 @@ namespace YARG.Gameplay.Visuals
             AddPlayerParams(trackPlayer.transform.position, trackPlayer.TrackCamera, trackPlayer.Player.CameraPreset.CurveFactor, trackPlayer.ZeroFadePosition, trackPlayer.FadeSize, trackPlayer.Player.CameraPreset.Rotation);
         }
 
+        public void SetHorizontalOffsetPx(float horizontalOffsetPx)
+        {
+            if (_cameras.Count != 1)
+            {
+                return;
+            }
+
+            _horizontalOffsetPx = horizontalOffsetPx;
+            UpdateCameraProjectionMatrices();
+        }
+
         private void ResetHighwayAlphaTexture()
         {
             if (_highwaysAlphaTexture != null)
@@ -381,8 +394,11 @@ namespace YARG.Gameplay.Visuals
                 var camera = _cameras[i];
                 _camViewMatrices[i] = camera.worldToCameraMatrix;
                 _camInvViewMatrices[i] = camera.cameraToWorldMatrix;
+
+                float safeScreenWidth = Mathf.Max(Screen.width, 0.001f);
+                float horizontalOffsetNdc = _horizontalOffsetPx / safeScreenWidth * 2f;
                 var projMatrix = GetModifiedProjectionMatrix(camera.projectionMatrix,
-                    i, _cameras.Count, _laneScales[i]);
+                    i, _cameras.Count, _laneScales[i], horizontalOffsetNdc);
                 _camProjMatrices[i] = GL.GetGPUProjectionMatrix(projMatrix, SystemInfo.graphicsUVStartsAtTop);
                 Shader.SetGlobalMatrixArray(YargHighwayCamProjMatricesID, _camProjMatrices);
             }
@@ -395,7 +411,9 @@ namespace YARG.Gameplay.Visuals
         /// <param name="index">The index of the highway [0, N-1]</param>
         /// <param name="highwayCount">Total number of highways (N)</param>
         /// <param name="highwayScale">Scale of each highway in NDC (e.g. 1.0 means full size)</param>
-        public static Matrix4x4 GetPostProjectionMatrix(int index, int highwayCount, float highwayScale)
+        /// <param name="horizontalOffsetNdc">Additional x-offset in NDC units.</param>
+        public static Matrix4x4 GetPostProjectionMatrix(int index, int highwayCount, float highwayScale,
+            float horizontalOffsetNdc = 0f)
         {
             if (highwayCount < 1)
                 return Matrix4x4.identity;
@@ -404,7 +422,7 @@ namespace YARG.Gameplay.Visuals
             float laneWidth = 2.0f / highwayCount; // NDC horizontal span is [-1, 1] → 2.0
             float centerX = -1.0f + laneWidth * (index + 0.5f);
             float offsetX = centerX + GetMultiplayerXOffset(index, highwayCount,
-                -1f * SettingsManager.Settings.HighwayTiltMultiplier.Value / highwayCount);
+                -1f * SettingsManager.Settings.HighwayTiltMultiplier.Value / highwayCount) + horizontalOffsetNdc;
             float offsetY = -1.0f + highwayScale; // Offset down if scaled vertically
 
             // This matrix modifies the output of clip space before perspective divide
@@ -422,9 +440,10 @@ namespace YARG.Gameplay.Visuals
         /// <summary>
         /// Generates the modified projection matrix (postProj * camProj).
         /// </summary>
-        public static Matrix4x4 GetModifiedProjectionMatrix(Matrix4x4 camProj, int index, int highwayCount, float highwayScale)
+        public static Matrix4x4 GetModifiedProjectionMatrix(Matrix4x4 camProj, int index, int highwayCount,
+            float highwayScale, float horizontalOffsetNdc = 0f)
         {
-            Matrix4x4 postProj = GetPostProjectionMatrix(index, highwayCount, highwayScale);
+            Matrix4x4 postProj = GetPostProjectionMatrix(index, highwayCount, highwayScale, horizontalOffsetNdc);
             return postProj * camProj; // HLSL-style: mul(postProj, proj)
         }
 
