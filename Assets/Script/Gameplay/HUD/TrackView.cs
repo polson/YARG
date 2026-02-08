@@ -51,7 +51,7 @@ namespace YARG.Gameplay.HUD
             _highwayDraggable = _highwayEditContainer.GetComponent<DraggableHudElement>();
             _highwayEditCanvas = _highwayEditContainer.GetComponentInParent<Canvas>();
             _highwayEditParentRect = _highwayEditContainer.parent as RectTransform;
-            _highwayDraggable.PositionChanged += OnHighwayDragged;
+            _highwayDraggable.PositionChanged += OnHighwayDraggablePositionChanged;
         }
 
         public void UpdateHUDPosition(int highwayIndex, int highwayCount)
@@ -60,10 +60,6 @@ namespace YARG.Gameplay.HUD
             // 1 highway = 1.0 scale, 2 highways = 0.9 scale, 3 highways = 0.8 scale, etc, minimum of 0.5
             var newScale = Math.Max(0.5f, 1.1f - (0.1f * highwayCount));
             _scaleContainer.localScale = _scaleContainer.localScale.WithX(newScale).WithY(newScale);
-
-            // Keep renderer offset in sync with canvas scaling (e.g. window resize).
-            SetHighwayOffsetX(_highwayDraggable.StoredPosition.x);
-
             UpdateTopHud(highwayIndex);
             UpdateCenterHud(highwayIndex);
             UpdateTrackPosition(highwayIndex);
@@ -96,6 +92,8 @@ namespace YARG.Gameplay.HUD
         // Keep the edit box sized to the track bounds and vertically centered to the track.
         private void UpdateTrackPosition(int highwayIndex)
         {
+            SetHighwayOffsetX(_highwayDraggable.StoredPosition.x);
+
             var trackBounds = _highwayRenderer.GetTrackBoundsScreenSpace(highwayIndex);
             if (trackBounds == null)
             {
@@ -130,9 +128,8 @@ namespace YARG.Gameplay.HUD
             }
         }
 
-        private void OnHighwayDragged(Vector2 position)
+        private void OnHighwayDraggablePositionChanged(Vector2 position)
         {
-            SetHighwayOffsetX(position.x);
             UpdateTopHud(0);
             UpdateCenterHud(0);
             UpdateTrackPosition(0);
@@ -217,7 +214,7 @@ namespace YARG.Gameplay.HUD
 
         private void OnDestroy()
         {
-            _highwayDraggable.PositionChanged -= OnHighwayDragged;
+            _highwayDraggable.PositionChanged -= OnHighwayDraggablePositionChanged;
         }
     }
 }
