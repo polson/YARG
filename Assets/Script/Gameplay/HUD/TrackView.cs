@@ -44,8 +44,6 @@ namespace YARG.Gameplay.HUD
 
         private readonly Vector3 _hiddenPosition = new(-10000f, -10000f, 0f);
 
-        private bool _isEditingHighway;
-
         public void Initialize(HighwayCameraRendering highwayRenderer)
         {
             _highwayRenderer = highwayRenderer;
@@ -53,7 +51,7 @@ namespace YARG.Gameplay.HUD
             _highwayDraggable = _highwayEditContainer.GetComponent<DraggableHudElement>();
             _highwayEditCanvas = _highwayEditContainer.GetComponentInParent<Canvas>();
             _highwayEditParentRect = _highwayEditContainer.parent as RectTransform;
-            _highwayDraggable.EditModeChanged += OnHighwayEditEnabled;
+            _highwayDraggable.PositionChanged += OnHighwayDragged;
         }
 
         public void UpdateHUDPosition(int highwayIndex, int highwayCount)
@@ -63,23 +61,28 @@ namespace YARG.Gameplay.HUD
             var newScale = Math.Max(0.5f, 1.1f - (0.1f * highwayCount));
             _scaleContainer.localScale = _scaleContainer.localScale.WithX(newScale).WithY(newScale);
 
+            // Keep renderer offset in sync with canvas scaling (e.g. window resize).
+            SetHighwayOffsetX(_highwayDraggable.StoredPosition.x);
+
             UpdateTopHud(highwayIndex);
             UpdateCenterHud(highwayIndex);
-            UpdateTrackHud(highwayIndex);
+            UpdateTrackPosition(highwayIndex);
         }
 
         private void UpdateTopHud(int highwayIndex)
         {
-            if (!_topDraggable.HasCustomPosition)
+            if (_topDraggable.HasCustomPosition)
             {
-                // Place top elements at 100% depth of the track, plus some extra amount above the track.
-                var extraOffset = TOP_ELEMENT_EXTRA_OFFSET * Screen.height / 1000f;
-                var topPosition =
-                    _highwayRenderer.GetTrackPositionScreenSpace(highwayIndex, 0.5f, 1.0f)?.AddY(extraOffset)
-                    ?? _hiddenPosition;
-                _topElementContainer.position = topPosition;
-                _topDraggable.SetDefaultPosition(_topElementContainer.anchoredPosition);
+                return;
             }
+
+            // Place top elements at 100% depth of the track, plus some extra amount above the track.
+            var extraOffset = TOP_ELEMENT_EXTRA_OFFSET * Screen.height / 1000f;
+            var topPosition =
+                _highwayRenderer.GetTrackPositionScreenSpace(highwayIndex, 0.5f, 1.0f)?.AddY(extraOffset)
+                ?? _hiddenPosition;
+            _topElementContainer.position = topPosition;
+            _topDraggable.SetDefaultPosition(_topElementContainer.anchoredPosition);
         }
 
         private void UpdateCenterHud(int highwayIndex)
@@ -90,10 +93,8 @@ namespace YARG.Gameplay.HUD
             _centerElementContainer.transform.position = centerPosition;
         }
 
-        //We need to constantly update the edit track box to follow the track, since the track moves around
-        // Actually changing the track position should happen when we are in edit mode, and we should also apply the
-        // offset once at the beginning
-        private void UpdateTrackHud(int highwayIndex)
+        // Keep the edit box sized to the track bounds and vertically centered to the track.
+        private void UpdateTrackPosition(int highwayIndex)
         {
             var trackBounds = _highwayRenderer.GetTrackBoundsScreenSpace(highwayIndex);
             if (trackBounds == null)
@@ -107,7 +108,7 @@ namespace YARG.Gameplay.HUD
             float height = trackBounds.Value.height / _highwayEditCanvas.scaleFactor;
             _highwayEditContainer.sizeDelta = new Vector2(width, height);
 
-            //Center the edit box on the highway
+            //Center the highway edit box on the highway
             var trackCenterScreenSpace = trackBounds.Value.center;
             var localCenter = _highwayEditParentRect.ScreenPointToLocalPoint(trackCenterScreenSpace);
             if (localCenter == null)
@@ -116,37 +117,25 @@ namespace YARG.Gameplay.HUD
                 return;
             }
 
-            if (_highwayDraggable.HasCustomPosition)
+            bool hasCustomPosition = _highwayDraggable.HasCustomPosition;
+            float targetX = hasCustomPosition
+                ? _highwayDraggable.StoredPosition.x
+                : localCenter.Value.x;
+            _highwayEditContainer.anchoredPosition = new Vector2(targetX, localCenter.Value.y);
+
+            if (!hasCustomPosition)
             {
-                //Move the edit hud box to the new position.  We have to do this explicitly because of how the highway
-                //resizes on screen size change
-                _highwayEditContainer.anchoredPosition = new Vector2(
-                    _highwayDraggable.StoredPosition.x,
-                    localCenter.Value.y);
-            }
-            else
-            {
-                //Highway position was not changed by user, this becomes default position
-                _highwayEditContainer.anchoredPosition = localCenter.Value;
+                //Highway position was not changed by user, this becomes default position for resetting
                 _highwayDraggable.SetDefaultPosition(localCenter.Value);
             }
         }
 
-        private void OnHighwayEditEnabled(bool on)
+        private void OnHighwayDragged(Vector2 position)
         {
-            _isEditingHighway = on;
-        }
-
-        private void LateUpdate()
-        {
-            SetHighwayOffsetX(_highwayDraggable.StoredPosition.x);
-            if (_isEditingHighway)
-            {
-                //Update the dynamic hud elements each frame in edit mode
-                UpdateTopHud(0);
-                UpdateCenterHud(0);
-                UpdateTrackHud(0);
-            }
+            SetHighwayOffsetX(position.x);
+            UpdateTopHud(0);
+            UpdateCenterHud(0);
+            UpdateTrackPosition(0);
         }
 
         private void SetHighwayOffsetX(float xOffsetLocal)
@@ -228,7 +217,7 @@ namespace YARG.Gameplay.HUD
 
         private void OnDestroy()
         {
-            _highwayDraggable.EditModeChanged -= OnHighwayEditEnabled;
+            _highwayDraggable.PositionChanged -= OnHighwayDragged;
         }
     }
 }

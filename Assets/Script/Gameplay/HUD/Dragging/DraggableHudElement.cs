@@ -40,7 +40,7 @@ namespace YARG.Gameplay.HUD
             _manager.PositionProfile.HasElementPosition(_draggableElementName);
         public Vector2 StoredPosition { get; private set; }
 
-        public event Action<bool> EditModeChanged;
+        public event Action<Vector2> PositionChanged;
 
         protected override void GameplayAwake()
         {
@@ -73,6 +73,7 @@ namespace YARG.Gameplay.HUD
             {
                 StoredPosition = _defaultPosition;
             }
+            PositionChanged?.Invoke(StoredPosition);
 
             _draggingDisplay = Instantiate(_draggingDisplayPrefab, transform);
             _draggingDisplay.DraggableHud = this;
@@ -114,7 +115,6 @@ namespace YARG.Gameplay.HUD
         {
             _draggingDisplay.gameObject.SetActive(on);
             _onEditModeChanged.Invoke(on);
-            EditModeChanged?.Invoke(on);
         }
 
         public void OnBeginDrag(PointerEventData eventData)
@@ -189,6 +189,7 @@ namespace YARG.Gameplay.HUD
             _rectTransform.anchoredPosition = _defaultPosition;
             StoredPosition = _defaultPosition;
             _manager.PositionProfile.RemoveElementPosition(_draggableElementName);
+            PositionChanged?.Invoke(StoredPosition);
         }
 
         private void SavePosition()
@@ -196,6 +197,7 @@ namespace YARG.Gameplay.HUD
             StoredPosition = _rectTransform.anchoredPosition;
             _manager.PositionProfile.SaveElementPosition(_draggableElementName,
                 _rectTransform.anchoredPosition);
+            PositionChanged?.Invoke(StoredPosition);
         }
     }
 }
