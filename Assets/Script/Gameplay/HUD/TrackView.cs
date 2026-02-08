@@ -45,7 +45,6 @@ namespace YARG.Gameplay.HUD
         private readonly Vector3 _hiddenPosition = new(-10000f, -10000f, 0f);
 
         private bool _isEditingHighway;
-        private float HighwayEditContainerX => _highwayEditContainer.anchoredPosition.x;
 
         public void Initialize(HighwayCameraRendering highwayRenderer)
         {
@@ -119,13 +118,11 @@ namespace YARG.Gameplay.HUD
 
             if (_highwayDraggable.HasCustomPosition)
             {
+                //Move the edit hud box to the new position.  We have to do this explicitly because of how the highway
+                //resizes on screen size change
                 _highwayEditContainer.anchoredPosition = new Vector2(
-                    HighwayEditContainerX,
+                    _highwayDraggable.StoredPosition.x,
                     localCenter.Value.y);
-
-                // The highway has a custom x offset, we want to set it asap.  Ok to call this each frame since
-                // it will short circuit if the value hasn't changed
-                SetHighwayOffsetX(HighwayEditContainerX);
             }
             else
             {
@@ -142,16 +139,14 @@ namespace YARG.Gameplay.HUD
 
         private void LateUpdate()
         {
-            if (!_isEditingHighway)
+            SetHighwayOffsetX(_highwayDraggable.StoredPosition.x);
+            if (_isEditingHighway)
             {
-                return;
+                //Update the dynamic hud elements each frame in edit mode
+                UpdateTopHud(0);
+                UpdateCenterHud(0);
+                UpdateTrackHud(0);
             }
-
-            //Update the track offset on each frame while we are in edit mode
-            SetHighwayOffsetX(HighwayEditContainerX);
-            UpdateTopHud(0);
-            UpdateCenterHud(0);
-            UpdateTrackHud(0);
         }
 
         private void SetHighwayOffsetX(float xOffsetLocal)

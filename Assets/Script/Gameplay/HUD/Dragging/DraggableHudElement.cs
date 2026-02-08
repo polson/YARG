@@ -32,15 +32,21 @@ namespace YARG.Gameplay.HUD
         private DraggingDisplay _draggingDisplay;
 
         private Vector2 _defaultPosition;
-        private Vector2 _storedPosition;
 
         private bool _isSelected;
         private bool _isDragging;
 
         public bool HasCustomPosition =>
-            _manager?.PositionProfile?.HasElementPosition(_draggableElementName) == true;
+            _manager.PositionProfile.HasElementPosition(_draggableElementName);
+        public Vector2 StoredPosition { get; private set; }
 
         public event Action<bool> EditModeChanged;
+
+        protected override void GameplayAwake()
+        {
+            _manager = GetComponentInParent<DraggableHudManager>();
+            _rectTransform = GetComponent<RectTransform>();
+        }
 
         public void SetDefaultPosition(Vector2 position)
         {
@@ -55,20 +61,17 @@ namespace YARG.Gameplay.HUD
                 return;
             }
 
-            _manager = GetComponentInParent<DraggableHudManager>();
-            _rectTransform = GetComponent<RectTransform>();
-
             _defaultPosition = _rectTransform.anchoredPosition;
 
             var customPosition = _manager.PositionProfile.GetElementPosition(_draggableElementName);
             if (customPosition.HasValue)
             {
-                _storedPosition = customPosition.Value;
-                _rectTransform.anchoredPosition = _storedPosition;
+                StoredPosition = customPosition.Value;
+                _rectTransform.anchoredPosition = StoredPosition;
             }
             else
             {
-                _storedPosition = _defaultPosition;
+                StoredPosition = _defaultPosition;
             }
 
             _draggingDisplay = Instantiate(_draggingDisplayPrefab, transform);
@@ -177,20 +180,20 @@ namespace YARG.Gameplay.HUD
 
         public void RevertElement()
         {
-            _rectTransform.anchoredPosition = _storedPosition;
+            _rectTransform.anchoredPosition = StoredPosition;
             SavePosition();
         }
 
         public void ResetElement()
         {
             _rectTransform.anchoredPosition = _defaultPosition;
-            _storedPosition = _defaultPosition;
+            StoredPosition = _defaultPosition;
             _manager.PositionProfile.RemoveElementPosition(_draggableElementName);
         }
 
         private void SavePosition()
         {
-            _storedPosition = _rectTransform.anchoredPosition;
+            StoredPosition = _rectTransform.anchoredPosition;
             _manager.PositionProfile.SaveElementPosition(_draggableElementName,
                 _rectTransform.anchoredPosition);
         }
