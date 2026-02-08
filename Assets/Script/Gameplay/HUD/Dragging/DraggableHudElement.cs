@@ -38,7 +38,7 @@ namespace YARG.Gameplay.HUD
         private bool _isDragging;
 
         public bool HasCustomPosition =>
-            _manager.PositionProfile.HasElementPosition(_draggableElementName);
+            _manager?.PositionProfile?.HasElementPosition(_draggableElementName) == true;
 
         public event Action<bool> EditModeChanged;
 
