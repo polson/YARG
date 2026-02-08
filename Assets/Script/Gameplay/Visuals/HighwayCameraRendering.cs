@@ -579,15 +579,12 @@ namespace YARG.Gameplay.Visuals
             );
 
             var viewportPosition = WorldToViewport(worldPositionAtPercent, trackIndex);
-            if (float.IsNaN(viewportPosition.x) || float.IsNaN(viewportPosition.y))
+            if (viewportPosition.HasNaN())
             {
                 return null;
             }
 
-            float screenX = viewportPosition.x * Screen.width;
-            float screenY = (1.0f - viewportPosition.y) * Screen.height;
-
-            return new Vector2(screenX, screenY);
+            return ViewportToScreen(viewportPosition);
         }
 
         /// <summary>
@@ -633,32 +630,43 @@ namespace YARG.Gameplay.Visuals
                 Vector2 viewportTopLeft = WorldToViewport(topLeft, cameraIndex);
                 Vector2 viewportTopRight = WorldToViewport(topRight, cameraIndex);
 
-                if (float.IsNaN(viewportBottomLeft.x) || float.IsNaN(viewportBottomLeft.y) ||
-                    float.IsNaN(viewportBottomRight.x) || float.IsNaN(viewportBottomRight.y) ||
-                    float.IsNaN(viewportTopLeft.x) || float.IsNaN(viewportTopLeft.y) ||
-                    float.IsNaN(viewportTopRight.x) || float.IsNaN(viewportTopRight.y))
+                if (viewportBottomLeft.HasNaN() ||
+                    viewportBottomRight.HasNaN() ||
+                    viewportTopLeft.HasNaN() ||
+                    viewportTopRight.HasNaN())
                 {
                     return null;
                 }
 
                 // Screen space (same Y conversion as GetTrackPositionScreenSpace)
-                Vector2 screenBottomLeft = new Vector2(viewportBottomLeft.x * Screen.width, (1f - viewportBottomLeft.y) * Screen.height);
-                Vector2 screenBottomRight = new Vector2(viewportBottomRight.x * Screen.width, (1f - viewportBottomRight.y) * Screen.height);
-                Vector2 screenTopLeft = new Vector2(viewportTopLeft.x * Screen.width, (1f - viewportTopLeft.y) * Screen.height);
-                Vector2 screenTopRight = new Vector2(viewportTopRight.x * Screen.width, (1f - viewportTopRight.y) * Screen.height);
+                Vector2 screenBottomLeft = ViewportToScreen(viewportBottomLeft);
+                Vector2 screenBottomRight = ViewportToScreen(viewportBottomRight);
+                Vector2 screenTopLeft = ViewportToScreen(viewportTopLeft);
+                Vector2 screenTopRight = ViewportToScreen(viewportTopRight);
 
-                float minX = Mathf.Min(screenBottomLeft.x, screenBottomRight.x, screenTopLeft.x, screenTopRight.x);
-                float maxX = Mathf.Max(screenBottomLeft.x, screenBottomRight.x, screenTopLeft.x, screenTopRight.x);
-                float minY = Mathf.Min(screenBottomLeft.y, screenBottomRight.y, screenTopLeft.y, screenTopRight.y);
-                float maxY = Mathf.Max(screenBottomLeft.y, screenBottomRight.y, screenTopLeft.y, screenTopRight.y);
-
-                return Rect.MinMaxRect(minX, minY, maxX, maxY);
+                return GetBoundsRect(screenBottomLeft, screenBottomRight, screenTopLeft, screenTopRight);
             }
             finally
             {
+                //Reset camera rotation to original position
                 camera.transform.localRotation = originalRotation;
                 _camViewMatrices[cameraIndex] = camera.worldToCameraMatrix;
             }
+        }
+
+        // Find the actual bottom z value of the track by raycasting from the bottom center of the screen.
+        // Some camera presets might have the bottom of the track off-screen.
+        private static float FindTrackBottom(Camera camera, Vector3 trackPosition)
+        {
+            var trackPlane = new Plane(Vector3.up, new Vector3(0, trackPosition.y, 0));
+            var bottomRay = camera.ViewportPointToRay(new Vector3(trackPosition.x, 0f, 0f));
+            if (!trackPlane.Raycast(bottomRay, out var enter))
+            {
+                // Track is off the screen at bottom position, default to best guess
+                return -2f;
+            }
+            var bottomIntersection = bottomRay.GetPoint(enter);
+            return bottomIntersection.z;
         }
 
         /// <summary>
@@ -675,19 +683,34 @@ namespace YARG.Gameplay.Visuals
             return GetTrackBoundsScreenSpace(cameraIndex, camRotation)?.size ?? Vector2.zero;
         }
 
-        // Find the actual bottom z value of the track by raycasting from the bottom center of the screen.
-        // Some camera presets might have the bottom of the track off-screen.
-        private static float FindTrackBottom(Camera camera, Vector3 trackPosition)
+        private static Vector2 ViewportToScreen(Vector2 viewportPosition)
         {
-            var trackPlane = new Plane(Vector3.up, new Vector3(0, trackPosition.y, 0));
-            var bottomRay = camera.ViewportPointToRay(new Vector3(trackPosition.x, 0f, 0f));
-            if (!trackPlane.Raycast(bottomRay, out var enter))
-            {
-                // Track is off the screen at bottom position, default to best guess
-                return -2f;
-            }
-            var bottomIntersection = bottomRay.GetPoint(enter);
-            return bottomIntersection.z;
+            return new Vector2(viewportPosition.x * Screen.width, (1f - viewportPosition.y) * Screen.height);
+        }
+
+        /// <summary>
+        /// Builds a rect that bounds the 4 points
+        /// </summary>
+        private static Rect GetBoundsRect(Vector2 bottomLeft, Vector2 bottomRight, Vector2 topLeft, Vector2 topRight)
+        {
+            var min = Vector2.Min(
+                Vector2.Min(bottomLeft, bottomRight),
+                Vector2.Min(topLeft, topRight)
+                );
+            var max = Vector2.Max(
+                Vector2.Max(bottomLeft, bottomRight),
+                Vector2.Max(topLeft, topRight)
+                );
+            return Rect.MinMaxRect(min.x, min.y, max.x, max.y);
+        }
+
+    }
+
+    internal static class HighwayCameraRenderingVector2Extensions
+    {
+        public static bool HasNaN(this Vector2 point)
+        {
+            return float.IsNaN(point.x) || float.IsNaN(point.y);
         }
     }
 }
