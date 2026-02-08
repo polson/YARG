@@ -134,6 +134,7 @@ namespace YARG.Gameplay.HUD
             }
 
             var position = _rectTransform.anchoredPosition;
+            var previousPosition = position;
 
             if (_horizontal)
             {
@@ -145,7 +146,11 @@ namespace YARG.Gameplay.HUD
                 position.y += eventData.delta.y;
             }
 
-            _rectTransform.anchoredPosition = position;
+            if (position != previousPosition)
+            {
+                _rectTransform.anchoredPosition = position;
+                SavePosition();
+            }
         }
 
         public void OnEndDrag(PointerEventData eventData)

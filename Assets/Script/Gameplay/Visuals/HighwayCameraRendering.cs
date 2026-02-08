@@ -287,6 +287,11 @@ namespace YARG.Gameplay.Visuals
                 return;
             }
 
+            if (Mathf.Approximately(_horizontalOffsetPx, horizontalOffsetPx))
+            {
+                return;
+            }
+
             _horizontalOffsetPx = horizontalOffsetPx;
             UpdateCameraProjectionMatrices();
         }
@@ -616,13 +621,13 @@ namespace YARG.Gameplay.Visuals
                 var trackBottom = FindTrackBottom(camera, trackPosition);
                 var trackTop = _zeroFadePositions[cameraIndex];
 
-                // World space corners for the visible track segment.
+                // World space corners for the visible track segment
                 Vector3 bottomLeft = new Vector3(trackPosition.x - halfWidth, trackPosition.y, trackBottom);
                 Vector3 bottomRight = new Vector3(trackPosition.x + halfWidth, trackPosition.y, trackBottom);
                 Vector3 topLeft = new Vector3(trackPosition.x - halfWidth, trackPosition.y, trackTop);
                 Vector3 topRight = new Vector3(trackPosition.x + halfWidth, trackPosition.y, trackTop);
 
-                // Viewport space.
+                // Viewport space
                 Vector2 viewportBottomLeft = WorldToViewport(bottomLeft, cameraIndex);
                 Vector2 viewportBottomRight = WorldToViewport(bottomRight, cameraIndex);
                 Vector2 viewportTopLeft = WorldToViewport(topLeft, cameraIndex);
@@ -636,7 +641,7 @@ namespace YARG.Gameplay.Visuals
                     return null;
                 }
 
-                // Screen space (same Y conversion as GetTrackPositionScreenSpace).
+                // Screen space (same Y conversion as GetTrackPositionScreenSpace)
                 Vector2 screenBottomLeft = new Vector2(viewportBottomLeft.x * Screen.width, (1f - viewportBottomLeft.y) * Screen.height);
                 Vector2 screenBottomRight = new Vector2(viewportBottomRight.x * Screen.width, (1f - viewportBottomRight.y) * Screen.height);
                 Vector2 screenTopLeft = new Vector2(viewportTopLeft.x * Screen.width, (1f - viewportTopLeft.y) * Screen.height);

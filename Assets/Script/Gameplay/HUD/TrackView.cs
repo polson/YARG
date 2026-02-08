@@ -10,14 +10,15 @@ namespace YARG.Gameplay.HUD
 {
     public class TrackView : MonoBehaviour
     {
+
+        [SerializeField]
+        private RectTransform _highwayEditContainer;
         [SerializeField]
         private RectTransform _topElementContainer;
         [SerializeField]
         private RectTransform _centerElementContainer;
         [SerializeField]
         private RectTransform _scaleContainer;
-        [SerializeField]
-        private RectTransform _highwayEditContainer;
 
         [Space]
         [SerializeField]
@@ -44,6 +45,7 @@ namespace YARG.Gameplay.HUD
         private readonly Vector3 _hiddenPosition = new(-10000f, -10000f, 0f);
 
         private bool _isEditingHighway;
+        private float HighwayEditContainerX => _highwayEditContainer.anchoredPosition.x;
 
         public void Initialize(HighwayCameraRendering highwayRenderer)
         {
@@ -89,6 +91,9 @@ namespace YARG.Gameplay.HUD
             _centerElementContainer.transform.position = centerPosition;
         }
 
+        //We need to constantly update the edit track box to follow the track, since the track moves around
+        // Actually changing the track position should happen when we are in edit mode, and we should also apply the
+        // offset once at the beginning
         private void UpdateTrackHud(int highwayIndex)
         {
             var trackBounds = _highwayRenderer.GetTrackBoundsScreenSpace(highwayIndex);
@@ -112,37 +117,44 @@ namespace YARG.Gameplay.HUD
                 return;
             }
 
-            if (!_highwayDraggable.HasCustomPosition)
+            if (_highwayDraggable.HasCustomPosition)
             {
-                _highwayEditContainer.anchoredPosition = localCenter.Value;
-                _highwayDraggable?.SetDefaultPosition(localCenter.Value);
+                _highwayEditContainer.anchoredPosition = new Vector2(
+                    HighwayEditContainerX,
+                    localCenter.Value.y);
+
+                // The highway has a custom x offset, we want to set it asap.  Ok to call this each frame since
+                // it will short circuit if the value hasn't changed
+                SetHighwayOffsetX(HighwayEditContainerX);
             }
             else
             {
-                ApplyHighwayRenderOffset(_highwayEditContainer.anchoredPosition.x);
+                //Highway position was not changed by user, this becomes default position
+                _highwayEditContainer.anchoredPosition = localCenter.Value;
+                _highwayDraggable.SetDefaultPosition(localCenter.Value);
             }
         }
 
         private void OnHighwayEditEnabled(bool on)
         {
             _isEditingHighway = on;
-            if (!on && !_highwayDraggable.HasCustomPosition)
-            {
-                ApplyHighwayRenderOffset(0f);
-            }
         }
 
         private void LateUpdate()
         {
-            if (_isEditingHighway)
+            if (!_isEditingHighway)
             {
-                ApplyHighwayRenderOffset(_highwayEditContainer.anchoredPosition.x);
-                UpdateTopHud(0);
-                UpdateCenterHud(0);
+                return;
             }
+
+            //Update the track offset on each frame while we are in edit mode
+            SetHighwayOffsetX(HighwayEditContainerX);
+            UpdateTopHud(0);
+            UpdateCenterHud(0);
+            UpdateTrackHud(0);
         }
 
-        private void ApplyHighwayRenderOffset(float xOffsetLocal)
+        private void SetHighwayOffsetX(float xOffsetLocal)
         {
             float offsetPx = xOffsetLocal * _highwayEditCanvas.scaleFactor;
             _highwayRenderer.SetHorizontalOffsetPx(offsetPx);
