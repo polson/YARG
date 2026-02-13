@@ -319,6 +319,7 @@ namespace YARG.Gameplay
             _songRunner.SetSongTime(time, delayTime);
 
             BeatEventHandler.Reset();
+            CrowdEventHandler.Reset();
             BackgroundManager.SetTime(_songRunner.SongTime + Song.SongOffsetSeconds);
             VenueCameraManager?.ResetTime(time);
             VenueCharacterManager?.ResetTime(time);

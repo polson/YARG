@@ -121,6 +121,18 @@ namespace YARG.Playback
             }
         }
 
+        public void Reset()
+        {
+            GlobalAudioHandler.StopSoundEffect(_selectedOpenSample);
+            GlobalAudioHandler.StopSoundEffect(_selectedStartSample);
+            GlobalAudioHandler.StopSoundEffect(_selectedEndSample);
+
+            _eventIndex = 0;
+            _openSamplePlayed = false;
+            _startSamplePlayed = false;
+            _endSamplePlayed = false;
+        }
+
         public void Update(double time)
         {
             while (_eventIndex < _events.Count && _events[_eventIndex].Time <= time)
