@@ -1056,6 +1056,9 @@
                 "Name": "Star Power in Practice",
                 "Description": "Allow Star Power phrases while in Practice Mode."
             },
+            "EnableAsioVocals": {
+                "Name": "Enable ASIO Vocals"
+            },
             "FpsCap": {
                 "Name": "FPS Cap",
                 "Description": "The framerate cap. <color=white>YOU DO NOT NEED TO PLAY YARG ON 1000FPS.</color> VSync recommended."

@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using ManagedBass;
+using ManagedBass.Asio;
 using ManagedBass.Fx;
 using ManagedBass.Mix;
 using UnityEngine;
@@ -45,15 +46,15 @@ namespace YARG.Audio.BASS
         }
 
         private          bool _disposed;
-        public readonly  int  Stream;
+        public int  Stream { get; }
 
-        public int CompressorFX;
-        public int PitchFX;
-        public int ReverbFX;
+        public int CompressorFX { get; set; }
+        public int PitchFX { get; set; }
+        public int ReverbFX { get; set; }
 
-        public int LowEQ;
-        public int MidEQ;
-        public int HighEQ;
+        public int LowEQ { get; set; }
+        public int MidEQ { get; set; }
+        public int HighEQ { get; set; }
 
         private StreamHandle(int stream)
         {
@@ -87,10 +88,14 @@ namespace YARG.Audio.BASS
 
     public class BassAudioManager : AudioManager
     {
+        private const string AsioPrefix = "[ASIO] ";
+
         private static readonly string[] FORMATS =
         {
             ".ogg", ".mogg", ".wav", ".mp3", ".aiff", ".opus",
         };
+
+        private static bool EnableAsioVocals => SettingsManager.Settings.EnableAsioVocals.Value;
 
         protected override ReadOnlySpan<string> SupportedFormats => FORMATS;
 
@@ -104,7 +109,10 @@ namespace YARG.Audio.BASS
             string opusLibDirectory = Path.Combine(bassPath, "bassopus");
 
             _opusHandle = Bass.PluginLoad(opusLibDirectory);
-            if (_opusHandle == 0) YargLogger.LogFormatError("Failed to load .opus plugin: {0}!", Bass.LastError);
+            if (_opusHandle == 0)
+            {
+                YargLogger.LogFormatError("Failed to load .opus plugin: {0}!", Bass.LastError);
+            }
 
             Bass.Configure(Configuration.IncludeDefaultDevice, true);
 
@@ -224,6 +232,24 @@ namespace YARG.Audio.BASS
 
         protected override MicDevice? GetInputDevice(string name)
         {
+            if (name.StartsWith(AsioPrefix))
+            {
+                if (!EnableAsioVocals)
+                {
+                    return null;
+                }
+
+                string asioName = name[AsioPrefix.Length..];
+                for (int deviceIndex = 0; BassAsio.GetDeviceInfo(deviceIndex, out var info); deviceIndex++)
+                {
+                    if (info.Name == asioName)
+                    {
+                        return CreateInputDevice(deviceIndex, name);
+                    }
+                }
+                return null;
+            }
+
             for (int deviceIndex = 0; Bass.RecordGetDeviceInfo(deviceIndex, out var info); deviceIndex++)
             {
                 // Ignore disabled/claimed devices
@@ -294,6 +320,14 @@ namespace YARG.Audio.BASS
                 mics.Add((deviceIndex, info.Name));
             }
 
+            if (EnableAsioVocals)
+            {
+                for (int deviceIndex = 0; BassAsio.GetDeviceInfo(deviceIndex, out var info); deviceIndex++)
+                {
+                    mics.Add((deviceIndex, $"{AsioPrefix}{info.Name}"));
+                }
+            }
+
             return mics;
         }
 
@@ -301,7 +335,16 @@ namespace YARG.Audio.BASS
         protected override MicDevice? CreateInputDevice(int deviceId, string name)
 #nullable disable
         {
-            var device = BassMicDevice.Create(deviceId, name);
+            MicDevice device;
+            if (name.StartsWith(AsioPrefix))
+            {
+                device = BassAsioMicDevice.Create(deviceId, name);
+            }
+            else
+            {
+                device = BassMicDevice.Create(deviceId, name);
+            }
+
             device?.SetMonitoringLevel(SettingsManager.Settings.VocalMonitoring.Value);
             return device;
         }
@@ -552,10 +595,13 @@ namespace YARG.Audio.BASS
         {
 #if UNITY_EDITOR
             if (EditorUtility.audioMasterMute)
+            {
                 volume = 0;
+            }
 #endif
-            Bass.GlobalStreamVolume = (int) (10_000 * volume);
-            Bass.GlobalSampleVolume = (int) (10_000 * volume);
+            const int MAX_BASS_VOLUME = 10_000;
+            Bass.GlobalStreamVolume = (int) (MAX_BASS_VOLUME * volume);
+            Bass.GlobalSampleVolume = (int) (MAX_BASS_VOLUME * volume);
         }
 
         protected override void ToggleBuffer_Internal(bool enable)
@@ -573,6 +619,7 @@ namespace YARG.Audio.BASS
             YargLogger.LogInfo("Unloading BASS plugins");
             Bass.PluginFree(0);
             Bass.Free();
+            BassAsio.Free();
         }
 
         private static string GetBassDirectory()

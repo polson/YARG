@@ -62,7 +62,7 @@ namespace YARG.Audio.BASS
             return new MonitorPlaybackHandle(monitorPlaybackHandle, reverbHandle, applyGain);
         }
 
-        public readonly int Handle;
+        public           int Handle { get; }
         private readonly int _reverbHandle;
         private readonly int _applyGain;
 
@@ -127,10 +127,10 @@ namespace YARG.Audio.BASS
             return new RecordingHandle(handle, processedHandle, devPeriod);
         }
 
-        public readonly int Handle;
-        public readonly int ProcessedHandle;
+        public int Handle          { get; }
+        public int ProcessedHandle { get; }
 
-        public readonly int RecordPeriod;
+        public int RecordPeriod { get; }
 
         private bool _disposed;
 
@@ -222,12 +222,7 @@ namespace YARG.Audio.BASS
             fBandwidth = 2.5f, fCenter = 10_000f, fGain = -10f
         };
 
-        private float? _lastPitch;
-        private float? _lastAmplitude;
-
-        private readonly ConcurrentQueue<MicOutputFrame> _frameQueue = new();
-
-        private readonly PitchTracker _pitchDetector = new();
+        private readonly MicDataProcessor _processor = new();
 
         private readonly MonitorPlaybackHandle _monitorHandle;
 
@@ -240,7 +235,7 @@ namespace YARG.Audio.BASS
 
         public override int Reset()
         {
-            _frameQueue.Clear();
+            _processor.Clear();
 
             // Query number of bytes in the recording buffer
             int available = Bass.ChannelGetData(_recordHandle.Handle, IntPtr.Zero, (int) DataFlags.Available);
@@ -293,12 +288,12 @@ namespace YARG.Audio.BASS
 
         public override bool DequeueOutputFrame(out MicOutputFrame frame)
         {
-            return _frameQueue.TryDequeue(out frame);
+            return _processor.DequeueFrame(out frame);
         }
 
         public override void ClearOutputQueue()
         {
-            _frameQueue.Clear();
+            _processor.Clear();
         }
 
         public override void SetMonitoringLevel(float volume)
@@ -371,61 +366,13 @@ namespace YARG.Audio.BASS
 
             // Convert 16 bit buffer to floats
             // If this isn't 16 bit god knows what device they're using.
+            const float MAX_SHORT = 32768f;
             for (int i = 0; i < sampleCount; i++)
             {
-                floatBuffer[i] = buffer[i] / 32768f;
+                floatBuffer[i] = buffer[i] / MAX_SHORT;
             }
 
-            // Calculate the root mean square
-            float sum = 0f;
-            int count = 0;
-            for (int i = 0; i < sampleCount; i += 4, count++)
-            {
-                sum += floatBuffer[i] * floatBuffer[i];
-            }
-
-            sum = Mathf.Sqrt(sum / count);
-
-            // Convert to decibels to get the amplitude
-            float amplitude = 20f * Mathf.Log10(sum * 180f);
-            if (amplitude < -160f)
-            {
-                amplitude = -160f;
-            }
-
-            // Detect peaks for hit inputs
-            if (amplitude > _lastAmplitude && Mathf.Abs(amplitude - _lastAmplitude.Value) >= MIC_HIT_INPUT_THRESHOLD)
-            {
-                var hitFrame = new MicOutputFrame(InputManager.CurrentInputTime, true, -1f, -1f);
-                _frameQueue.Enqueue(hitFrame);
-            }
-
-            _lastAmplitude = amplitude;
-
-            // Skip pitch detection if not speaking
-            if (amplitude < SettingsManager.Settings.MicrophoneSensitivity.Value)
-            {
-                _lastPitch = null;
-                return;
-            }
-
-            // Process the pitch buffer
-            var pitchOutput = _pitchDetector.ProcessBuffer(floatBuffer);
-            if (pitchOutput != null)
-            {
-                _lastPitch = pitchOutput;
-            }
-
-            // We cannot push a frame if there was no pitch
-            if (_lastPitch == null)
-            {
-                return;
-            }
-
-            // Queue a MicOutput frame
-            var frame = new MicOutputFrame(InputManager.CurrentInputTime, false,
-                _lastPitch.Value, amplitude);
-            _frameQueue.Enqueue(frame);
+            _processor.Process(floatBuffer, InputManager.CurrentInputTime);
         }
 
         protected override void DisposeUnmanagedResources()

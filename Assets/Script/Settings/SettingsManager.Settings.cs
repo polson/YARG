@@ -535,6 +535,7 @@ namespace YARG.Settings
 
             #region Experimental
 
+            public ToggleSetting EnableAsioVocals { get; } = new(false);
             public ToggleSetting DataStreamEnable { get; } = new(false, DataStreamEnableCallback );
             public DropdownSetting<BandComboType> BandComboTypeSetting { get; } = new(BandComboType.Off)
             {
@@ -793,7 +794,10 @@ namespace YARG.Settings
 
             private static void InputDeviceLoggingCallback(bool value)
             {
-                if (!value) return;
+                if (!value)
+                {
+                    return;
+                }
 
                 foreach (var device in InputSystem.devices)
                 {

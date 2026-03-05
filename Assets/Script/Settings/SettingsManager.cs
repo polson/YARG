@@ -232,6 +232,7 @@ namespace YARG.Settings
             new MetadataTab("Experimental", icon: "Beaker", new CharacterPreviewBuilder())
             {
                 new HeaderMetadata("Other"),
+                nameof(Settings.EnableAsioVocals),
                 nameof(Settings.BandComboTypeSetting),
                 nameof(Settings.CustomVocalsCharacter),
                 nameof(Settings.DataStreamEnable),
