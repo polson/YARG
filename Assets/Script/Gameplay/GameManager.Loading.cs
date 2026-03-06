@@ -196,13 +196,6 @@ namespace YARG.Gameplay
             CreatePlayers();
             SetupPlayerAudio();
 
-            // Set up the crowd stem so it can be restored after muting (if it exists)
-            if (_stemStates.TryGetValue(SongStem.Crowd, out var state))
-            {
-                state.Total = 1;
-                state.Audible = 1;
-            }
-
             if (_loadState == LoadFailureState.Error)
             {
                 ToastManager.ToastError(_loadFailureMessage);
@@ -262,15 +255,16 @@ namespace YARG.Gameplay
 
         private void SetupPlayerAudio()
         {
-            _playerAudioManager = new PlayerAudioManager(this);
+            _playerAudioManager = new PlayerAudioManager(this, _backgroundStem, _mixerStems);
             foreach (var player in _players)
             {
-                var songStem = player.Player.Profile.CurrentInstrument.ToSongStem();
-                if (songStem == SongStem.Bass && _mixer[SongStem.Bass] == null)
+                var instrumentStem = player.Player.Profile.CurrentInstrument.ToSongStem();
+                if (instrumentStem == SongStem.Bass && _mixer[SongStem.Bass] == null)
                 {
-                    songStem = SongStem.Rhythm;
+                    instrumentStem = SongStem.Rhythm;
                 }
-                _playerAudioManager.AddPlayer(songStem, player);
+                var reverbStem = _mixer[instrumentStem] != null ? instrumentStem : _backgroundStem;
+                _playerAudioManager.AddPlayer(instrumentStem, reverbStem, player);
             }
         }
 
@@ -490,24 +484,6 @@ namespace YARG.Gameplay
                         _players.Add(vocalsPlayer);
                     }
 
-                    // Add (or increase total of) the stem state
-                    var stem = player.Profile.CurrentInstrument.ToSongStem();
-                    if (stem == SongStem.Bass && !_stemStates.ContainsKey(SongStem.Bass))
-                    {
-                        stem = SongStem.Rhythm;
-                    }
-
-                    if (stem != _backgroundStem && _stemStates.TryGetValue(stem, out var state))
-                    {
-                        ++state.Total;
-                        ++state.Audible;
-                    }
-                    else if (_stemStates.TryGetValue(_backgroundStem, out state))
-                    {
-                        // Ensures the stem will still play at a minimum of 50%, even if all players mute
-                        state.Total += 2;
-                        state.Audible += 2;
-                    }
                 }
             }
             catch (Exception ex)
