@@ -20,10 +20,23 @@ namespace YARG.Themes
 
         private void Start()
         {
+            EnsureThemeContainersInitialized();
+        }
+
+        private void EnsureThemeContainersInitialized()
+        {
+            if (_defaultTheme != null)
+            {
+                return;
+            }
+
             // Populate all of the default themes
             foreach (var defaultPreset in ThemePreset.Defaults)
             {
-                _themeContainers.Add(defaultPreset, defaultPreset.CreateThemeContainer());
+                if (!_themeContainers.ContainsKey(defaultPreset))
+                {
+                    _themeContainers.Add(defaultPreset, defaultPreset.CreateThemeContainer());
+                }
             }
 
             _defaultTheme = _themeContainers[ThemePreset.Default];
@@ -145,6 +158,8 @@ namespace YARG.Themes
 
         public ThemeContainer GetThemeContainer(ThemePreset preset, VisualStyle style)
         {
+            EnsureThemeContainersInitialized();
+
             // Check if the theme supports the game mode
             if (!preset.SupportedStyles.Contains(style))
             {

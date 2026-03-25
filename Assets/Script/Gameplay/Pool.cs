@@ -3,6 +3,7 @@ using System.Linq;
 using UnityEngine;
 using UnityEngine.Serialization;
 using YARG.Core.Logging;
+using YARG.Gameplay.Visuals;
 using YARG.Helpers.Extensions;
 
 namespace YARG.Gameplay
@@ -36,10 +37,12 @@ namespace YARG.Gameplay
 
         protected virtual void Awake()
         {
-            for (int i = 0; i < _prewarmAmount; i++)
+            if (!ShouldPrewarmOnAwake())
             {
-                _pooled.Push(CreateNew());
+                return;
             }
+
+            Prewarm();
         }
 
         public void SetPrefabAndReset(GameObject newPrefab)
@@ -53,10 +56,7 @@ namespace YARG.Gameplay
             _spawnedObjects.Clear();
 
             // Re-prewarm
-            for (int i = 0; i < _prewarmAmount; i++)
-            {
-                _pooled.Push(CreateNew());
-            }
+            Prewarm();
             
             stopwatch.Stop();
             LoadingTrace.LogIfSlow(
@@ -66,6 +66,19 @@ namespace YARG.Gameplay
                 newPrefab != null ? newPrefab.name : "null",
                 _prewarmAmount,
                 stopwatch.ElapsedMilliseconds);
+        }
+
+        private void Prewarm()
+        {
+            for (int i = 0; i < _prewarmAmount; i++)
+            {
+                _pooled.Push(CreateNew());
+            }
+        }
+
+        private bool ShouldPrewarmOnAwake()
+        {
+            return Prefab == null || Prefab.GetComponent<IThemeNoteCreator>() == null;
         }
 
         private IPoolable CreateNew()

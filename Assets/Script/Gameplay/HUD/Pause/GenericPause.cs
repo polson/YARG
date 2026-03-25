@@ -9,6 +9,9 @@ namespace YARG.Gameplay.HUD
 {
     public class GenericPause : GameplayBehaviour
     {
+        // Shared timestamp for measuring restart duration
+        internal static DateTime RestartStartTime;
+
         protected PauseMenuManager PauseMenuManager { get; private set; }
 
         protected override void GameplayAwake()
@@ -39,6 +42,8 @@ namespace YARG.Gameplay.HUD
 
         public virtual void Restart()
         {
+            RestartStartTime = DateTime.UtcNow;
+            YargLogger.LogFormatInfo("[RESTART] GenericPause.Restart() called at {0:O}", RestartStartTime);
             PauseMenuManager.Restart();
         }
 

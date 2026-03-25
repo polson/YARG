@@ -112,6 +112,8 @@ namespace YARG
     public sealed class LoadingContext : IDisposable
     {
         private bool _disposed;
+        private readonly bool _runGarbageCollection;
+        private bool _hasCollectedGarbage;
 
         private struct QueuedTask
         {
@@ -122,8 +124,9 @@ namespace YARG
 
         private readonly Queue<QueuedTask> _queue = new();
 
-        public LoadingContext()
+        public LoadingContext(bool runGarbageCollection = true)
         {
+            _runGarbageCollection = runGarbageCollection;
             LoadingScreen.Instance.gameObject.SetActive(true);
             Navigator.Instance.DisableMenuInputs = true;
         }
@@ -168,7 +171,12 @@ namespace YARG
                     YargLogger.LogException(ex);
                 }
             }
-            GC.Collect();
+
+            if (_runGarbageCollection && !_hasCollectedGarbage)
+            {
+                GC.Collect();
+                _hasCollectedGarbage = true;
+            }
         }
 
         public async void Dispose()

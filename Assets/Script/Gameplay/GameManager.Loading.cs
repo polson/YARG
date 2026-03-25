@@ -117,7 +117,7 @@ namespace YARG.Gameplay
         private async void Start()
         {
             // Displays the loading screen
-            using var context = new LoadingContext();
+            using var context = new LoadingContext(runGarbageCollection: false);
             var global = GlobalVariables.Instance;
 
             // Disable until everything's loaded
@@ -640,6 +640,12 @@ namespace YARG.Gameplay
 
                 var trackObject = Instantiate(prefab, GetTrackSpawnPosition(0), prefab.transform.rotation);
                 trackObject.SetActive(false);
+                var trackPlayer = trackObject.GetComponent<TrackPlayer>();
+                if (trackPlayer != null)
+                {
+                    trackPlayer.PrewarmForLoad(player);
+                }
+
                 _preloadedTrackObjects.Enqueue(new PreloadedTrackObject(prefab, trackObject));
                 preloadedCount++;
             }

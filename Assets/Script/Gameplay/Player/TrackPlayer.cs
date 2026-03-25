@@ -160,12 +160,30 @@ namespace YARG.Gameplay.Player
 
             return _visualsParent;
         }
+
+        public virtual void PrewarmForLoad(YargPlayer player)
+        {
+        }
     }
 
     public abstract class TrackPlayer<TEngine, TNote> : TrackPlayer
         where TEngine : BaseEngine
         where TNote : Note<TNote>
     {
+        private const string APPLY_MODIFIERS_STEP_NAME = "ApplyModifiers";
+        private const string FINISH_INITIALIZATION_STEP_FORMAT =
+            "[LOADING] TrackPlayer.FinishInitialization {0} for {1} ({2}) took {3}ms";
+        private const string FINISH_INITIALIZATION_BREAKDOWN_FORMAT =
+            "[LOADING] TrackPlayer.FinishInitialization breakdown for {0} ({1}): TrackMaterial.Initialize={2}ms, CameraPositioner.Initialize={3}ms, FinalizeTrackEffects={4}ms";
+        private const string SETUP_THEME_STEP_FORMAT =
+            "[LOADING] TrackPlayer.SetupTheme {0} for {1} ({2}) took {3}ms";
+        private const string SETUP_THEME_BREAKDOWN_FORMAT =
+            "[LOADING] TrackPlayer.SetupTheme breakdown for {0} ({1}): CreateNotePrefabFromTheme={2}ms, SetPrefabAndReset={3}ms";
+        private const string TRACK_PLAYER_INITIALIZE_BREAKDOWN_FORMAT =
+            "[LOADING] TrackPlayer.Initialize breakdown for {0} ({1}): SetupTheme={2}ms, GetNotes={3}ms, ApplyModifiers={4}ms, CreateEngine={5}ms, InitializeTrackEffects={6}ms, FinishInitialization={7}ms";
+        private const string TRACK_PLAYER_INITIALIZE_STEP_FORMAT =
+            "[LOADING] TrackPlayer.Initialize {0} for {1} ({2}) took {3}ms";
+
         public TEngine Engine { get; private set; }
 
         public override BaseEngine BaseEngine => Engine;
@@ -189,6 +207,7 @@ namespace YARG.Gameplay.Player
 
         private bool _wasStarPowerActive;
         private bool _didLowerTrack;
+        private bool _isThemePoolConfigured;
 
         private Queue<TrackEffect> _upcomingEffects = new();
         private List<TrackEffectElement> _currentEffects = new();
@@ -197,6 +216,9 @@ namespace YARG.Gameplay.Player
         protected SongChart Chart;
 
         private AutoCalibrator _autoCalibrator;
+        private GameObject _configuredThemePrefab;
+        private Guid _configuredThemePresetId;
+        private VisualStyle _configuredThemeStyle;
 
         public override void Initialize(int index, YargPlayer player, SongChart chart, TrackView trackView,
             StemMixer mixer, int? currentHighScore)
@@ -204,6 +226,29 @@ namespace YARG.Gameplay.Player
             if (IsInitialized)
             {
                 return;
+            }
+
+            var profile = player.Profile;
+            var gameMode = profile.GameMode;
+            var playerName = profile.Name;
+            var syncTrack = chart.SyncTrack;
+            var initializeStepStopwatch = new System.Diagnostics.Stopwatch();
+            long setupThemeMilliseconds = 0;
+            long getNotesMilliseconds = 0;
+            long applyModifiersMilliseconds = 0;
+            long createEngineMilliseconds = 0;
+            long initializeTrackEffectsMilliseconds = 0;
+            long finishInitializationMilliseconds = 0;
+
+            void LogInitializeStep(string stepName, long elapsedMilliseconds)
+            {
+                LoadingTrace.LogIfSlow(
+                    elapsedMilliseconds,
+                    TRACK_PLAYER_INITIALIZE_STEP_FORMAT,
+                    stepName,
+                    playerName,
+                    gameMode,
+                    elapsedMilliseconds);
             }
 
             // Get player count
@@ -226,19 +271,36 @@ namespace YARG.Gameplay.Player
 
             base.Initialize(index, player, chart, trackView, mixer, currentHighScore);
 
-            SetupTheme();
+            initializeStepStopwatch.Start();
+            SetupTheme(player);
+            initializeStepStopwatch.Stop();
+            setupThemeMilliseconds = initializeStepStopwatch.ElapsedMilliseconds;
+            LogInitializeStep(nameof(SetupTheme), setupThemeMilliseconds);
 
             Chart = chart;
 
+            initializeStepStopwatch.Restart();
             OriginalNoteTrack = GetNotes(chart);
-            player.Profile.ApplyModifiers(OriginalNoteTrack, chart.SyncTrack);
+            initializeStepStopwatch.Stop();
+            getNotesMilliseconds = initializeStepStopwatch.ElapsedMilliseconds;
+            LogInitializeStep(nameof(GetNotes), getNotesMilliseconds);
+
+            initializeStepStopwatch.Restart();
+            profile.ApplyModifiers(OriginalNoteTrack, syncTrack);
+            initializeStepStopwatch.Stop();
+            applyModifiersMilliseconds = initializeStepStopwatch.ElapsedMilliseconds;
+            LogInitializeStep(APPLY_MODIFIERS_STEP_NAME, applyModifiersMilliseconds);
 
             NoteTrack = OriginalNoteTrack;
             Notes = NoteTrack.Notes;
 
             var events = NoteTrack.TextEvents;
 
+            initializeStepStopwatch.Restart();
             Engine = CreateEngine();
+            initializeStepStopwatch.Stop();
+            createEngineMilliseconds = initializeStepStopwatch.ElapsedMilliseconds;
+            LogInitializeStep(nameof(CreateEngine), createEngineMilliseconds);
 
             base.ComboMeter.Initialize(player.EnginePreset, Engine.BaseParameters.MaxMultiplier);
 
@@ -262,15 +324,48 @@ namespace YARG.Gameplay.Player
             GameManager.BeatEventHandler.Audio.Subscribe(MetronomeTick, BeatEventType.Measure);
             GameManager.BeatEventHandler.Audio.Subscribe(MetronomeTock, BeatEventType.QuarterNote);
             GameManager.BeatEventHandler.Visual.Subscribe(SunburstEffects.PulseSunburst, BeatEventType.StrongBeat);
+            initializeStepStopwatch.Restart();
             InitializeTrackEffects();
+            initializeStepStopwatch.Stop();
+            initializeTrackEffectsMilliseconds = initializeStepStopwatch.ElapsedMilliseconds;
+            LogInitializeStep(nameof(InitializeTrackEffects), initializeTrackEffectsMilliseconds);
 
             ResetNoteCounters();
 
+            initializeStepStopwatch.Restart();
             FinishInitialization();
+            initializeStepStopwatch.Stop();
+            finishInitializationMilliseconds = initializeStepStopwatch.ElapsedMilliseconds;
+            LogInitializeStep(nameof(FinishInitialization), finishInitializationMilliseconds);
+
+            var timedInitializeMilliseconds = setupThemeMilliseconds
+                + getNotesMilliseconds
+                + applyModifiersMilliseconds
+                + createEngineMilliseconds
+                + initializeTrackEffectsMilliseconds
+                + finishInitializationMilliseconds;
+            LoadingTrace.LogIfSlow(
+                timedInitializeMilliseconds,
+                LoadingTrace.OutlierThresholdMilliseconds,
+                TRACK_PLAYER_INITIALIZE_BREAKDOWN_FORMAT,
+                playerName,
+                gameMode,
+                setupThemeMilliseconds,
+                getNotesMilliseconds,
+                applyModifiersMilliseconds,
+                createEngineMilliseconds,
+                initializeTrackEffectsMilliseconds,
+                finishInitializationMilliseconds);
 
             SongLength = (float) GameManager.SongLength;
 
             _autoCalibrator = new AutoCalibrator(GameManager);
+        }
+
+        public override void PrewarmForLoad(YargPlayer player)
+        {
+            SetupTheme(player, false);
+            TrackMaterial.Initialize(player.HighwayPreset);
         }
 
         protected override void FinishDestruction()
@@ -335,15 +430,84 @@ namespace YARG.Gameplay.Player
             }
         }
 
-        private void SetupTheme()
+        private void SetupTheme(YargPlayer player, bool logTimings = true)
         {
-            var (gameMode, instrument) = (Player.Profile.GameMode, Player.Profile.CurrentInstrument);
+            var profile = player.Profile;
+            var (gameMode, instrument) = (profile.GameMode, profile.CurrentInstrument);
+            var playerName = profile.Name;
 
             var style = VisualStyleHelpers.GetVisualStyle(gameMode, instrument);
 
+            if (!logTimings)
+            {
+                var prewarmedThemePrefab = ThemeManager.Instance.CreateNotePrefabFromTheme(
+                    player.ThemePreset, style, NotePool.Prefab);
+
+                if (_isThemePoolConfigured
+                    && _configuredThemePrefab == prewarmedThemePrefab
+                    && _configuredThemePresetId == player.ThemePreset.Id
+                    && _configuredThemeStyle == style)
+                {
+                    return;
+                }
+
+                NotePool.SetPrefabAndReset(prewarmedThemePrefab);
+                _configuredThemePrefab = prewarmedThemePrefab;
+                _configuredThemePresetId = player.ThemePreset.Id;
+                _configuredThemeStyle = style;
+                _isThemePoolConfigured = true;
+                return;
+            }
+
+            var setupThemeStopwatch = new System.Diagnostics.Stopwatch();
+
+            void LogSetupThemeStep(string stepName, long elapsedMilliseconds)
+            {
+                LoadingTrace.LogIfSlow(
+                    elapsedMilliseconds,
+                    SETUP_THEME_STEP_FORMAT,
+                    stepName,
+                    playerName,
+                    gameMode,
+                    elapsedMilliseconds);
+            }
+
+            setupThemeStopwatch.Start();
             var themePrefab = ThemeManager.Instance.CreateNotePrefabFromTheme(
-                Player.ThemePreset, style, NotePool.Prefab);
+                player.ThemePreset, style, NotePool.Prefab);
+            setupThemeStopwatch.Stop();
+            var createNotePrefabMilliseconds = setupThemeStopwatch.ElapsedMilliseconds;
+
+            if (_isThemePoolConfigured
+                && _configuredThemePrefab == themePrefab
+                && _configuredThemePresetId == player.ThemePreset.Id
+                && _configuredThemeStyle == style)
+            {
+                return;
+            }
+
+            LogSetupThemeStep(nameof(ThemeManager.CreateNotePrefabFromTheme), createNotePrefabMilliseconds);
+
+            setupThemeStopwatch.Restart();
             NotePool.SetPrefabAndReset(themePrefab);
+            setupThemeStopwatch.Stop();
+            var setPrefabAndResetMilliseconds = setupThemeStopwatch.ElapsedMilliseconds;
+            LogSetupThemeStep(nameof(NotePool.SetPrefabAndReset), setPrefabAndResetMilliseconds);
+
+            _configuredThemePrefab = themePrefab;
+            _configuredThemePresetId = player.ThemePreset.Id;
+            _configuredThemeStyle = style;
+            _isThemePoolConfigured = true;
+
+            var totalSetupThemeMilliseconds = createNotePrefabMilliseconds + setPrefabAndResetMilliseconds;
+            LoadingTrace.LogIfSlow(
+                totalSetupThemeMilliseconds,
+                LoadingTrace.StepThresholdMilliseconds,
+                SETUP_THEME_BREAKDOWN_FORMAT,
+                playerName,
+                gameMode,
+                createNotePrefabMilliseconds,
+                setPrefabAndResetMilliseconds);
         }
 
         protected abstract InstrumentDifficulty<TNote> GetNotes(SongChart chart);
@@ -351,9 +515,51 @@ namespace YARG.Gameplay.Player
 
         protected virtual void FinishInitialization()
         {
+            var gameMode = Player.Profile.GameMode;
+            var playerName = Player.Profile.Name;
+            var finishInitializationStopwatch = new System.Diagnostics.Stopwatch();
+
+            void LogFinishInitializationStep(string stepName, long elapsedMilliseconds)
+            {
+                LoadingTrace.LogIfSlow(
+                    elapsedMilliseconds,
+                    FINISH_INITIALIZATION_STEP_FORMAT,
+                    stepName,
+                    playerName,
+                    gameMode,
+                    elapsedMilliseconds);
+            }
+
+            finishInitializationStopwatch.Start();
             TrackMaterial.Initialize(Player.HighwayPreset);
+            finishInitializationStopwatch.Stop();
+            var trackMaterialInitializeMilliseconds = finishInitializationStopwatch.ElapsedMilliseconds;
+            LogFinishInitializationStep(nameof(TrackMaterial.Initialize), trackMaterialInitializeMilliseconds);
+
+            finishInitializationStopwatch.Restart();
             CameraPositioner.Initialize(Player.CameraPreset);
+            finishInitializationStopwatch.Stop();
+            var cameraPositionerInitializeMilliseconds = finishInitializationStopwatch.ElapsedMilliseconds;
+            LogFinishInitializationStep(nameof(CameraPositioner.Initialize), cameraPositionerInitializeMilliseconds);
+
+            finishInitializationStopwatch.Restart();
             FinalizeTrackEffects();
+            finishInitializationStopwatch.Stop();
+            var finalizeTrackEffectsMilliseconds = finishInitializationStopwatch.ElapsedMilliseconds;
+            LogFinishInitializationStep(nameof(FinalizeTrackEffects), finalizeTrackEffectsMilliseconds);
+
+            var totalFinishInitializationMilliseconds = trackMaterialInitializeMilliseconds
+                + cameraPositionerInitializeMilliseconds
+                + finalizeTrackEffectsMilliseconds;
+            LoadingTrace.LogIfSlow(
+                totalFinishInitializationMilliseconds,
+                LoadingTrace.StepThresholdMilliseconds,
+                FINISH_INITIALIZATION_BREAKDOWN_FORMAT,
+                playerName,
+                gameMode,
+                trackMaterialInitializeMilliseconds,
+                cameraPositionerInitializeMilliseconds,
+                finalizeTrackEffectsMilliseconds);
         }
 
         protected void ResetNoteCounters()

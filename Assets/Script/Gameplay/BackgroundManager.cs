@@ -68,6 +68,8 @@ namespace YARG.Gameplay
 
         private BundleBackgroundManager _bundleBackgroundManager;
 
+        private Image _tempBlackOverlay;
+
 #if UNITY_EDITOR
         private bool        _usingEditorVenue;
         private string      _editorVenuePath;
@@ -79,6 +81,15 @@ namespace YARG.Gameplay
         {
             // We don't need to update unless we're using a video
             enabled = false;
+
+            // Create temporary black overlay to prevent gray flash before venue loads
+            CreateTempBlackOverlay();
+
+            // Set venue output active early so it's ready when venue loads
+            if (_venueOutput != null)
+            {
+                _venueOutput.gameObject.SetActive(true);
+            }
 
 #if UNITY_EDITOR
             if (VenueEditorHelper.IsSceneEnabled())
@@ -103,6 +114,7 @@ namespace YARG.Gameplay
                 if (!_editorVenueScene.IsValid() || !_editorVenueScene.isLoaded)
                 {
                     YargLogger.LogFormatError("Failed to load editor venue scene {0}", _editorVenuePath);
+                    RemoveTempBlackOverlay();
                     return;
                 }
 
@@ -120,6 +132,7 @@ namespace YARG.Gameplay
                 if (editorBg == null)
                 {
                     YargLogger.LogFormatError("Scene {0} missing BundleBackgroundManager", _editorVenuePath);
+                    RemoveTempBlackOverlay();
                     return;
                 }
 
@@ -154,6 +167,7 @@ namespace YARG.Gameplay
                 }
 
                 _type = BackgroundType.Yarground;
+                RemoveTempBlackOverlay();
                 return;
             }
 #endif
@@ -161,6 +175,7 @@ namespace YARG.Gameplay
             using var result = VenueLoader.GetVenue(GameManager.Song, out _source);
             if (result == null)
             {
+                RemoveTempBlackOverlay();
                 return;
             }
 
@@ -176,11 +191,13 @@ namespace YARG.Gameplay
                     break;
                 case BackgroundType.Video:
                     LoadVideoBackground(result);
+                    RemoveTempBlackOverlay();
                     break;
                 case BackgroundType.Image:
                     _backgroundImage.texture = result.Image.LoadTexture(false);
                     _backgroundImage.uvRect = new Rect(0f, 0f, 1f, -1f);
                     _backgroundImage.gameObject.SetActive(true);
+                    RemoveTempBlackOverlay();
                     break;
             }
         }
@@ -239,6 +256,42 @@ namespace YARG.Gameplay
             if (characterManager != null)
             {
                 characterManager.Initialize();
+            }
+
+            // Remove temporary black overlay now that venue is loaded
+            RemoveTempBlackOverlay();
+        }
+
+        private void CreateTempBlackOverlay()
+        {
+            // Find the canvas to add the overlay to
+            var canvas = FindObjectOfType<Canvas>();
+            if (canvas == null)
+            {
+                return;
+            }
+
+            // Create a full-screen black image
+            _tempBlackOverlay = new GameObject("TempBlackOverlay").AddComponent<Image>();
+            _tempBlackOverlay.transform.SetParent(canvas.transform, false);
+            _tempBlackOverlay.color = Color.black;
+
+            // Set to fill the entire screen
+            var rectTransform = _tempBlackOverlay.GetComponent<RectTransform>();
+            rectTransform.anchorMin = Vector2.zero;
+            rectTransform.anchorMax = Vector2.one;
+            rectTransform.sizeDelta = Vector2.zero;
+
+            // Place it at the top of the hierarchy so it renders above everything
+            _tempBlackOverlay.transform.SetAsLastSibling();
+        }
+
+        private void RemoveTempBlackOverlay()
+        {
+            if (_tempBlackOverlay != null)
+            {
+                Destroy(_tempBlackOverlay.gameObject);
+                _tempBlackOverlay = null;
             }
         }
 
@@ -747,6 +800,8 @@ namespace YARG.Gameplay
 
         public void Dispose()
         {
+            RemoveTempBlackOverlay();
+
             if (VIDEO_PATH != null)
             {
                 File.Delete(VIDEO_PATH);

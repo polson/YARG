@@ -161,6 +161,9 @@ namespace YARG.Gameplay
 
         private bool _isReplaySaved;
 
+        private DateTime _loadStartTime;
+        private bool _loggedFirstUpdate;
+
         private int _originalSleepTimeout;
 
         private StemMixer _mixer;
@@ -183,6 +186,8 @@ namespace YARG.Gameplay
 
         private void Awake()
         {
+            _loadStartTime = DateTime.UtcNow;
+
             // Set references
             PracticeManager = GetComponent<PracticeManager>();
             BackgroundManager = GetComponent<BackgroundManager>();
@@ -254,6 +259,28 @@ namespace YARG.Gameplay
 
         private void Update()
         {
+            // Log first update frame after loading completes
+            if (!_loggedFirstUpdate && IsSongStarted)
+            {
+                _loggedFirstUpdate = true;
+                var elapsedSinceAwake = (DateTime.UtcNow - _loadStartTime).TotalMilliseconds;
+                YargLogger.LogFormatInfo("[RESTART] First Update() after loading - {0:F0}ms since Awake", elapsedSinceAwake);
+
+                // Calculate total time from restart click to responsive (only if recently restarted)
+                var restartTime = GenericPause.RestartStartTime;
+                if (restartTime != default)
+                {
+                    var totalElapsed = (DateTime.UtcNow - restartTime).TotalMilliseconds;
+                    // Only log if it's a reasonable time (< 60 seconds), otherwise it's stale data
+                    if (totalElapsed < 60000 && totalElapsed > 0)
+                    {
+                        YargLogger.LogFormatInfo("[RESTART] TOTAL RESTART TIME: {0:F0}ms (from click to responsive)", totalElapsed);
+                    }
+                    // Clear the timestamp so it doesn't affect next load
+                    GenericPause.RestartStartTime = default;
+                }
+            }
+
             // Pause/unpause
             if (Keyboard.current.escapeKey.wasPressedThisFrame)
             {

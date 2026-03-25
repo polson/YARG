@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Linq;
 using System.Collections.Generic;
 using Cysharp.Threading.Tasks;
@@ -220,7 +221,7 @@ namespace YARG.Menu.ScoreScreen
                     }
                 }
 
-                Debug.Assert(card != null, $"ScoreCard not initialized for GameMode: {score.Player.Profile.GameMode}");
+                UnityEngine.Debug.Assert(card != null, $"ScoreCard not initialized for GameMode: {score.Player.Profile.GameMode}");
                 card.SetCardContents();
                 _scoreCards.Add(card);
             }
@@ -428,8 +429,12 @@ namespace YARG.Menu.ScoreScreen
 
             _restartButtonEntry = new NavigationScheme.Entry(MenuAction.Yellow, "Menu.ScoreScreen.RestartSong", () =>
             {
+                var stopwatch = Stopwatch.StartNew();
+                YargLogger.LogInfo("[SCORE] Restart song pressed");
                 _restartingSong = true;
                 GlobalVariables.Instance.LoadScene(SceneIndex.Gameplay);
+                stopwatch.Stop();
+                YargLogger.LogFormatInfo("[SCORE] Restart button handler took {0}ms", stopwatch.ElapsedMilliseconds);
             });
 
             _addFavoriteButtonEntry = new NavigationScheme.Entry(MenuAction.Blue, "Menu.MusicLibrary.Popup.Item.AddToFavorites", () =>

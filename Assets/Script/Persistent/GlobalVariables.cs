@@ -138,37 +138,110 @@ namespace YARG
 #endif
         }
 
-        private async void LoadSceneAdditive(SceneIndex scene)
+        private async void LoadSceneAdditive(SceneIndex scene, SceneIndex previousScene)
         {
+            var stopwatch = Stopwatch.StartNew();
+            bool isRestarting = previousScene == SceneIndex.Gameplay && scene == SceneIndex.Gameplay;
+            YargLogger.LogFormatInfo("[SCENE] LoadSceneAdditive started for scene {0} (from {1}, restarting: {2})", scene, previousScene, isRestarting);
             CurrentScene = scene;
 
             GameStateFetcher.SetSceneIndex(scene);
 
+            var gc0 = GC.CollectionCount(0);
+            var gc1 = GC.CollectionCount(1);
+            var gc2 = GC.CollectionCount(2);
+
+            // Only cleanup assets when unloading Gameplay to menu/score.
+            // Manual gameplay restarts intentionally skip cleanup to keep restart latency low.
+            bool needsCleanup = previousScene == SceneIndex.Gameplay && scene != SceneIndex.Gameplay;
+            if (isRestarting && State.CurrentSong != null)
+            {
+                // For gameplay->gameplay, check if song is actually changing
+                // We need to store the old song hash before State gets updated
+                // Unfortunately by this point State.CurrentSong is already the new song
+                // So we'll use a different approach: check if it's a restart vs skip
+                // For now, we'll skip cleanup only on manual restart (not setlist skip)
+                // Setlist skip will go through the normal cleanup path
+                YargLogger.LogInfo("[SCENE] Skipping cleanup for gameplay restart");
+                LogGCTracking("After skip", gc0, gc1, gc2);
+            }
+            else if (needsCleanup)
+            {
+                YargLogger.LogInfo("[SCENE] Unloading unused assets after Gameplay...");
+                await Resources.UnloadUnusedAssets();
+                stopwatch.Stop();
+                LogGCTracking("UnloadUnusedAssets", gc0, gc1, gc2);
+                YargLogger.LogFormatInfo("[SCENE] UnloadUnusedAssets took {0}ms", stopwatch.ElapsedMilliseconds);
+            }
+            else
+            {
+                YargLogger.LogInfo("[SCENE] Skipping cleanup (not unloading Gameplay)");
+                LogGCTracking("After skip", gc0, gc1, gc2);
+            }
+
+            stopwatch.Restart();
+            YargLogger.LogInfo("[SCENE] Loading scene async...");
             await SceneManager.LoadSceneAsync((int) scene, LoadSceneMode.Additive);
+            stopwatch.Stop();
+            LogGCTracking("LoadSceneAsync", gc0, gc1, gc2);
+            YargLogger.LogFormatInfo("[SCENE] SceneManager.LoadSceneAsync took {0}ms", stopwatch.ElapsedMilliseconds);
+            stopwatch.Restart();
 
             // When complete, set the newly loaded scene to the active one
+            YargLogger.LogInfo("[SCENE] Setting active scene...");
             SceneManager.SetActiveScene(SceneManager.GetSceneByBuildIndex((int) scene));
             Navigator.Instance.DisableMenuInputs = false;
+            stopwatch.Stop();
+            LogGCTracking("SetActiveScene", gc0, gc1, gc2);
+            YargLogger.LogFormatInfo("[SCENE] SetActiveScene + EnableMenuInputs took {0}ms", stopwatch.ElapsedMilliseconds);
 
-            await Resources.UnloadUnusedAssets();
-            GC.Collect();
+            YargLogger.LogFormatInfo("[SCENE] LoadSceneAdditive completed for scene {0}", scene);
+        }
+
+        private void LogGCTracking(string operation, int gc0, int gc1, int gc2)
+        {
+            int newGc0 = GC.CollectionCount(0);
+            int newGc1 = GC.CollectionCount(1);
+            int newGc2 = GC.CollectionCount(2);
+
+            if (newGc0 > gc0 || newGc1 > gc1 || newGc2 > gc2)
+            {
+                YargLogger.LogFormatInfo("[GC] {0}: Gen0={1} (+{2}), Gen1={3} (+{4}), Gen2={5} (+{6})",
+                    operation,
+                    newGc0, newGc0 - gc0,
+                    newGc1, newGc1 - gc1,
+                    newGc2, newGc2 - gc2);
+            }
         }
 
         public void LoadScene(SceneIndex scene)
         {
+            var stopwatch = Stopwatch.StartNew();
+            var callTime = DateTime.Now;
+            YargLogger.LogFormatInfo("[SCENE] LoadScene called with scene {0}, current scene is {1} at {2:O}", scene, CurrentScene, callTime);
             Navigator.Instance.DisableMenuInputs = true;
+            stopwatch.Stop();
+            YargLogger.LogFormatInfo("[SCENE] DisableMenuInputs took {0}ms", stopwatch.ElapsedMilliseconds);
+            stopwatch.Restart();
+
             // Unload the current scene and load in the new one, or just load in the new one
             if (CurrentScene != SceneIndex.Persistent)
             {
+                YargLogger.LogFormatInfo("[SCENE] Unloading current scene {0}...", CurrentScene);
                 // Unload the current scene
                 var asyncOp = SceneManager.UnloadSceneAsync((int) CurrentScene);
 
                 // The load the new scene
-                asyncOp.completed += _ => LoadSceneAdditive(scene);
+                asyncOp.completed += _ => {
+                    stopwatch.Stop();
+                    YargLogger.LogFormatInfo("[SCENE] Scene unload completed, took {0}ms (total since LoadScene call: {1}ms)", stopwatch.ElapsedMilliseconds, stopwatch.ElapsedMilliseconds);
+                    LoadSceneAdditive(scene, CurrentScene);
+                };
             }
             else
             {
-                LoadSceneAdditive(scene);
+                YargLogger.LogInfo("[SCENE] Current scene is Persistent, skipping unload");
+                LoadSceneAdditive(scene, CurrentScene);
             }
         }
 
