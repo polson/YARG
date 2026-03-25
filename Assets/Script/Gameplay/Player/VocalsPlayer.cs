@@ -8,6 +8,7 @@ using YARG.Core.Engine;
 using YARG.Core.Engine.Vocals;
 using YARG.Core.Engine.Vocals.Engines;
 using YARG.Core.Input;
+using YARG.Core.Logging;
 using YARG.Core.Replays;
 using YARG.Gameplay.HUD;
 using YARG.Helpers;
@@ -80,7 +81,11 @@ namespace YARG.Gameplay.Player
             // Needle materials have names starting from 1.
             var needleIndex = (vocalIndex % NEEDLES_COUNT) + 1;
             var materialPath = $"VocalNeedle/{needleIndex}";
+            var addressablesStopwatch = System.Diagnostics.Stopwatch.StartNew();
             _needleRenderer.material = Addressables.LoadAssetAsync<Material>(materialPath).WaitForCompletion();
+            addressablesStopwatch.Stop();
+            LoadingTrace.LogIfSlow(addressablesStopwatch.ElapsedMilliseconds,
+                "[LOADING] VocalsPlayer Addressables.LoadAssetAsync took {0}ms", addressablesStopwatch.ElapsedMilliseconds);
 
             // Get the notes from the specific harmony or solo part
 

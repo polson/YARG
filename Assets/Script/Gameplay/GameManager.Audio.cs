@@ -5,6 +5,7 @@ using DG.Tweening.Core;
 using DG.Tweening.Plugins.Options;
 using UnityEngine;
 using YARG.Core.Audio;
+using YARG.Core.Logging;
 using YARG.Playback;
 using YARG.Settings;
 
@@ -88,6 +89,7 @@ namespace YARG.Gameplay
 
         private void LoadAudio()
         {
+            var totalStopwatch = System.Diagnostics.Stopwatch.StartNew();
             _stemStates.Clear();
             _mixer = Song.LoadAudio(GlobalVariables.State.SongSpeed, DEFAULT_VOLUME);
             if (_mixer == null)
@@ -105,6 +107,9 @@ namespace YARG.Gameplay
             }
 
             _backgroundStem = _stemStates.Count > 1 ? SongStem.Song : _stemStates.First().Key;
+
+            totalStopwatch.Stop();
+            YargLogger.LogFormatInfo("[LOADING] LoadAudio() total took {0}ms", totalStopwatch.ElapsedMilliseconds);
         }
 
         public void ChangeStarPowerStatus(bool active)

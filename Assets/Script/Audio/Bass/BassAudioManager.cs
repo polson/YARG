@@ -627,12 +627,19 @@ namespace YARG.Audio.BASS
 
         internal static bool CreateSourceStream(Stream stream, out int streamHandle)
         {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
             // Last flag is new BASS_SAMPLE_NOREORDER flag, which is not in the BassFlags enum,
             // as it was made as part of an update to fix <= 8 channel oggs.
             // https://www.un4seen.com/forum/?topic=20148.msg140872#msg140872
-            const BassFlags streamFlags = BassFlags.Prescan | BassFlags.Decode | BassFlags.AsyncFile | (BassFlags) 64;
+            // NOTE: Prescan removed for faster loading - seeking may be less accurate but still functional
+            const BassFlags streamFlags = BassFlags.Decode | BassFlags.AsyncFile | (BassFlags) 64;
 
             streamHandle = Bass.CreateStream(StreamSystem.NoBuffer, streamFlags, new BassStreamProcedures(stream));
+            stopwatch.Stop();
+            LoadingTrace.LogIfSlow(stopwatch.ElapsedMilliseconds,
+                "[LOADING] Bass.CreateStream took {0}ms", stopwatch.ElapsedMilliseconds);
+
             if (streamHandle == 0)
             {
                 YargLogger.LogFormatError("Failed to create source stream: {0}!", Bass.LastError);

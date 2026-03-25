@@ -332,23 +332,34 @@ namespace YARG.Audio.BASS
 
         protected override bool AddChannels_Internal(Stream stream, params StemInfo[] stemInfos)
         {
+            var totalStopwatch = System.Diagnostics.Stopwatch.StartNew();
+
             if (_shouldNormalize)
             {
+                var normStopwatch = System.Diagnostics.Stopwatch.StartNew();
                 if (!_normalizer.AddStream(stream, stemInfos))
                 {
                     YargLogger.LogError("Failed to add stream to normalizer. Disabling normalization.");
                     _shouldNormalize = false;
                 }
+                normStopwatch.Stop();
+                LoadingTrace.LogIfSlow(normStopwatch.ElapsedMilliseconds,
+                    "[LOADING] Normalizer.AddStream took {0}ms", normStopwatch.ElapsedMilliseconds);
             }
 
+            var createStopwatch = System.Diagnostics.Stopwatch.StartNew();
             if (!BassAudioManager.CreateSourceStream(stream, out int sourceStream))
             {
                 YargLogger.LogFormatError("Failed to load stem source stream: {0}!", Bass.LastError);
                 return false;
             }
+            createStopwatch.Stop();
+            LoadingTrace.LogIfSlow(createStopwatch.ElapsedMilliseconds,
+                "[LOADING] CreateSourceStream took {0}ms", createStopwatch.ElapsedMilliseconds);
 
             _sourceHandles.Add(sourceStream);
 
+            var splitStopwatch = System.Diagnostics.Stopwatch.StartNew();
             List<StemData> stemDatas = new();
             var groupedByStem = stemInfos.GroupBy(info => info.Stem);
             foreach (var group in groupedByStem)
@@ -370,6 +381,9 @@ namespace YARG.Audio.BASS
                 float[,] volumeMatrix = BuildVolumeMatrix(group, allIndices.Length);
                 stemDatas.Add(new StemData(stem, volumeMatrix, streamHandle, reverbHandle));
             }
+            splitStopwatch.Stop();
+            LoadingTrace.LogIfSlow(splitStopwatch.ElapsedMilliseconds,
+                "[LOADING] CreateSplitStreams total took {0}ms", splitStopwatch.ElapsedMilliseconds);
 
             if (!stemDatas.Any())
             {
@@ -377,12 +391,18 @@ namespace YARG.Audio.BASS
                 return false;
             }
 
+            var mixerStopwatch = System.Diagnostics.Stopwatch.StartNew();
             if (!AddChannelsToMixer(stemDatas))
             {
                 return false;
             }
+            mixerStopwatch.Stop();
+            LoadingTrace.LogIfSlow(mixerStopwatch.ElapsedMilliseconds,
+                "[LOADING] AddChannelsToMixer took {0}ms", mixerStopwatch.ElapsedMilliseconds);
+
             _stemDatas.AddRange(stemDatas);
 
+            var channelStopwatch = System.Diagnostics.Stopwatch.StartNew();
             foreach (var stemStreamData in stemDatas)
             {
                 CreateChannel(
@@ -392,7 +412,13 @@ namespace YARG.Audio.BASS
                     reverbHandles: stemStreamData.ReverbHandles
                 );
             }
+            channelStopwatch.Stop();
+            LoadingTrace.LogIfSlow(channelStopwatch.ElapsedMilliseconds,
+                "[LOADING] CreateChannel took {0}ms", channelStopwatch.ElapsedMilliseconds);
 
+            totalStopwatch.Stop();
+            LoadingTrace.LogIfSlow(totalStopwatch.ElapsedMilliseconds,
+                "[LOADING] AddChannels_Internal total took {0}ms", totalStopwatch.ElapsedMilliseconds);
             return true;
         }
 

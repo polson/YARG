@@ -2,6 +2,7 @@
 using System.Linq;
 using UnityEngine;
 using UnityEngine.Serialization;
+using YARG.Core.Logging;
 using YARG.Helpers.Extensions;
 
 namespace YARG.Gameplay
@@ -43,6 +44,8 @@ namespace YARG.Gameplay
 
         public void SetPrefabAndReset(GameObject newPrefab)
         {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            
             Prefab = newPrefab;
 
             transform.DestroyChildren();
@@ -54,6 +57,15 @@ namespace YARG.Gameplay
             {
                 _pooled.Push(CreateNew());
             }
+            
+            stopwatch.Stop();
+            LoadingTrace.LogIfSlow(
+                stopwatch.ElapsedMilliseconds,
+                LoadingTrace.OutlierThresholdMilliseconds,
+                "[LOADING] Pool.SetPrefabAndReset({0}, {1} objects) took {2}ms",
+                newPrefab != null ? newPrefab.name : "null",
+                _prewarmAmount,
+                stopwatch.ElapsedMilliseconds);
         }
 
         private IPoolable CreateNew()

@@ -25,6 +25,7 @@ namespace YARG.Gameplay.Player
         public const float NOTE_SPAWN_OFFSET     = 5f;
 
         public const float TRACK_WIDTH  = 2f;
+        private const string VISUALS_OBJECT_NAME = "Visuals";
 
         public static int HighwayCount = 1;
 
@@ -80,6 +81,7 @@ namespace YARG.Gameplay.Player
         protected bool IsBass { get; private set; }
 
         private float _spawnAheadDelay;
+        private static Transform _visualsParent;
 
         protected float SongLength;
 
@@ -144,6 +146,20 @@ namespace YARG.Gameplay.Player
 
             HitWindowDisplay.SetHitWindowSize();
         }
+
+        protected static Transform GetVisualsParent()
+        {
+            if (_visualsParent == null)
+            {
+                var visualsObject = GameObject.Find(VISUALS_OBJECT_NAME);
+                if (visualsObject != null)
+                {
+                    _visualsParent = visualsObject.transform;
+                }
+            }
+
+            return _visualsParent;
+        }
     }
 
     public abstract class TrackPlayer<TEngine, TNote> : TrackPlayer
@@ -202,7 +218,11 @@ namespace YARG.Gameplay.Player
             }
 
             // Consolidate tracks into a parent object for animation purposes
-            transform.SetParent(GameObject.Find("Visuals").transform);
+            var visualsParent = GetVisualsParent();
+            if (visualsParent != null)
+            {
+                transform.SetParent(visualsParent);
+            }
 
             base.Initialize(index, player, chart, trackView, mixer, currentHighScore);
 
@@ -248,7 +268,7 @@ namespace YARG.Gameplay.Player
 
             FinishInitialization();
 
-            SongLength = (float) chart.GetEndTime();
+            SongLength = (float) GameManager.SongLength;
 
             _autoCalibrator = new AutoCalibrator(GameManager);
         }

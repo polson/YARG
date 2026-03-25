@@ -46,8 +46,24 @@ namespace YARG.Gameplay
         [SerializeField]
         private GameObject _proGuitarPrefab;
 
+        private const long LOADING_OUTLIER_THRESHOLD_MS = LoadingTrace.OutlierThresholdMilliseconds;
+        private const float TRACK_SPAWN_HEIGHT = 100f;
+
         private LoadFailureState _loadState;
         private string _loadFailureMessage;
+        private readonly Queue<PreloadedTrackObject> _preloadedTrackObjects = new();
+
+        private sealed class PreloadedTrackObject
+        {
+            public GameObject Prefab { get; private set; }
+            public GameObject Instance { get; private set; }
+
+            public PreloadedTrackObject(GameObject prefab, GameObject instance)
+            {
+                Prefab = prefab;
+                Instance = instance;
+            }
+        }
 
         // All access to chart data must be done through this event,
         // since things are loaded asynchronously
@@ -156,8 +172,12 @@ namespace YARG.Gameplay
             }
 
             context.Queue(UniTask.RunOnThreadPool(LoadChart), "Loading chart...");
+            var parallelLoadStopwatch = System.Diagnostics.Stopwatch.StartNew();
             context.Queue(UniTask.RunOnThreadPool(LoadAudio), "Loading audio...");
+            PreloadTrackPlayers();
             await context.Wait();
+            parallelLoadStopwatch.Stop();
+            YargLogger.LogFormatInfo("[LOADING] Parallel chart/audio wait took {0}ms", parallelLoadStopwatch.ElapsedMilliseconds);
 
             if (_loadState == LoadFailureState.Rescan)
             {
@@ -181,7 +201,10 @@ namespace YARG.Gameplay
                 return;
             }
 
+            var finalizeStopwatch = System.Diagnostics.Stopwatch.StartNew();
             FinalizeChart();
+            finalizeStopwatch.Stop();
+            YargLogger.LogFormatInfo("[LOADING] FinalizeChart() took {0}ms", finalizeStopwatch.ElapsedMilliseconds);
 
             // Initialize song runner
             _songRunner = new SongRunner(
@@ -282,13 +305,27 @@ namespace YARG.Gameplay
 
         private void LoadChart()
         {
+            var totalStopwatch = System.Diagnostics.Stopwatch.StartNew();
             try
             {
+                var chartStopwatch = System.Diagnostics.Stopwatch.StartNew();
                 Chart = Song.LoadChart();
+                chartStopwatch.Stop();
+                YargLogger.LogFormatInfo("[LOADING] Song.LoadChart() took {0}ms", chartStopwatch.ElapsedMilliseconds);
+
                 if (Chart != null)
                 {
+                    var venueStopwatch = System.Diagnostics.Stopwatch.StartNew();
                     GenerateVenueTrack();
+                    venueStopwatch.Stop();
+                    LoadingTrace.LogIfSlow(venueStopwatch.ElapsedMilliseconds,
+                        "[LOADING] GenerateVenueTrack() took {0}ms", venueStopwatch.ElapsedMilliseconds);
+
+                    var lipsyncStopwatch = System.Diagnostics.Stopwatch.StartNew();
                     GenerateLipsyncTrack();
+                    lipsyncStopwatch.Stop();
+                    LoadingTrace.LogIfSlow(lipsyncStopwatch.ElapsedMilliseconds,
+                        "[LOADING] GenerateLipsyncTrack() took {0}ms", lipsyncStopwatch.ElapsedMilliseconds);
                 }
                 else
                 {
@@ -301,6 +338,9 @@ namespace YARG.Gameplay
                 _loadFailureMessage = "Failed to load chart!";
                 YargLogger.LogException(ex, "Failed to load chart!");
             }
+
+            totalStopwatch.Stop();
+            YargLogger.LogFormatInfo("[LOADING] LoadChart() total took {0}ms", totalStopwatch.ElapsedMilliseconds);
         }
 
         private void GenerateVenueTrack()
@@ -368,13 +408,25 @@ namespace YARG.Gameplay
             BeatEventHandler = new BeatEventHandler(Chart.SyncTrack);
             CrowdEventHandler = new CrowdEventHandler(Chart, this);
 
+            var chartLoadedStopwatch = System.Diagnostics.Stopwatch.StartNew();
             _chartLoaded?.Invoke(Chart);
+            chartLoadedStopwatch.Stop();
+            LoadingTrace.LogIfSlow(chartLoadedStopwatch.ElapsedMilliseconds,
+                "[LOADING] _chartLoaded subscribers took {0}ms", chartLoadedStopwatch.ElapsedMilliseconds);
 
             _songLoaded?.Invoke();
         }
 
         private void CreatePlayers()
         {
+            var totalStopwatch = System.Diagnostics.Stopwatch.StartNew();
+            long highScoreLookupMilliseconds = 0;
+            long instantiateMilliseconds = 0;
+            long trackViewMilliseconds = 0;
+            long trackInitializeMilliseconds = 0;
+            long vocalTrackInitializeMilliseconds = 0;
+            long vocalsPlayerInitializeMilliseconds = 0;
+            
             try
             {
                 _players = new List<BasePlayer>();
@@ -409,35 +461,69 @@ namespace YARG.Gameplay
                         player.RefreshPresets();
                     }
 
+                    var highScoreStopwatch = System.Diagnostics.Stopwatch.StartNew();
                     var lastHighScore = ScoreContainer.GetHighScore(Song.Hash, player.Profile.Id, player.Profile.CurrentInstrument, false)?.Score;
+                    highScoreStopwatch.Stop();
+                    highScoreLookupMilliseconds += highScoreStopwatch.ElapsedMilliseconds;
+                    LoadingTrace.LogIfSlow(
+                        highScoreStopwatch.ElapsedMilliseconds,
+                        LOADING_OUTLIER_THRESHOLD_MS,
+                        "[LOADING] High score lookup for {0} ({1}) took {2}ms",
+                        player.Profile.Name,
+                        player.Profile.CurrentInstrument,
+                        highScoreStopwatch.ElapsedMilliseconds);
                     YargLogger.LogFormatInfo("Current high score for player {0} on {1}: {2}",
                         player.Profile.Name, player.Profile.CurrentInstrument, lastHighScore ?? 0);
 
                     if (player.Profile.GameMode != GameMode.Vocals)
                     {
                         highwayIndex++;
-                        var prefab = player.Profile.GameMode switch
-                        {
-                            GameMode.FiveFretGuitar => _fiveFretGuitarPrefab,
-                            GameMode.SixFretGuitar  => _sixFretGuitarPrefab,
-                            GameMode.FourLaneDrums  => _fourLaneDrumsPrefab,
-                            GameMode.FiveLaneDrums  => _fiveLaneDrumsPrefab,
-                            GameMode.EliteDrums     => Song.HasInstrument(Instrument.FiveLaneDrums) ? _fiveLaneDrumsPrefab : _fourLaneDrumsPrefab,
-                            GameMode.ProKeys        => player.Profile.CurrentInstrument is Instrument.ProKeys ? _proKeysPrefab : _fiveLaneKeysPrefab,
-                            GameMode.ProGuitar      => _proGuitarPrefab,
-                            _                       => null
-                        };
+                        var prefab = GetTrackPrefab(player);
 
                         // Skip if there's no prefab for the game mode
-                        if (prefab == null) continue;
+                        if (prefab == null)
+                        {
+                            continue;
+                        }
 
-                        var playerObject = Instantiate(prefab,
-                            new Vector3(highwayIndex * TRACK_SPACING_X, 100f, 0f), prefab.transform.rotation);
+                        var playerStopwatch = System.Diagnostics.Stopwatch.StartNew();
+                        var playerObject = CreateTrackPlayerObject(prefab, highwayIndex, out var reusedPreloadedObject);
+                        playerStopwatch.Stop();
+                        instantiateMilliseconds += playerStopwatch.ElapsedMilliseconds;
+                        LoadingTrace.LogIfSlow(
+                            playerStopwatch.ElapsedMilliseconds,
+                            LOADING_OUTLIER_THRESHOLD_MS,
+                            reusedPreloadedObject
+                                ? "[LOADING] Activate preloaded highway prefab for {0} ({1}) took {2}ms"
+                                : "[LOADING] Instantiate highway prefab for {0} ({1}) took {2}ms",
+                            player.Profile.Name,
+                            player.Profile.GameMode,
+                            playerStopwatch.ElapsedMilliseconds);
 
                         // Setup player
                         var trackPlayer = playerObject.GetComponent<TrackPlayer>();
+                        playerStopwatch = System.Diagnostics.Stopwatch.StartNew();
                         var trackView = _trackViewManager.CreateTrackView();
+                        playerStopwatch.Stop();
+                        trackViewMilliseconds += playerStopwatch.ElapsedMilliseconds;
+                        LoadingTrace.LogIfSlow(
+                            playerStopwatch.ElapsedMilliseconds,
+                            LOADING_OUTLIER_THRESHOLD_MS,
+                            "[LOADING] CreateTrackView for {0} took {1}ms",
+                            player.Profile.Name,
+                            playerStopwatch.ElapsedMilliseconds);
+                        
+                        playerStopwatch = System.Diagnostics.Stopwatch.StartNew();
                         trackPlayer.Initialize(highwayIndex, player, Chart, trackView, _mixer, lastHighScore);
+                        playerStopwatch.Stop();
+                        trackInitializeMilliseconds += playerStopwatch.ElapsedMilliseconds;
+                        LoadingTrace.LogIfSlow(
+                            playerStopwatch.ElapsedMilliseconds,
+                            LOADING_OUTLIER_THRESHOLD_MS,
+                            "[LOADING] TrackPlayer.Initialize for {0} ({1}) took {2}ms",
+                            player.Profile.Name,
+                            player.Profile.GameMode,
+                            playerStopwatch.ElapsedMilliseconds);
 
                         _players.Add(trackPlayer);
                         _trackViewManager.AddTrackPlayer(trackPlayer);
@@ -447,6 +533,7 @@ namespace YARG.Gameplay
                         // Initialize the vocal track if it hasn't been already, and hide lyric bar
                         if (!vocalTrackInitialized)
                         {
+                            var vocalStopwatch = System.Diagnostics.Stopwatch.StartNew();
                             VocalTrack.gameObject.SetActive(true);
                             _trackViewManager.CreateVocalTrackView();
 
@@ -459,6 +546,10 @@ namespace YARG.Gameplay
 
                             _lyricBar.gameObject.SetActive(false);
                             vocalTrackInitialized = true;
+                            vocalStopwatch.Stop();
+                            vocalTrackInitializeMilliseconds += vocalStopwatch.ElapsedMilliseconds;
+                            LoadingTrace.LogIfSlow(vocalStopwatch.ElapsedMilliseconds,
+                                "[LOADING] VocalTrack.Initialize took {0}ms", vocalStopwatch.ElapsedMilliseconds);
                         }
 
                         // Create the player on the vocal track
@@ -469,7 +560,17 @@ namespace YARG.Gameplay
 
                         var percussionTrack = VocalTrack.CreatePercussionTrack();
                         percussionTrack.TrackSpeed = VocalTrack.TrackSpeed;
+                        
+                        var playerStopwatch = System.Diagnostics.Stopwatch.StartNew();
                         vocalsPlayer.Initialize(index, vocalIndex, player, Chart, playerHud, percussionTrack, lastHighScore, VocalTrack.TrackSpeed);
+                        playerStopwatch.Stop();
+                        vocalsPlayerInitializeMilliseconds += playerStopwatch.ElapsedMilliseconds;
+                        LoadingTrace.LogIfSlow(
+                            playerStopwatch.ElapsedMilliseconds,
+                            LOADING_OUTLIER_THRESHOLD_MS,
+                            "[LOADING] VocalsPlayer.Initialize for {0} took {1}ms",
+                            player.Profile.Name,
+                            playerStopwatch.ElapsedMilliseconds);
 
                         _players.Add(vocalsPlayer);
                     }
@@ -499,6 +600,115 @@ namespace YARG.Gameplay
                 _loadState = LoadFailureState.Error;
                 _loadFailureMessage = "Failed to load song!";
                 YargLogger.LogException(ex, "Failed to load song!");
+            }
+            finally
+            {
+                ClearPreloadedTrackObjects();
+            }
+            
+            totalStopwatch.Stop();
+            YargLogger.LogFormatInfo(
+                "[LOADING] CreatePlayers() total took {0}ms for {1} player(s): instantiate={2}ms, trackViews={3}ms, trackInit={4}ms, vocalTrack={5}ms, vocalsPlayer={6}ms, highScores={7}ms",
+                totalStopwatch.ElapsedMilliseconds,
+                _players?.Count ?? 0,
+                instantiateMilliseconds,
+                trackViewMilliseconds,
+                trackInitializeMilliseconds,
+                vocalTrackInitializeMilliseconds,
+                vocalsPlayerInitializeMilliseconds,
+                highScoreLookupMilliseconds);
+        }
+
+        private void PreloadTrackPlayers()
+        {
+            var totalStopwatch = System.Diagnostics.Stopwatch.StartNew();
+            ClearPreloadedTrackObjects();
+
+            var preloadedCount = 0;
+            foreach (var player in YargPlayers)
+            {
+                if (player.SittingOut || player.Profile.GameMode == GameMode.Vocals)
+                {
+                    continue;
+                }
+
+                var prefab = GetTrackPrefab(player);
+                if (prefab == null)
+                {
+                    continue;
+                }
+
+                var trackObject = Instantiate(prefab, GetTrackSpawnPosition(0), prefab.transform.rotation);
+                trackObject.SetActive(false);
+                _preloadedTrackObjects.Enqueue(new PreloadedTrackObject(prefab, trackObject));
+                preloadedCount++;
+            }
+
+            totalStopwatch.Stop();
+            LoadingTrace.LogIfSlow(
+                totalStopwatch.ElapsedMilliseconds,
+                "[LOADING] PreloadTrackPlayers() took {0}ms for {1} highway(s)",
+                totalStopwatch.ElapsedMilliseconds,
+                preloadedCount);
+        }
+
+        private GameObject GetTrackPrefab(YargPlayer player)
+        {
+            return player.Profile.GameMode switch
+            {
+                GameMode.FiveFretGuitar => _fiveFretGuitarPrefab,
+                GameMode.SixFretGuitar  => _sixFretGuitarPrefab,
+                GameMode.FourLaneDrums  => _fourLaneDrumsPrefab,
+                GameMode.FiveLaneDrums  => _fiveLaneDrumsPrefab,
+                GameMode.EliteDrums     => Song.HasInstrument(Instrument.FiveLaneDrums) ? _fiveLaneDrumsPrefab : _fourLaneDrumsPrefab,
+                GameMode.ProKeys        => player.Profile.CurrentInstrument is Instrument.ProKeys ? _proKeysPrefab : _fiveLaneKeysPrefab,
+                GameMode.ProGuitar      => _proGuitarPrefab,
+                _                       => null
+            };
+        }
+
+        private GameObject CreateTrackPlayerObject(GameObject prefab, int highwayIndex, out bool reusedPreloadedObject)
+        {
+            if (_preloadedTrackObjects.Count > 0)
+            {
+                var preloadedTrackObject = _preloadedTrackObjects.Dequeue();
+                if (preloadedTrackObject.Prefab == prefab && preloadedTrackObject.Instance != null)
+                {
+                    reusedPreloadedObject = true;
+
+                    var trackTransform = preloadedTrackObject.Instance.transform;
+                    trackTransform.SetPositionAndRotation(GetTrackSpawnPosition(highwayIndex), prefab.transform.rotation);
+                    preloadedTrackObject.Instance.SetActive(true);
+                    return preloadedTrackObject.Instance;
+                }
+
+                if (preloadedTrackObject.Instance != null)
+                {
+                    Destroy(preloadedTrackObject.Instance);
+                }
+
+                var discardedPrefabName = preloadedTrackObject.Prefab != null ? preloadedTrackObject.Prefab.name : "null";
+                YargLogger.LogWarning($"Discarded preloaded highway prefab {discardedPrefabName} while requesting {prefab.name}");
+            }
+
+            reusedPreloadedObject = false;
+            return Instantiate(prefab, GetTrackSpawnPosition(highwayIndex), prefab.transform.rotation);
+        }
+
+        private static Vector3 GetTrackSpawnPosition(int highwayIndex)
+        {
+            return new Vector3(highwayIndex * TRACK_SPACING_X, TRACK_SPAWN_HEIGHT, 0f);
+        }
+
+        private void ClearPreloadedTrackObjects()
+        {
+            while (_preloadedTrackObjects.Count > 0)
+            {
+                var preloadedTrackObject = _preloadedTrackObjects.Dequeue();
+                if (preloadedTrackObject.Instance != null)
+                {
+                    Destroy(preloadedTrackObject.Instance);
+                }
             }
         }
     }
