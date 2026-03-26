@@ -12,6 +12,7 @@ using YARG.Core.Game;
 using YARG.Core.Input;
 using YARG.Core.Song;
 using YARG.Core.Utility;
+using YARG.Gameplay;
 using YARG.Helpers.Extensions;
 using YARG.Localization;
 using YARG.Menu.Navigation;
@@ -99,6 +100,19 @@ namespace YARG.Menu.DifficultySelect
 
         private void OnEnable()
         {
+            // Start preloading the venue while players select difficulties
+            if (GlobalVariables.State.CurrentSong != null)
+            {
+                // Ensure preloader exists (create if not in scene)
+                if (VenuePreloader.Instance == null)
+                {
+                    var preloaderGo = new GameObject("VenuePreloader");
+                    preloaderGo.AddComponent<VenuePreloader>();
+                    YargLogger.LogInfo("[VENUE PRELOAD] Created VenuePreloader GameObject");
+                }
+                VenuePreloader.Instance.StartPreload(GlobalVariables.State.CurrentSong);
+            }
+
             string subHeaderKey = GlobalVariables.State.IsPractice ? "Practice" : "Quickplay";
             _subHeader.text = Localize.Key("Menu.Main.Options", subHeaderKey);
 

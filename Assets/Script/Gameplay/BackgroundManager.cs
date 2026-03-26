@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using Cinemachine;
@@ -68,8 +69,6 @@ namespace YARG.Gameplay
 
         private BundleBackgroundManager _bundleBackgroundManager;
 
-        private Image _tempBlackOverlay;
-
 #if UNITY_EDITOR
         private bool        _usingEditorVenue;
         private string      _editorVenuePath;
@@ -79,17 +78,14 @@ namespace YARG.Gameplay
         [SuppressMessage("Type Safety", "UNT0006", Justification = "UniTaskVoid is a compatible return type.")]
         private async UniTaskVoid Start()
         {
+            YargLogger.LogInfo("=== [VENUE] BackgroundManager.Start() BEGIN - Venue loading starting ===");
+            var totalStopwatch = Stopwatch.StartNew();
+
             // We don't need to update unless we're using a video
             enabled = false;
 
-            // Create temporary black overlay to prevent gray flash before venue loads
-            CreateTempBlackOverlay();
-
-            // Set venue output active early so it's ready when venue loads
-            if (_venueOutput != null)
-            {
-                _venueOutput.gameObject.SetActive(true);
-            }
+            // DON'T activate _venueOutput yet - wait until venue is loaded to avoid gray screen
+            // It will be activated after venue is ready
 
 #if UNITY_EDITOR
             if (VenueEditorHelper.IsSceneEnabled())
@@ -114,7 +110,6 @@ namespace YARG.Gameplay
                 if (!_editorVenueScene.IsValid() || !_editorVenueScene.isLoaded)
                 {
                     YargLogger.LogFormatError("Failed to load editor venue scene {0}", _editorVenuePath);
-                    RemoveTempBlackOverlay();
                     return;
                 }
 
@@ -132,13 +127,10 @@ namespace YARG.Gameplay
                 if (editorBg == null)
                 {
                     YargLogger.LogFormatError("Scene {0} missing BundleBackgroundManager", _editorVenuePath);
-                    RemoveTempBlackOverlay();
                     return;
                 }
 
                 _usingEditorVenue = true;
-
-                _venueOutput.gameObject.SetActive(true);
 
                 var editorRenderers = editorBg.GetComponentsInChildren<Renderer>(true);
 
@@ -161,13 +153,18 @@ namespace YARG.Gameplay
                 editorBg.SetupVenueCamera(editorBg.gameObject);
                 editorBg.LimitVenueLights(editorBg.gameObject);
 
+                // Activate venue output after setup is complete
+                _venueOutput.gameObject.SetActive(true);
+
                 if (_videoPlayer != null && _videoPlayer.targetCamera != null)
                 {
                     Destroy(_videoPlayer.targetCamera.gameObject);
                 }
 
                 _type = BackgroundType.Yarground;
-                RemoveTempBlackOverlay();
+
+                totalStopwatch.Stop();
+                YargLogger.LogFormatInfo("[VENUE] Editor venue loaded in {0}ms total", totalStopwatch.ElapsedMilliseconds);
                 return;
             }
 #endif
@@ -175,7 +172,8 @@ namespace YARG.Gameplay
             using var result = VenueLoader.GetVenue(GameManager.Song, out _source);
             if (result == null)
             {
-                RemoveTempBlackOverlay();
+                totalStopwatch.Stop();
+                YargLogger.LogFormatInfo("[VENUE] No venue found, exiting in {0}ms", totalStopwatch.ElapsedMilliseconds);
                 return;
             }
 
@@ -183,58 +181,144 @@ namespace YARG.Gameplay
 
             _backgroundDimmer.color = colorDim;
 
+            var loadStopwatch = Stopwatch.StartNew();
             _type = result.Type;
             switch (_type)
             {
                 case BackgroundType.Yarground:
+                    YargLogger.LogInfo("[VENUE] Starting yarground load...");
                     LoadYarground(result);
                     break;
                 case BackgroundType.Video:
+                    YargLogger.LogInfo("[VENUE] Starting video load...");
                     LoadVideoBackground(result);
-                    RemoveTempBlackOverlay();
                     break;
                 case BackgroundType.Image:
+                    YargLogger.LogInfo("[VENUE] Starting image load...");
                     _backgroundImage.texture = result.Image.LoadTexture(false);
                     _backgroundImage.uvRect = new Rect(0f, 0f, 1f, -1f);
                     _backgroundImage.gameObject.SetActive(true);
-                    RemoveTempBlackOverlay();
                     break;
+            }
+            loadStopwatch.Stop();
+            totalStopwatch.Stop();
+
+            if (_type != BackgroundType.Yarground)
+            {
+                // Only log total here for non-yarground types since yarground loading is async
+                YargLogger.LogFormatInfo("[VENUE] BackgroundManager.Start() for {0} took {1}ms total", _type, totalStopwatch.ElapsedMilliseconds);
+            }
+            else
+            {
+                YargLogger.LogFormatInfo("[VENUE] BackgroundManager.Start() sync portion took {0}ms (async loading in progress...)", totalStopwatch.ElapsedMilliseconds);
             }
         }
 
         private async UniTaskVoid LoadYarground(BackgroundResult result)
         {
-            var bundle = AssetBundle.LoadFromStream(result.Stream);
-            AssetBundle shaderBundle = null;
+            var totalStopwatch = Stopwatch.StartNew();
+            YargLogger.LogInfo("[VENUE] LoadYarground() started - checking cache...");
+
+            // Check if venue is in cache (preloaded during difficulty select or from previous song)
+            VenuePreloader.PreloadedVenue cached = null;
+            if (VenuePreloader.Instance != null &&
+                VenuePreloader.Instance.TryGetVenue(GameManager.Song, out cached))
+            {
+                YargLogger.LogInfo("[VENUE] Using cached venue!");
+                var useStopwatch = Stopwatch.StartNew();
+                await InitializeFromCached(cached);
+                useStopwatch.Stop();
+                totalStopwatch.Stop();
+                YargLogger.LogFormatInfo("[VENUE] LoadYarground() from cache took {0}ms total", useStopwatch.ElapsedMilliseconds);
+                return;
+            }
+
+            // No cache available, load normally
+            if (VenuePreloader.Instance == null)
+            {
+                YargLogger.LogWarning("[VENUE] VenuePreloader.Instance is null - preloader not initialized or was destroyed");
+            }
+            YargLogger.LogInfo("[VENUE] Venue not in cache, loading from disk...");
+            AssetBundle bundle;
+
+            // Use LoadFromFileAsync for file paths (faster), fall back to LoadFromStream for SngFile streams
+            if (result.FilePath != null)
+            {
+                var bundleLoadStopwatch = Stopwatch.StartNew();
+                bundle = await AssetBundle.LoadFromFileAsync(result.FilePath);
+                bundleLoadStopwatch.Stop();
+                YargLogger.LogFormatInfo("[VENUE] AssetBundle.LoadFromFileAsync took {0}ms", bundleLoadStopwatch.ElapsedMilliseconds);
+            }
+            else
+            {
+                var bundleLoadStopwatch = Stopwatch.StartNew();
+                bundle = AssetBundle.LoadFromStream(result.Stream);
+                bundleLoadStopwatch.Stop();
+                YargLogger.LogFormatInfo("[VENUE] AssetBundle.LoadFromStream took {0}ms", bundleLoadStopwatch.ElapsedMilliseconds);
+            }
 
             _venueOutput.gameObject.SetActive(true);
+
             // KEEP THIS PATH LOWERCASE
             // Breaks things for other platforms, because Unity
+            var assetLoadStopwatch = Stopwatch.StartNew();
             var bg = (GameObject) await bundle.LoadAssetAsync<GameObject>(
                 BundleBackgroundManager.BACKGROUND_PREFAB_PATH.ToLowerInvariant());
+            assetLoadStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] LoadAssetAsync (background prefab) took {0}ms", assetLoadStopwatch.ElapsedMilliseconds);
+
+            var renderersStopwatch = Stopwatch.StartNew();
             var renderers = bg.GetComponentsInChildren<Renderer>(true);
+            renderersStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] GetComponentsInChildren<Renderer> took {0}ms, found {1} renderers",
+                renderersStopwatch.ElapsedMilliseconds, renderers.Length);
+
+            AssetBundle shaderBundle = null;
 
             // Load Metal shaders, if necessary
+            var shaderStopwatch = Stopwatch.StartNew();
             shaderBundle = await LoadMetalShaders(bundle, bg, ExportType.Background);
+            shaderStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] LoadMetalShaders took {0}ms", shaderStopwatch.ElapsedMilliseconds);
 
             // Hookup song-specific textures
             var textureManager = GetComponent<TextureManager>();
             // Load SongBackground here to determine if textures need to be replaced
+            var textureProcStopwatch = Stopwatch.StartNew();
             var songBackground = GameManager.Song.LoadBackground();
+            int materialCount = 0;
             foreach (var renderer in renderers)
             {
                 foreach (var material in renderer.sharedMaterials)
                 {
                     textureManager.ProcessMaterial(material, songBackground?.Type);
+                    materialCount++;
                 }
             }
+            textureProcStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] Texture processing took {0}ms for {1} materials",
+                textureProcStopwatch.ElapsedMilliseconds, materialCount);
 
+            var instantiateStopwatch = Stopwatch.StartNew();
+            YargLogger.LogInfo("[VENUE] About to Instantiate venue prefab...");
             var bgInstance = Instantiate(bg);
+            instantiateStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] Instantiate venue took {0}ms (venue GameObject now exists)", instantiateStopwatch.ElapsedMilliseconds);
+
             var bundleBackgroundManager = bgInstance.GetComponent<BundleBackgroundManager>();
             bundleBackgroundManager.Bundle = bundle;
             bundleBackgroundManager.ShaderBundles.Add(shaderBundle);
+            YargLogger.LogInfo("[VENUE] About to SetupVenueCamera...");
             bundleBackgroundManager.SetupVenueCamera(bgInstance);
+            YargLogger.LogInfo("[VENUE] SetupVenueCamera complete - camera renderer should now be active");
             bundleBackgroundManager.LimitVenueLights(bgInstance);
+
+            // Activate venue output now that venue is loaded and camera is set up
+            if (_venueOutput != null)
+            {
+                YargLogger.LogInfo("[VENUE] Activating _venueOutput GameObject - venue is ready");
+                _venueOutput.gameObject.SetActive(true);
+            }
 
             _bundleBackgroundManager = bundleBackgroundManager;
 
@@ -249,50 +333,119 @@ namespace YARG.Gameplay
                 SetUpVideoTexture(songBackground);
             }
 
+            var charLoadStopwatch = Stopwatch.StartNew();
             await LoadCustomCharacter(bgInstance);
+            charLoadStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] LoadCustomCharacter took {0}ms", charLoadStopwatch.ElapsedMilliseconds);
 
             // Initialize CharacterManager, if it exists
+            var charInitStopwatch = Stopwatch.StartNew();
             var characterManager = bgInstance.GetComponentInChildren<CharacterManager>();
             if (characterManager != null)
             {
                 characterManager.Initialize();
             }
+            charInitStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] CharacterManager.Initialize took {0}ms", charInitStopwatch.ElapsedMilliseconds);
 
-            // Remove temporary black overlay now that venue is loaded
-            RemoveTempBlackOverlay();
-        }
-
-        private void CreateTempBlackOverlay()
-        {
-            // Find the canvas to add the overlay to
-            var canvas = FindObjectOfType<Canvas>();
-            if (canvas == null)
+            // Add to cache for future use (restart, next song with same venue)
+            // Ensure preloader exists even if it wasn't preloaded
+            if (result.FilePath != null)
             {
-                return;
+                if (VenuePreloader.Instance == null)
+                {
+                    var preloaderGo = new GameObject("VenuePreloader");
+                    preloaderGo.AddComponent<VenuePreloader>();
+                    YargLogger.LogInfo("[VENUE] Created VenuePreloader GameObject during venue load");
+                }
+                VenuePreloader.Instance.AddToCache(result.FilePath, bundle, bg, shaderBundle, result, _source);
             }
 
-            // Create a full-screen black image
-            _tempBlackOverlay = new GameObject("TempBlackOverlay").AddComponent<Image>();
-            _tempBlackOverlay.transform.SetParent(canvas.transform, false);
-            _tempBlackOverlay.color = Color.black;
-
-            // Set to fill the entire screen
-            var rectTransform = _tempBlackOverlay.GetComponent<RectTransform>();
-            rectTransform.anchorMin = Vector2.zero;
-            rectTransform.anchorMax = Vector2.one;
-            rectTransform.sizeDelta = Vector2.zero;
-
-            // Place it at the top of the hierarchy so it renders above everything
-            _tempBlackOverlay.transform.SetAsLastSibling();
+            totalStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] LoadYarground() TOTAL took {0}ms - venue should now be visible", totalStopwatch.ElapsedMilliseconds);
         }
 
-        private void RemoveTempBlackOverlay()
+        private async UniTask InitializeFromCached(VenuePreloader.PreloadedVenue cached)
         {
-            if (_tempBlackOverlay != null)
+            YargLogger.LogInfo("[VENUE] InitializeFromCached() started - using cached venue");
+            var bg = cached.BackgroundPrefab;
+            var bundle = cached.Bundle;
+            var shaderBundle = cached.ShaderBundle;
+
+            var renderersStopwatch = Stopwatch.StartNew();
+            var renderers = bg.GetComponentsInChildren<Renderer>(true);
+            renderersStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] GetComponentsInChildren<Renderer> took {0}ms, found {1} renderers",
+                renderersStopwatch.ElapsedMilliseconds, renderers.Length);
+
+            // Hookup song-specific textures
+            var textureManager = GetComponent<TextureManager>();
+            var textureProcStopwatch = Stopwatch.StartNew();
+            var songBackground = GameManager.Song.LoadBackground();
+            int materialCount = 0;
+            foreach (var renderer in renderers)
             {
-                Destroy(_tempBlackOverlay.gameObject);
-                _tempBlackOverlay = null;
+                foreach (var material in renderer.sharedMaterials)
+                {
+                    textureManager.ProcessMaterial(material, songBackground?.Type);
+                    materialCount++;
+                }
             }
+            textureProcStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] Texture processing took {0}ms for {1} materials",
+                textureProcStopwatch.ElapsedMilliseconds, materialCount);
+
+            var instantiateStopwatch = Stopwatch.StartNew();
+            YargLogger.LogInfo("[VENUE] About to Instantiate venue prefab...");
+            var bgInstance = Instantiate(bg);
+            instantiateStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] Instantiate venue took {0}ms (venue GameObject now exists)", instantiateStopwatch.ElapsedMilliseconds);
+
+            var bundleBackgroundManager = bgInstance.GetComponent<BundleBackgroundManager>();
+            bundleBackgroundManager.Bundle = bundle;
+            bundleBackgroundManager.BundlesManagedByCache = true; // Cache manages bundle lifecycle
+            if (shaderBundle != null)
+            {
+                bundleBackgroundManager.ShaderBundles.Add(shaderBundle);
+            }
+            bundleBackgroundManager.SetupVenueCamera(bgInstance);
+            bundleBackgroundManager.LimitVenueLights(bgInstance);
+
+            // Activate venue output after setup is complete
+            if (_venueOutput != null)
+            {
+                YargLogger.LogInfo("[VENUE] Activating _venueOutput GameObject - preloaded venue is ready");
+                _venueOutput.gameObject.SetActive(true);
+            }
+
+            _bundleBackgroundManager = bundleBackgroundManager;
+
+            // Position venue as close to origin as is conveniently possible without wrecking scene view
+            SetYargroundOrigin(bgInstance);
+
+            // Destroy the default camera (venue has its own)
+            Destroy(_videoPlayer.targetCamera.gameObject);
+
+            if (textureManager.VideoTexFound())
+            {
+                SetUpVideoTexture(songBackground);
+            }
+
+            var charLoadStopwatch = Stopwatch.StartNew();
+            await LoadCustomCharacter(bgInstance);
+            charLoadStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] LoadCustomCharacter took {0}ms", charLoadStopwatch.ElapsedMilliseconds);
+
+            // Initialize CharacterManager, if it exists
+            var charInitStopwatch = Stopwatch.StartNew();
+            var characterManager = bgInstance.GetComponentInChildren<CharacterManager>();
+            if (characterManager != null)
+            {
+                characterManager.Initialize();
+            }
+            charInitStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] CharacterManager.Initialize took {0}ms", charInitStopwatch.ElapsedMilliseconds);
+            YargLogger.LogInfo("[VENUE] InitializeFromCached() complete - cached venue should now be visible");
         }
 
         private void SetUpVideoTexture(BackgroundResult songBackGround)
@@ -520,6 +673,8 @@ namespace YARG.Gameplay
 
         private async UniTask LoadCustomCharacter(GameObject venueRoot)
         {
+            var stopwatch = Stopwatch.StartNew();
+
             string characterPath = SettingsManager.Settings.CustomVocalsCharacter.Value;
 
             if (string.IsNullOrEmpty(characterPath))
@@ -527,7 +682,10 @@ namespace YARG.Gameplay
                 return;
             }
 
+            var charBundleStopwatch = Stopwatch.StartNew();
             var bundle = AssetBundle.LoadFromFile(characterPath);
+            charBundleStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] Character bundle LoadFromFile took {0}ms", charBundleStopwatch.ElapsedMilliseconds);
 
             if (bundle == null)
             {
@@ -536,7 +694,11 @@ namespace YARG.Gameplay
 
             _bundleBackgroundManager.CharacterBundles.Add(bundle);
 
+            var charAssetStopwatch = Stopwatch.StartNew();
             var character = bundle.LoadAsset<GameObject>(BundleBackgroundManager.CHARACTER_PREFAB_PATH.ToLowerInvariant());
+            charAssetStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] Character asset LoadAsset took {0}ms", charAssetStopwatch.ElapsedMilliseconds);
+
             if (character == null)
             {
                 YargLogger.LogFormatError("Failed to load character from {0}", characterPath);
@@ -544,7 +706,11 @@ namespace YARG.Gameplay
             }
 
             // Load Metal shaders
+            var charShaderStopwatch = Stopwatch.StartNew();
             var shaderBundle = await LoadMetalShaders(bundle, character, ExportType.Character);
+            charShaderStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] Character LoadMetalShaders took {0}ms", charShaderStopwatch.ElapsedMilliseconds);
+
             if (shaderBundle != null)
             {
                 _bundleBackgroundManager.ShaderBundles.Add(shaderBundle);
@@ -576,6 +742,7 @@ namespace YARG.Gameplay
             // Find a character of the same type in venueRoot
             GameObject existingCharacter = null;
 
+            var findCharStopwatch = Stopwatch.StartNew();
             var characters = venueRoot.GetComponentsInChildren<VenueCharacter>();
             foreach (var c in characters)
             {
@@ -585,6 +752,9 @@ namespace YARG.Gameplay
                     break;
                 }
             }
+            findCharStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] Find existing character took {0}ms (found {1} characters total)",
+                findCharStopwatch.ElapsedMilliseconds, characters.Length);
 
             if (existingCharacter == null)
             {
@@ -595,6 +765,7 @@ namespace YARG.Gameplay
             // Replace existingCharacter with the new character
             var existingParent = existingCharacter.transform.parent;
 
+            var replaceCharStopwatch = Stopwatch.StartNew();
             var newCharacter = Instantiate(character, existingParent);
             ReplaceReferences(venueRoot, existingCharacter, newCharacter);
             existingCharacter.SetActive(false);
@@ -603,10 +774,16 @@ namespace YARG.Gameplay
             // Lastly, make sure the new character and all its children are in the Venue layer
             var layerIndex = LayerMask.NameToLayer("Venue");
             SetLayer(newCharacter, layerIndex);
+            replaceCharStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] Character replacement took {0}ms", replaceCharStopwatch.ElapsedMilliseconds);
+
+            stopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] LoadCustomCharacter() total took {0}ms", stopwatch.ElapsedMilliseconds);
         }
 
         private async UniTask<AssetBundle> LoadMetalShaders(AssetBundle bundle, GameObject bg, ExportType type)
         {
+            var totalStopwatch = Stopwatch.StartNew();
 #if UNITY_EDITOR_OSX || UNITY_STANDALONE_OSX
             AssetBundle shaderBundle = null;
             var renderers = bg.GetComponentsInChildren<Renderer>(true);
@@ -619,14 +796,21 @@ namespace YARG.Gameplay
                 _ => throw new ArgumentOutOfRangeException(nameof(type), type, null)
             };
 
+            var shaderDataStopwatch = Stopwatch.StartNew();
             var shaderBundleData = (TextAsset)await bundle.LoadAssetAsync<TextAsset>(
                 shaderBundleName
             );
+            shaderDataStopwatch.Stop();
 
             if (shaderBundleData != null && shaderBundleData.bytes.Length > 0)
             {
-                YargLogger.LogInfo("Loading Metal shader bundle");
+                YargLogger.LogFormatInfo("[VENUE] Metal shader bundle data loaded in {0}ms", shaderDataStopwatch.ElapsedMilliseconds);
+
+                var shaderBundleLoadStopwatch = Stopwatch.StartNew();
                 shaderBundle = await AssetBundle.LoadFromMemoryAsync(shaderBundleData.bytes);
+                shaderBundleLoadStopwatch.Stop();
+                YargLogger.LogFormatInfo("[VENUE] Metal shader bundle LoadFromMemoryAsync took {0}ms", shaderBundleLoadStopwatch.ElapsedMilliseconds);
+
                 var allAssets = shaderBundle.LoadAllAssets<Shader>();
                 foreach (var shader in allAssets)
                 {
@@ -641,7 +825,8 @@ namespace YARG.Gameplay
             // Yarground comes with shaders for dx11/dx12/glcore/vulkan
             // Metal shaders used on OSX come in this separate bundle
             // Update our renderers to use them
-
+            var shaderApplyStopwatch = Stopwatch.StartNew();
+            int shaderApplyCount = 0;
             foreach (var renderer in renderers)
             {
                 foreach (var material in renderer.sharedMaterials)
@@ -652,6 +837,7 @@ namespace YARG.Gameplay
                         YargLogger.LogFormatDebug("Found bundled shader {0}", shaderName);
                         // We found shader from Yarground
                         material.shader = shader;
+                        shaderApplyCount++;
                     }
                     else
                     {
@@ -661,10 +847,21 @@ namespace YARG.Gameplay
                     }
                 }
             }
+            shaderApplyStopwatch.Stop();
+            if (shaderApplyCount > 0)
+            {
+                YargLogger.LogFormatInfo("[VENUE] Applied {0} Metal shaders in {1}ms", shaderApplyCount, shaderApplyStopwatch.ElapsedMilliseconds);
+            }
 
+            totalStopwatch.Stop();
+            if (shaderBundle != null)
+            {
+                YargLogger.LogFormatInfo("[VENUE] LoadMetalShaders() total took {0}ms", totalStopwatch.ElapsedMilliseconds);
+            }
             return shaderBundle;
 #endif
             // Fallback if we're not running on OSX
+            totalStopwatch.Stop();
             return null;
         }
 
@@ -800,8 +997,6 @@ namespace YARG.Gameplay
 
         public void Dispose()
         {
-            RemoveTempBlackOverlay();
-
             if (VIDEO_PATH != null)
             {
                 File.Delete(VIDEO_PATH);

@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using UnityEngine;
+using UnityEngine.Profiling;
 using UnityEngine.SceneManagement;
 using YARG.Audio.BASS;
 using YARG.Core.Logging;
@@ -32,6 +33,9 @@ namespace YARG
     [DefaultExecutionOrder(-5000)]
     public class GlobalVariables : MonoSingleton<GlobalVariables>
     {
+        private const int CLEANUP_INTERVAL_EXITS = 3;
+        private const long CLEANUP_MEMORY_THRESHOLD_BYTES = 768L * 1024L * 1024L;
+
         public List<YargPlayer> Players { get; private set; }
 
         public static bool OfflineMode    { get; private set; }
@@ -44,6 +48,8 @@ namespace YARG
         public SceneIndex CurrentScene { get; private set; } = SceneIndex.Persistent;
 
         public string CurrentVersion { get; private set; } = "v0.14";
+
+        private int _gameplayExitsSinceCleanup;
 
         protected override void SingletonAwake()
         {
@@ -165,17 +171,21 @@ namespace YARG
                 YargLogger.LogInfo("[SCENE] Skipping cleanup for gameplay restart");
                 LogGCTracking("After skip", gc0, gc1, gc2);
             }
-            else if (needsCleanup)
+            else if (needsCleanup && ShouldRunSceneCleanup(out var cleanupReason, out var allocatedMemoryBytes))
             {
-                YargLogger.LogInfo("[SCENE] Unloading unused assets after Gameplay...");
+                YargLogger.LogFormatInfo(
+                    "[SCENE] Unloading unused assets after Gameplay ({0}, allocated memory: {1} MB)...",
+                    cleanupReason,
+                    BytesToMegabytes(allocatedMemoryBytes));
                 await Resources.UnloadUnusedAssets();
                 stopwatch.Stop();
                 LogGCTracking("UnloadUnusedAssets", gc0, gc1, gc2);
                 YargLogger.LogFormatInfo("[SCENE] UnloadUnusedAssets took {0}ms", stopwatch.ElapsedMilliseconds);
+                _gameplayExitsSinceCleanup = 0;
             }
             else
             {
-                YargLogger.LogInfo("[SCENE] Skipping cleanup (not unloading Gameplay)");
+                LogSkippedCleanup(needsCleanup);
                 LogGCTracking("After skip", gc0, gc1, gc2);
             }
 
@@ -212,6 +222,48 @@ namespace YARG
                     newGc1, newGc1 - gc1,
                     newGc2, newGc2 - gc2);
             }
+        }
+
+        private bool ShouldRunSceneCleanup(out string reason, out long allocatedMemoryBytes)
+        {
+            allocatedMemoryBytes = Profiler.GetTotalAllocatedMemoryLong();
+            if (allocatedMemoryBytes >= CLEANUP_MEMORY_THRESHOLD_BYTES)
+            {
+                reason = "memory threshold exceeded";
+                return true;
+            }
+
+            _gameplayExitsSinceCleanup++;
+            if (_gameplayExitsSinceCleanup >= CLEANUP_INTERVAL_EXITS)
+            {
+                reason = "cleanup interval reached";
+                return true;
+            }
+
+            reason = "cleanup deferred";
+            return false;
+        }
+
+        private void LogSkippedCleanup(bool needsCleanup)
+        {
+            if (!needsCleanup)
+            {
+                YargLogger.LogInfo("[SCENE] Skipping cleanup (not unloading Gameplay)");
+                return;
+            }
+
+            long allocatedMemoryBytes = Profiler.GetTotalAllocatedMemoryLong();
+            YargLogger.LogFormatInfo(
+                "[SCENE] Deferring cleanup after Gameplay (allocated memory: {0} MB, exits since cleanup: {1}/{2})",
+                BytesToMegabytes(allocatedMemoryBytes),
+                _gameplayExitsSinceCleanup,
+                CLEANUP_INTERVAL_EXITS);
+        }
+
+        private static long BytesToMegabytes(long bytes)
+        {
+            const long BYTES_PER_MEGABYTE = 1024L * 1024L;
+            return bytes / BYTES_PER_MEGABYTE;
         }
 
         public void LoadScene(SceneIndex scene)

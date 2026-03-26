@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using UnityEngine;
 using YARG.Core;
 using YARG.Core.Chart;
@@ -160,10 +161,17 @@ namespace YARG.Venue.Characters
 
         public void Initialize()
         {
+            var stopwatch = Stopwatch.StartNew();
+
             // Find all the characters in the venue, done here because OnChartLoaded can get called before any
             // replacement characters are loaded.
             _characters.Clear();
+
+            var getCompsStopwatch = Stopwatch.StartNew();
             var venueCharacters = _venue.GetComponentsInChildren<VenueCharacter>(false);
+            getCompsStopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] CharacterManager.GetComponentsInChildren took {0}ms, found {1} characters",
+                getCompsStopwatch.ElapsedMilliseconds, venueCharacters.Length);
 
             foreach (var character in venueCharacters)
             {
@@ -174,6 +182,9 @@ namespace YARG.Venue.Characters
                 character.Initialize(this);
                 _characters.Add(character.Type, character);
             }
+
+            stopwatch.Stop();
+            YargLogger.LogFormatInfo("[VENUE] CharacterManager.Initialize() total took {0}ms", stopwatch.ElapsedMilliseconds);
         }
 
         private void Update()

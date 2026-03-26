@@ -1,7 +1,9 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
+using YARG.Core.Logging;
 using YARG.Gameplay;
 using YARG.Venue.VenueCamera;
 using YARG.Venue.Characters;
@@ -24,6 +26,8 @@ namespace YARG.Venue
         public const string BACKGOUND_OSX_MATERIAL_PREFIX = "_metal_";
 
         private const string VENUE_LAYER_NAME = "Venue";
+        private static readonly List<AssetBundle> PENDING_BUNDLE_UNLOADS = new();
+        private static bool _bundleUnloadQueued;
 
         private int _venueLayerNumber = -1;
 
@@ -42,6 +46,11 @@ namespace YARG.Venue
         public List<AssetBundle> ShaderBundles { get; set; } = new();
         public List<AssetBundle> CharacterBundles { get; set; } = new();
 
+        /// <summary>
+        /// If true, bundles are managed by VenuePreloader cache and should not be unloaded on scene destroy.
+        /// </summary>
+        public bool BundlesManagedByCache { get; set; }
+
         private void Awake()
         {
             // Move object out of the way, so its effects don't collide with the tracks
@@ -54,7 +63,12 @@ namespace YARG.Venue
             // If venue has a CameraManager, don't add VenueCameraRenderer, it will be taken care of
             if (bgInstance.GetComponentInChildren<CameraManager>() == null)
             {
+                YargLogger.LogInfo("[VENUE] SetupVenueCamera - Adding VenueCameraRenderer component to camera");
                 mainCamera.gameObject.AddComponent<VenueCameraRenderer>();
+            }
+            else
+            {
+                YargLogger.LogInfo("[VENUE] SetupVenueCamera - Venue has CameraManager, skipping VenueCameraRenderer");
             }
         }
 
@@ -77,36 +91,83 @@ namespace YARG.Venue
 
         private void OnDestroy()
         {
-            if (Bundle != null)
+            // Don't unload bundles if they're managed by the cache
+            if (!BundlesManagedByCache)
             {
-                Bundle.Unload(true);
-            }
+                QueueBundleForUnload(Bundle);
+                Bundle = null;
 
-            if (ShaderBundles.Count > 0)
-            {
-                foreach (var bundle in ShaderBundles)
+                if (ShaderBundles.Count > 0)
                 {
-                    if (bundle != null)
+                    foreach (var bundle in ShaderBundles)
                     {
-                        bundle.Unload(true);
+                        QueueBundleForUnload(bundle);
                     }
+
+                    ShaderBundles.Clear();
                 }
 
-                ShaderBundles.Clear();
-            }
-
-            if (CharacterBundles.Count > 0)
-            {
-                foreach (var bundle in CharacterBundles)
+                if (CharacterBundles.Count > 0)
                 {
-                    if (bundle != null)
+                    foreach (var bundle in CharacterBundles)
                     {
-                        bundle.Unload(true);
+                        QueueBundleForUnload(bundle);
                     }
+
+                    CharacterBundles.Clear();
                 }
 
-                CharacterBundles.Clear();
+                QueuePendingBundleUnload();
             }
+            else
+            {
+                YargLogger.LogInfo("[VENUE] BundleBackgroundManager destroyed - bundles kept for cache");
+            }
+        }
+
+        private static void QueueBundleForUnload(AssetBundle bundle)
+        {
+            if (bundle == null)
+            {
+                return;
+            }
+
+            if (!PENDING_BUNDLE_UNLOADS.Contains(bundle))
+            {
+                PENDING_BUNDLE_UNLOADS.Add(bundle);
+            }
+        }
+
+        private static void QueuePendingBundleUnload()
+        {
+            if (_bundleUnloadQueued || PENDING_BUNDLE_UNLOADS.Count == 0 || GlobalVariables.Instance == null)
+            {
+                return;
+            }
+
+            _bundleUnloadQueued = true;
+            GlobalVariables.Instance.StartCoroutine(UnloadBundlesNextFrame());
+        }
+
+        private static IEnumerator UnloadBundlesNextFrame()
+        {
+            yield return null;
+
+            foreach (var bundle in PENDING_BUNDLE_UNLOADS)
+            {
+                if (bundle == null)
+                {
+                    continue;
+                }
+
+                // The instantiated venue/character objects are already owned by the scene.
+                // Release the bundle container after the destruction pass so Unity is no longer
+                // tearing down objects sourced from the same bundle.
+                bundle.Unload(false);
+            }
+
+            PENDING_BUNDLE_UNLOADS.Clear();
+            _bundleUnloadQueued = false;
         }
 
 #if UNITY_EDITOR

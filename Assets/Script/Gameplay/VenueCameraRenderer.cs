@@ -111,6 +111,10 @@ namespace YARG.Gameplay
             {
                 _venueOutput = venueOutputObject.GetComponent<RawImage>();
             }
+            else
+            {
+                YargLogger.LogWarning("[VENUE] Could NOT find 'Venue Output' GameObject!");
+            }
         }
 
         private void RecreateTextures()
