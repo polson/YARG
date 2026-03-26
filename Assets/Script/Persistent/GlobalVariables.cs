@@ -32,6 +32,8 @@ namespace YARG
     [DefaultExecutionOrder(-5000)]
     public class GlobalVariables : MonoSingleton<GlobalVariables>
     {
+        private static bool FastLoadingEnabled => SettingsManager.Settings.FastLoading.Value;
+
         public List<YargPlayer> Players { get; private set; }
 
         public static bool OfflineMode    { get; private set; }
@@ -151,7 +153,11 @@ namespace YARG
             Navigator.Instance.DisableMenuInputs = false;
 
             await Resources.UnloadUnusedAssets();
-            GC.Collect();
+
+            if (!FastLoadingEnabled)
+            {
+                GC.Collect();
+            }
         }
 
         public void LoadScene(SceneIndex scene)

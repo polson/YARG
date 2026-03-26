@@ -596,7 +596,6 @@ namespace YARG.Gameplay
                     var shaderName = material.shader.name;
                     if (metalShaders.TryGetValue(shaderName, out var shader))
                     {
-                        YargLogger.LogFormatDebug("Found bundled shader {0}", shaderName);
                         // We found shader from Yarground
                         material.shader = shader;
                     }

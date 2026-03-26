@@ -554,6 +554,7 @@ namespace YARG.Settings
             public OutputChannelSetting OutputChannelMetronome { get; } = new(-1, OutputChannelMetronomeCallback);
 
             public ToggleSetting EnableNormalization { get; } = new(false);
+            public ToggleSetting FastLoading { get; } = new(false);
             public CustomCharacterSetting CustomVocalsCharacter { get; } = new(string.Empty, VenueCharacter.CharacterType.Vocals, CustomCharacterCallback);
             #endregion
 

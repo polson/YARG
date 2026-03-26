@@ -87,6 +87,8 @@ namespace YARG.Audio.BASS
 
     public class BassAudioManager : AudioManager
     {
+        private static bool FastLoadingEnabled => SettingsManager.Settings.FastLoading.Value;
+
         private static readonly string[] FORMATS =
         {
             ".ogg", ".mogg", ".wav", ".mp3", ".aiff", ".opus",
@@ -627,18 +629,47 @@ namespace YARG.Audio.BASS
 
         internal static bool CreateSourceStream(Stream stream, out int streamHandle)
         {
+            // Only prescan MP3 streams when fast loading setting is enabled.
+            // Other formats already have seek tables and don't need prescan
+            bool prescan = !FastLoadingEnabled || IsMp3Stream(stream);
+
             // Last flag is new BASS_SAMPLE_NOREORDER flag, which is not in the BassFlags enum,
             // as it was made as part of an update to fix <= 8 channel oggs.
             // https://www.un4seen.com/forum/?topic=20148.msg140872#msg140872
-            const BassFlags streamFlags = BassFlags.Prescan | BassFlags.Decode | BassFlags.AsyncFile | (BassFlags) 64;
+            var flags = BassFlags.Decode | BassFlags.AsyncFile | (BassFlags) 64;
+            if (prescan)
+            {
+                flags |= BassFlags.Prescan;
+            }
 
-            streamHandle = Bass.CreateStream(StreamSystem.NoBuffer, streamFlags, new BassStreamProcedures(stream));
+            streamHandle = Bass.CreateStream(StreamSystem.NoBuffer, flags, new BassStreamProcedures(stream));
             if (streamHandle == 0)
             {
                 YargLogger.LogFormatError("Failed to create source stream: {0}!", Bass.LastError);
                 return false;
             }
+
             return true;
+        }
+
+        private static bool IsMp3Stream(Stream stream)
+        {
+            long pos = stream.Position;
+            try
+            {
+                Span<byte> header = stackalloc byte[3];
+                int read = stream.Read(header);
+                return read >= 3 && (
+                    // MP3 sync word (MPEG audio frame)
+                    (header[0] == 0xFF && (header[1] & 0xE0) == 0xE0) ||
+                    // ID3 tag
+                    header[0] == 0x49 && header[1] == 0x44 && header[2] == 0x33
+                );
+            }
+            finally
+            {
+                stream.Position = pos;
+            }
         }
 
         internal static bool GetSpeed(int streamHandle, out float speed)

@@ -111,6 +111,8 @@ namespace YARG
 
     public sealed class LoadingContext : IDisposable
     {
+        private static bool FastLoadingEnabled => SettingsManager.Settings.FastLoading.Value;
+
         private bool _disposed;
 
         private struct QueuedTask
@@ -168,7 +170,11 @@ namespace YARG
                     YargLogger.LogException(ex);
                 }
             }
-            GC.Collect();
+
+            if (!FastLoadingEnabled)
+            {
+                GC.Collect();
+            }
         }
 
         public async void Dispose()

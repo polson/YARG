@@ -1465,6 +1465,10 @@
                 "Name": "Enable UDP data stream",
                 "Description": "Enables sending of UDP information packets over the network, for software such as YALCY."
             },
+            "FastLoading": {
+                "Name": "Fast Loading",
+                "Description": "Skips audio prescan and manual garbage collection during scene transitions for faster loading times."
+            },
             "RB3EEnabled": {
                 "Name": "Enable RB3E Stage Kit data stream",
                 "Description": "Enables sending of RB3E style stage kit information packets over the network, for hardware such as StageKitPied."

@@ -240,6 +240,7 @@ namespace YARG.Settings
                 nameof(Settings.CustomVocalsCharacter),
                 nameof(Settings.DataStreamEnable),
                 nameof(Settings.EnableNormalization),
+                nameof(Settings.FastLoading),
                 nameof(Settings.SaveScoresWithBots),
                 new HeaderMetadata("Accessibility"),
                 nameof(Settings.FontScaling),
