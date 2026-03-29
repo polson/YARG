@@ -14,11 +14,14 @@ using YARG.Helpers;
 using YARG.Input;
 using YARG.Player;
 using YARG.Settings;
+using static YARG.Gameplay.Player.PlayerEvent;
 
 namespace YARG.Gameplay.Player
 {
     public class VocalsPlayer : BasePlayer
     {
+        private const int COMBO_BREAK_THRESHOLD = 2;
+
         public VocalsEngineParameters EngineParams { get; private set; }
         public VocalsEngine           Engine       { get; private set; }
 
@@ -220,11 +223,8 @@ namespace YARG.Gameplay.Player
 
             engine.OnNoteMissed += (_, _) =>
             {
-                if (LastCombo >= 2)
-                {
-                    GlobalAudioHandler.PlaySoundEffect(SfxSample.NoteMiss);
-                }
-
+                bool isComboBreak = LastCombo >= COMBO_BREAK_THRESHOLD;
+                OnEvent(new NoteMissed(isComboBreak));
                 LastCombo = Combo;
             };
 
@@ -563,11 +563,6 @@ namespace YARG.Gameplay.Player
 
             Engine = CreateEngine();
             ResetPracticeSection();
-        }
-
-        public override void SetStemMuteState(bool muted)
-        {
-            // Vocals has no stem muting
         }
 
         protected override bool InterceptInput(ref GameInput input)

@@ -4,6 +4,7 @@ using System.Linq;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using YARG.Audio;
 using YARG.Core.Audio;
 using YARG.Core.Chart;
 using YARG.Core.Engine;
@@ -72,6 +73,8 @@ namespace YARG.Gameplay
         private List<BasePlayer> _players;
 
         public int TotalPlayers => _players.Count;
+
+        private PlayerAudioManager _playerAudioManager;
 
         public bool IsSongStarted { get; private set; } = false;
 
@@ -164,6 +167,7 @@ namespace YARG.Gameplay
         private int _originalSleepTimeout;
 
         private StemMixer _mixer;
+        private HashSet<SongStem> _mixerStems;
 
         private List<double> _frameTimes;
 
@@ -232,16 +236,14 @@ namespace YARG.Gameplay
             SettingsManager.Settings.NoFailMode.OnChange -= OnNoFailModeChanged;
             EngineManager.OnSongFailed -= OnSongFailed;
 
-            //Restore stem volumes to their original state
-            foreach (var (stem, state) in _stemStates)
-            {
-                GlobalAudioHandler.SetVolumeSetting(stem, state.Volume);
-            }
+            // Restore crowd audio before disposing
+            RestoreCrowdAudio();
 
             DisposeDebug();
             _pauseMenu.PopAllMenus();
             _mixer?.Dispose();
             _songRunner?.Dispose();
+            _playerAudioManager?.Dispose();
             BackgroundManager.Dispose();
             CrowdEventHandler.Dispose();
 

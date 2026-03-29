@@ -31,7 +31,7 @@ namespace YARG.Audio.BASS
                 YargLogger.LogFormatError("Failed to get channel length in bytes: {0}!", Bass.LastError);
             }
 
-            double volume = GlobalAudioHandler.GetTrueVolume(stem);
+            double volume = MixerAudioHandler.GetTrueVolume(stem);
             if (clampStemVolume && volume < MINIMUM_STEM_VOLUME)
             {
                 volume = MINIMUM_STEM_VOLUME;
@@ -99,20 +99,20 @@ namespace YARG.Audio.BASS
             }
         }
 
-        protected override void SetVolume_Internal(double volume)
+        protected override void SetVolume_Internal(double volume, double duration = 0)
         {
             _volume = volume;
 
-            // Using ChannelSlideAttribute with a duration of 0 here instead of ChannelSetAttribute
-            // This will cancel any slides in progress that were started SetReverb_Internal
-            if (!Bass.ChannelSlideAttribute(_streamHandles.Stream, ChannelAttribute.Volume, (float) volume, 0))
+            int slideTime = (int)(duration * 1000);
+
+            if (!Bass.ChannelSlideAttribute(_streamHandles.Stream, ChannelAttribute.Volume, (float) volume, slideTime))
             {
                 YargLogger.LogFormatError("Failed to set stream volume: {0}!", Bass.LastError);
             }
 
             float reverbVolume = _isReverbing ? (float) volume * BassHelpers.REVERB_VOLUME_MULTIPLIER : 0;
 
-            if (!Bass.ChannelSlideAttribute(_reverbHandles.Stream, ChannelAttribute.Volume, reverbVolume, 0))
+            if (!Bass.ChannelSlideAttribute(_reverbHandles.Stream, ChannelAttribute.Volume, reverbVolume, slideTime))
             {
                 YargLogger.LogFormatError("Failed to set reverb volume: {0}!", Bass.LastError);
             }
