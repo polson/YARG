@@ -205,7 +205,7 @@ namespace YARG.Audio.BASS
                 return null;
             }
 
-            device._pitchDetector = new PitchTracker(device._recordHandle.SampleRate);
+            device._pitchDetector = new PitchTracker(sampleRate: device._recordHandle.SampleRate);
 
             var monitorPlayback = MonitorPlaybackHandle.Create(device._recordHandle.SampleRate);
             if (monitorPlayback == null)
