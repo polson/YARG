@@ -213,6 +213,8 @@ namespace YARG.Playback
         private double _syncCorrectionSuppressedUntil = double.NegativeInfinity;
         private double _nextSyncSpeedChangeTime = double.NegativeInfinity;
 
+        private bool _justResumed;
+
         private readonly StemMixer _mixer;
 
         public float SyncSpeedAdjustment => _syncSpeedAdjustment;
@@ -413,9 +415,37 @@ namespace YARG.Playback
                 double syncVisualTime = currentSongTime - audioOffset;
                 double preRollSongTime = _mixer.GetEstimatedOutputLatency() * songSpeed;
 
+                // Reset justResumed if we are still in the lead-in
+                lock (_syncThread)
+                {
+                    if (_justResumed && syncVisualTime < -preRollSongTime)
+                    {
+                        _justResumed = false;
+                    }
+                }
+
                 if (!paused && _mixer.IsPaused &&
                     syncVisualTime >= -preRollSongTime && syncVisualTime < _mixer.Length)
                 {
+                    double delay = 0;
+                    bool justResumed;
+                    lock (_syncThread)
+                    {
+                        justResumed = _justResumed;
+                        _justResumed = false;
+                    }
+
+                    if (justResumed)
+                    {
+                        double frameStart = InputManager.FrameStartCpuTime;
+                        if (frameStart > 0)
+                        {
+                            double now = (double) System.Diagnostics.Stopwatch.GetTimestamp() / System.Diagnostics.Stopwatch.Frequency;
+                            delay = Math.Max(0, now - frameStart);
+                        }
+                    }
+
+                    _mixer.UnpauseDelay = delay;
                     _mixer.Play();
                     syncAudioTime = _mixer.GetPosition();
                 }
@@ -601,6 +631,7 @@ namespace YARG.Playback
             _syncSpeedMultiplier = 0;
             _syncSpeedAdjustment = 0f;
             _syncSmoothedDrift = float.NaN;
+            _justResumed = false;
             _mixer.SetSpeed(RealSongSpeed, true);
             SuppressSyncCorrection();
         }
@@ -846,6 +877,7 @@ namespace YARG.Playback
                 SetInputBaseChecked(InputTime);
                 ResetSync();
                 ResetSyncEstimate();
+                _justResumed = true;
                 Paused = false;
             }
 

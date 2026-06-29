@@ -194,7 +194,11 @@ namespace YARG.Audio.BASS
                     return (int) Bass.LastError;
                 }
                 _isPlaying = true;
-                ReanchorTransport(_positionOffset, delayAudible: true);
+
+                double delay = UnpauseDelay;
+                UnpauseDelay = 0;
+
+                ReanchorTransport(_positionOffset, delayAudible: true, delay);
             }
 
             if (IsWhammyEnabled)
@@ -444,7 +448,7 @@ namespace YARG.Audio.BASS
             }
         }
 
-        private void ReanchorTransport(double songPosition, bool delayAudible = false)
+        private void ReanchorTransport(double songPosition, bool delayAudible = false, double unpauseDelay = 0)
         {
             if (!_bassManager.TryGetMasterMixerTime(out double masterTime))
             {
@@ -456,12 +460,12 @@ namespace YARG.Audio.BASS
             _pendingAudibleSpeedChanges.Clear();
             _audibleSpeed = _speed;
 
-            _renderClockAnchorMasterTime = masterTime;
+            _renderClockAnchorMasterTime = masterTime - unpauseDelay;
             _renderClockAnchorSongPosition = songPosition;
             _renderClockAnchored = true;
 
             double audibleDelay = delayAudible ? EstimateOutputLatency() : 0;
-            _audibleClockAnchorMasterTime = masterTime + audibleDelay;
+            _audibleClockAnchorMasterTime = masterTime + audibleDelay - unpauseDelay;
             _audibleClockAnchorSongPosition = songPosition;
             _audibleClockAnchored = true;
         }
