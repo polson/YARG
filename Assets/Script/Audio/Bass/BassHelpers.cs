@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using ManagedBass;
 using ManagedBass.DirectX8;
 using ManagedBass.Fx;
@@ -26,12 +26,12 @@ namespace YARG.Audio.BASS
          * From Bass documentation (http://bass.radio42.com/help/html/4c663bda-2751-c2c3-eaf2-770b846b6652.htm)
          * "With a ratio of 4:1, when the (time averaged) input level is 4 dB over the threshold, the output signal level will be 1 dB over the threshold."
          * "[Additionally,] with any threshold/ratio combination, you could calculate the gain for a 0dB peak like this: fGain=fThreshold*(1/fRatio-1)"
-         * 
+         *
          * The intention of the gain is to normalize 0dB signals back to 0dB after compression.
          * However, we only want the compressors to handle "clipping" situations (audio that exceeds 0dB).
          * So we set the gain and thresholds both to zero - which still follows the formula.
          * We can then set the ratio to whatever we want.
-         * 
+         *
          * Note: you don't want to apply a negative gain as the gain value effects ALL audio, not just the part that got compressed.
          * We don't want to make quiet parts even quieter.
          */
@@ -39,7 +39,7 @@ namespace YARG.Audio.BASS
         {
             fGain = 0f, fThreshold = 0, fAttack = 10f, fRelease = 100f, fRatio = 8,
         };
-        
+
         public static readonly PeakEQParameters LowEqParams = new()
         {
             fBandwidth = 1.25f, fCenter = 250.0f, fGain = -12f
@@ -158,6 +158,17 @@ namespace YARG.Audio.BASS
         }
 
 #nullable enable
+        public static BassFlags GetMixerSourceFlags(OutputChannel? channel, BassFlags extraFlags = BassFlags.Default)
+#nullable disable
+        {
+            if (channel is BassOutputChannel bassChannel)
+            {
+                return extraFlags | bassChannel.Flags;
+            }
+            return extraFlags;
+        }
+
+#nullable enable
         public static void UpdateOutputChannels(int stream, OutputChannel? channel)
 #nullable disable
         {
@@ -171,6 +182,16 @@ namespace YARG.Audio.BASS
 
             // Set channel(s)
             Bass.ChannelFlags(stream, bassChannel.Flags, BassFlags.SpeakerFront);
+        }
+
+        public static int LoadSample(string path, int playbackCount, string name)
+        {
+            int handle = Bass.SampleLoad(path, 0, 0, playbackCount, BassFlags.Default);
+            if (handle == 0)
+            {
+                YargLogger.LogFormatError("Failed to load {0} {1}: {2}!", name, path, Bass.LastError);
+            }
+            return handle;
         }
     }
 }

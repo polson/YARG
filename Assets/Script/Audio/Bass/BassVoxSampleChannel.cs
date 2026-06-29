@@ -1,54 +1,35 @@
-﻿#nullable enable
-using System;
-using System.Collections.Concurrent;
+#nullable enable
 using System.Collections.Generic;
 using Cysharp.Threading.Tasks;
 using ManagedBass;
-using ManagedBass.Mix;
 using YARG.Core.Audio;
 using YARG.Core.Logging;
 using YARG.Settings;
 
 namespace YARG.Audio.BASS
 {
-    /// <summary>
-    /// A sample channel that uses BASS to play VOX files.
-    ///
-    /// Unlike all the others, this one will automatically queue samples and play them sequentially.
-    /// </summary>
     public sealed class BassVoxSampleChannel : VoxSampleChannel
     {
         private static readonly List<BassVoxSampleChannel>  Channels = new();
         private static readonly Queue<BassVoxSampleChannel> Queue    = new();
-        private readonly        int                         _sampleHandle;
         private static          bool                        _queueActive;
 
+        private readonly int              _sampleHandle;
+        private readonly BassSamplePlayer _samplePlayer;
+        private          double           _volumeSetting = 1;
+        private          bool             _disposed;
+
 #nullable enable
-        public static BassVoxSampleChannel? Create(VoxSample sample, string path, OutputChannel? outputChannel)
+        public static BassVoxSampleChannel? Create(VoxSample sample, string path, BassAudioManager manager, OutputChannel? outputChannel)
 #nullable disable
         {
-            int handle = Bass.SampleLoad(path, 0, 0, 2, BassFlags.Decode);
+            int handle = BassHelpers.LoadSample(path, 2, sample.ToString());
             if (handle == 0)
             {
-                YargLogger.LogFormatError("Failed to load {0} {1}: {2}!", sample, path, Bass.LastError);
                 return null;
             }
 
-            int channel = Bass.SampleGetChannel(handle);
-            if (channel == 0)
-            {
-                Bass.SampleFree(handle);
-                YargLogger.LogFormatError("Failed to create {0} channel: {1}!", sample, Bass.LastError);
-                return null;
-            }
-
-            // TODO: This should probably have its own volume setting at some point
-            if (!Bass.ChannelSetAttribute(channel, ChannelAttribute.Volume, 1.0f))
-            {
-                YargLogger.LogFormatError("Failed to set {0} volume: {1}!", sample, Bass.LastError);
-            }
-
-            return new BassVoxSampleChannel(handle, channel, sample, path, outputChannel);
+            return new BassVoxSampleChannel(handle, sample, path, manager, outputChannel);
         }
 
         private static void QueuePlayback(BassVoxSampleChannel channel)
@@ -65,8 +46,16 @@ namespace YARG.Audio.BASS
             _queueActive = true;
             while (Queue.TryDequeue(out var channel))
             {
+                if (channel._disposed)
+                {
+                    continue;
+                }
+
                 await UniTask.WaitUntil(() => !IsAnyPlaying());
-                channel.Play();
+                if (!channel._disposed)
+                {
+                    channel.Play();
+                }
             }
             _queueActive = false;
         }
@@ -84,15 +73,13 @@ namespace YARG.Audio.BASS
             return false;
         }
 
-        private readonly int    _channel;
-
 #nullable enable
-        private BassVoxSampleChannel(int handle, int channel, VoxSample sample, string path, OutputChannel? outputChannel)
+        private BassVoxSampleChannel(int handle, VoxSample sample, string path, BassAudioManager manager, OutputChannel? outputChannel)
             : base(sample, path)
 #nullable disable
         {
             _sampleHandle = handle;
-            _channel = channel;
+            _samplePlayer = new BassSamplePlayer(manager, 1);
             SetOutputChannel_Internal(outputChannel);
             Channels.Add(this);
             SetVolume_Internal(GlobalAudioHandler.GetTrueVolume(SongStem.VoxSample));
@@ -100,8 +87,6 @@ namespace YARG.Audio.BASS
 
         protected override void Play_Internal()
         {
-            // Don't particularly like doing it here, but this is the only place in the playback chain where we can
-            // check for the vox enabled setting
             if (!SettingsManager.Settings.EnableVoxSamples.Value)
             {
                 return;
@@ -113,35 +98,37 @@ namespace YARG.Audio.BASS
                 return;
             }
 
-            if (!Bass.ChannelPlay(_channel, true))
-            {
-                YargLogger.LogFormatError("Failed to play {0} channel: {1}!", Sample, Bass.LastError);
-            }
+            _samplePlayer.PlaySample(_sampleHandle, Sample.ToString(), GetScaledVolume());
         }
 
         protected override void SetVolume_Internal(double volume)
         {
-            volume *= AudioHelpers.SfxSamples[(int) Sample].Volume;
-            if (!Bass.ChannelSetAttribute(_channel, ChannelAttribute.Volume, volume))
-            {
-                YargLogger.LogFormatError("Failed to set {0} volume: {1}!", Sample, Bass.LastError);
-            }
+            _volumeSetting = volume;
+            _samplePlayer.SetVolume(GetScaledVolume());
         }
 
 #nullable enable
         protected override void SetOutputChannel_Internal(OutputChannel? channel)
 #nullable disable
         {
-            BassHelpers.UpdateOutputChannels(_channel, channel);
+            _samplePlayer.OutputChannel = channel;
         }
 
         protected override bool IsPlaying_Internal()
         {
-            return Bass.ChannelIsActive(_channel) == PlaybackState.Playing;
+            return _samplePlayer.IsPlaying;
+        }
+
+        private double GetScaledVolume()
+        {
+            return _volumeSetting * AudioHelpers.VoxSamples[(int) Sample].Volume;
         }
 
         protected override void DisposeUnmanagedResources()
         {
+            _disposed = true;
+            Channels.Remove(this);
+            _samplePlayer.Dispose();
             Bass.SampleFree(_sampleHandle);
         }
     }

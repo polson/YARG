@@ -41,6 +41,9 @@
 ExportedObj/
 .consulo/
 *.csproj
+!scripts/BassAsioMonitor/BassAsioMonitor.csproj
+scripts/BassAsioMonitor/bin/
+scripts/BassAsioMonitor/obj/
 *.unityproj
 *.sln
 *.slnx
@@ -126,3 +129,7 @@ reload_lock~.meta
 
 # Unity crash dumps
 mono_crash.mem.*.blob
+/plans
+/scripts
+/plans
+plans/asio-integration-yarg.md

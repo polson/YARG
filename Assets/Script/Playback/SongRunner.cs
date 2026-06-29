@@ -208,6 +208,7 @@ namespace YARG.Playback
         private volatile int   _syncSpeedMultiplier;
         private volatile float _syncStartDelta;
         private volatile float _syncWorstDelta;
+        private volatile float _syncSmoothedDrift = float.NaN;
 
         private readonly StemMixer _mixer;
 
@@ -315,10 +316,11 @@ namespace YARG.Playback
         private void Start()
         {
             YargLogger.LogDebug("Starting song runner");
-
+ 
             // Re-initialize song times to avoid lag issues
             InitializeSongTime(InputTime, 0);
-
+            ResetSyncEstimate();
+ 
             _syncThread.Start();
             Started = true;
         }
@@ -379,18 +381,15 @@ namespace YARG.Playback
 
         private void SyncThread()
         {
-            const double INITIAL_SYNC_THRESH = 0.015;
-            const double ADJUST_SYNC_THRESH = 0.005;
-            const float SPEED_ADJUSTMENT = 0.05f;
-
             for (; !_disposed; Thread.Sleep(1))
             {
                 lock (_syncThread)
                 {
                     double audioOffset = SongOffset - (AudioCalibration * SongSpeed);
 
+                    double currentSongTime = GetRelativeInputTime(InputManager.CurrentInputTime);
                     SyncAudioTime = _mixer.GetPosition();
-                    SyncVisualTime = GetRelativeInputTime(InputManager.CurrentInputTime) - audioOffset;
+                    SyncVisualTime = currentSongTime - audioOffset;
 
                     if (Paused || SyncVisualTime < 0 || SyncVisualTime >= _mixer.Length)
                     {
@@ -407,53 +406,59 @@ namespace YARG.Playback
                         continue;
                     }
 
-                    // Account for song speed
-                    double initialThreshold = INITIAL_SYNC_THRESH * SongSpeed;
-                    double adjustThreshold = ADJUST_SYNC_THRESH * SongSpeed;
-
-                    // Check the difference between visual and audio times
                     double delta = SyncVisualTime - SyncAudioTime;
-                    double deltaAbs = Math.Abs(delta);
 
-                    // Don't sync if below the initial sync threshold, and we haven't adjusted the speed
-                    if (_syncSpeedMultiplier == 0 && deltaAbs < initialThreshold)
-                        continue;
+                    // Smooth the drift over a few frames (Low-Pass Filter)
+                    if (float.IsNaN(_syncSmoothedDrift))
+                    {
+                        _syncSmoothedDrift = (float) delta;
+                    }
+                    else
+                    {
+                        _syncSmoothedDrift = Mathf.Lerp(_syncSmoothedDrift, (float) delta, 0.15f);
+                    }
 
-                    // We're now syncing, determine how much to adjust the song speed by
-                    int speedMultiplier = (int) Math.Round(delta / INITIAL_SYNC_THRESH);
-                    if (speedMultiplier == 0)
-                        speedMultiplier = delta > 0 ? 1 : -1;
+                    // Proportional Gain: scale speed adjustment smoothly
+                    const float P_GAIN = 0.5f;
+                    const float MAX_ADJUSTMENT = 0.08f; // Limit pitch-bending to +/- 8%
 
-                    // Only change speed when the multiplier changes
+                    float targetAdjustment = Mathf.Clamp(_syncSmoothedDrift * P_GAIN, -MAX_ADJUSTMENT, MAX_ADJUSTMENT);
+
+                    // Update debug/status variables
+                    int speedMultiplier = 0;
+                    if (Math.Abs(_syncSmoothedDrift) > 0.005)
+                    {
+                        speedMultiplier = _syncSmoothedDrift > 0 ? 1 : -1;
+                    }
+
                     if (_syncSpeedMultiplier != speedMultiplier)
                     {
+                        int previousSpeedMultiplier = _syncSpeedMultiplier;
                         if (_syncSpeedMultiplier == 0)
                         {
                             _syncStartDelta = (float) delta;
                             _syncWorstDelta = _syncStartDelta;
                         }
-                        else if (Math.Abs(delta) > Math.Abs(_syncWorstDelta))
-                        {
-                            _syncWorstDelta = (float) delta;
-                        }
-
                         _syncSpeedMultiplier = speedMultiplier;
 
-                        float adjustment = SPEED_ADJUSTMENT * speedMultiplier;
-                        if (!Mathf.Approximately(adjustment, _syncSpeedAdjustment))
-                        {
-                            _syncSpeedAdjustment = adjustment;
-                            _mixer.SetSpeed(RealSongSpeed, false);
-                        }
+                        YargLogger.LogDebug(
+                            $"Sync speed multiplier {previousSpeedMultiplier} -> {speedMultiplier}. " +
+                            $"Delta: {delta * 1000.0:0.000}ms, smoothed drift: {_syncSmoothedDrift * 1000.0:0.000}ms, " +
+                            $"sync audio: {SyncAudioTime:0.000000}, sync visual: {SyncVisualTime:0.000000}, " +
+                            $"input: {currentSongTime:0.000000}, real speed: {RealSongSpeed:0.000000}."
+                        );
                     }
 
-                    // No change in speed, check if we're below the threshold
-                    if (deltaAbs < adjustThreshold ||
-                        // Also check if we overshot and passed 0
-                        (delta > 0.0 && _syncStartDelta < 0.0) ||
-                        (delta < 0.0 && _syncStartDelta > 0.0))
+                    if (_syncSpeedMultiplier != 0 && Math.Abs(delta) > Math.Abs(_syncWorstDelta))
                     {
-                        ResetSync();
+                        _syncWorstDelta = (float) delta;
+                    }
+
+                    // Apply the speed adjustment if it changed
+                    if (!Mathf.Approximately(targetAdjustment, _syncSpeedAdjustment))
+                    {
+                        _syncSpeedAdjustment = targetAdjustment;
+                        _mixer.SetSpeed(RealSongSpeed, false);
                     }
                 }
             }
@@ -461,13 +466,15 @@ namespace YARG.Playback
 
         private void ResetSync()
         {
-            // Don't reset so that they're easier to see in real time
-            // _syncStartDelta = 0;
-            // _syncWorstDelta = 0;
-
             _syncSpeedMultiplier = 0;
             _syncSpeedAdjustment = 0f;
+            _syncSmoothedDrift = float.NaN;
             _mixer.SetSpeed(RealSongSpeed, true);
+        }
+
+        private void ResetSyncEstimate()
+        {
+            _syncSmoothedDrift = float.NaN;
         }
 
         public double GetRelativeInputTime(double timeFromInputSystem)
@@ -549,6 +556,7 @@ namespace YARG.Playback
             {
                 // Set input/song time
                 InitializeSongTime(time, delayTime);
+                ResetSyncEstimate();
 
                 // Reset syncing before seeking to prevent speed adjustments from causing issues
                 ResetSync();
@@ -628,11 +636,16 @@ namespace YARG.Playback
                 return;
             }
 
-            if (Paused)
-                return;
+            lock (_syncThread)
+            {
+                if (Paused)
+                    return;
 
-            Paused = true;
-            _mixer.Pause();
+                Paused = true;
+                _mixer.Pause();
+                ResetSync();
+                ResetSyncEstimate();
+            }
 
             YargLogger.LogFormatDebug(
                 "Paused at song time {0:0.000000}, visual time {1:0.000000}, input time {2:0.000000}.",
@@ -651,13 +664,17 @@ namespace YARG.Playback
                 return;
             }
 
-            if (!Paused)
-                return;
+            lock (_syncThread)
+            {
+                if (!Paused)
+                    return;
 
-
-            Paused = false;
-            UpdateCalibration();
-            SetInputBaseChecked(InputTime);
+                UpdateCalibration();
+                SetInputBaseChecked(InputTime);
+                ResetSync();
+                ResetSyncEstimate();
+                Paused = false;
+            }
 
             YargLogger.LogFormatDebug(
                 "Resumed at song time {0:0.000000}, visual time {1:0.000000}, input time {2:0.000000}.",
