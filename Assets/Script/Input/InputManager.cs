@@ -49,6 +49,11 @@ namespace YARG.Input
         /// </summary>
         public static double CurrentInputTime => InputState.currentTime;
 
+        /// <summary>
+        /// The high-precision CPU timestamp at the start of the current input update frame.
+        /// </summary>
+        public static double FrameStartCpuTime { get; private set; }
+
         private static HashSet<InputDevice> _seenDevices = new();
         private static HashSet<InputDevice> _disabledDevices = new();
 
@@ -192,6 +197,7 @@ namespace YARG.Input
         private static void OnBeforeUpdate()
         {
             InputUpdateTime = CurrentInputTime;
+            FrameStartCpuTime = (double) System.Diagnostics.Stopwatch.GetTimestamp() / System.Diagnostics.Stopwatch.Frequency;
         }
 
         private static void OnAfterUpdate()

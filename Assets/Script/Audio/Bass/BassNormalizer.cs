@@ -43,7 +43,8 @@ namespace YARG.Audio.BASS
         private          int                     _mixer;
         private readonly List<Stream>            _streams = new();
         private readonly List<int>               _handles = new();
-        private          CancellationTokenSource _gainCalcCts = new();
+        private          CancellationTokenSource _gainCalcCts;
+        private          Task                    _gainCalcTask = Task.CompletedTask;
         public float               Gain { get; private set; } = INITIAL_GAIN;
         public event Action<float> OnGainAdjusted;
 
@@ -54,6 +55,10 @@ namespace YARG.Audio.BASS
         /// </summary>
         public bool AddStream(Stream stream, params StemMixer.StemInfo[] stemInfos)
         {
+            // Stop background reads before mutating mixer channels. Otherwise BASS can read freed/moved
+            // channels from CalculateRms and crash natively in BASS_ChannelGetData.
+            StopGainCalculation();
+
             if (_mixer == 0)
             {
                 if (!CreateMixer(out _mixer))
@@ -127,10 +132,8 @@ namespace YARG.Audio.BASS
                 return false;
             }
 
-            if (!Bass.ChannelSetAttribute(mixerHandle, (ChannelAttribute) MAX_THREADS_ATTRIB, GlobalAudioHandler.MAX_THREADS))
-            {
-                YargLogger.LogFormatError("Failed to set mixer processing threads: {0}!", Bass.LastError);
-            }
+            // Disabled: this decode mixer is also read by a background task and frequently rebuilt/disposed.
+            // Enabling bassmix worker threads here can race with cancellation/freeing and crash in BASS_ChannelGetData.
 
             _handles.Add(mixerHandle);
             return true;
@@ -166,16 +169,40 @@ namespace YARG.Audio.BASS
 
         private void StartGainCalculation()
         {
-            _gainCalcCts.Cancel();
-            _gainCalcCts.Dispose();
+            StopGainCalculation();
+
             _gainCalcCts = new CancellationTokenSource();
+            var token = _gainCalcCts.Token;
 
             var progress = new Progress<double>(gain =>
             {
                 OnGainAdjusted?.Invoke((float) gain);
             });
 
-            Task.Run(() => CalculateRms(progress, _gainCalcCts.Token), _gainCalcCts.Token);
+            _gainCalcTask = Task.Run(() => CalculateRms(progress, token), token);
+        }
+
+        private void StopGainCalculation()
+        {
+            if (_gainCalcCts == null)
+            {
+                return;
+            }
+
+            _gainCalcCts.Cancel();
+            try
+            {
+                _gainCalcTask?.Wait();
+            }
+            catch (AggregateException ex) when (ex.InnerExceptions.All(e => e is OperationCanceledException))
+            {
+            }
+            finally
+            {
+                _gainCalcCts.Dispose();
+                _gainCalcCts = null;
+                _gainCalcTask = Task.CompletedTask;
+            }
         }
 
         private void CalculateRms(IProgress<double> progress, CancellationToken token)
@@ -221,8 +248,9 @@ namespace YARG.Audio.BASS
 
         public void Dispose()
         {
-            _gainCalcCts.Cancel();
-            _gainCalcCts.Dispose();
+            // Must wait before freeing BASS handles. Cancel-only leaves CalculateRms inside native
+            // ChannelGetLevel/ChannelGetData while handles below are freed.
+            StopGainCalculation();
 
             foreach (var stream in _streams)
             {

@@ -98,6 +98,35 @@ namespace YARG.Audio.BASS
 
         private readonly int _opusHandle = 0;
         private BassOutputDevice _currentDevice;
+        private int _masterMixerHandle;
+        private double _masterVolume = 1.0;
+
+        internal int MasterMixerHandle => _masterMixerHandle;
+
+        internal bool TryGetMasterMixerTime(out double time)
+        {
+            time = 0;
+            if (_masterMixerHandle == 0)
+            {
+                return false;
+            }
+
+            long positionBytes = Bass.ChannelGetPosition(_masterMixerHandle, PositionFlags.Bytes);
+            if (positionBytes < 0)
+            {
+                YargLogger.LogFormatError("Failed to get master mixer position: {0}", Bass.LastError);
+                return false;
+            }
+
+            time = Bass.ChannelBytes2Seconds(_masterMixerHandle, positionBytes);
+            if (time < 0)
+            {
+                YargLogger.LogFormatError("Failed to convert master mixer position to seconds: {0}", Bass.LastError);
+                return false;
+            }
+
+            return true;
+        }
 
         public BassAudioManager()
         {
@@ -182,30 +211,74 @@ namespace YARG.Audio.BASS
 
         protected override bool SetOutputDevice(string name)
         {
-            int currentDevice = Bass.CurrentDevice;
-
-            var device = GetOutputDevice(name);
-            if (device is not BassOutputDevice bassDevice || bassDevice.DeviceId == currentDevice)
+            if (GetOutputDevice(name) is not BassOutputDevice newDevice)
             {
                 return false;
             }
 
-            YargLogger.LogFormatInfo("Changing BASS Device to: {0}", bassDevice.DisplayName);
+            bool deviceAlreadyActive = newDevice.DeviceId == Bass.CurrentDevice;
+            bool mixerAlreadyInitialized = _masterMixerHandle != 0;
+            if (deviceAlreadyActive && mixerAlreadyInitialized)
+            {
+                return false;
+            }
 
-            base.SetOutputDevice(bassDevice.DisplayName);
+            YargLogger.LogFormatInfo("Changing BASS Device to: {0}", newDevice.DisplayName);
 
-            _currentDevice?.Dispose();
-            _currentDevice = bassDevice.Use();
+            var previousDevice = _currentDevice;
+            var previousMixer = _masterMixerHandle;
+            _currentDevice = newDevice.Use();
+            
+            int newMixer = CreateMasterMixer();
+            if (newMixer == 0)
+            {
+                if (previousMixer != 0 && previousDevice is not null)
+                {
+                    _currentDevice = previousDevice.Use();
+                    _masterMixerHandle = previousMixer;
+                }
+                else
+                {
+                    _masterMixerHandle = 0;
+                }
+                newDevice.Dispose();
+                return false;
+            }
+
+            _masterMixerHandle = newMixer;
+
+            base.SetOutputDevice(newDevice.DisplayName);
+
+            if (previousMixer != 0 && previousDevice is not null)
+            {
+                FreeMixer(previousMixer, previousDevice.DeviceId);
+            }
+
+            previousDevice?.Dispose();
+            _currentDevice.Use();
 
             YargLogger.LogFormatInfo("Current BASS Device: {0}", Bass.GetDeviceInfo(Bass.CurrentDevice).Name);
 
-            // Load/reload samples
             LoadSfx();
-            LoadDrumSfx(); // TODO: move drum sfx loading/disposal to song start/end respectively IF there are any drum players
+            LoadDrumSfx();
             LoadVox();
             LoadMetronome();
 
             return true;
+        }
+
+        private static void FreeMixer(int mixerHandle, int deviceId)
+        {
+            int activeDevice = Bass.CurrentDevice;
+            try
+            {
+                Bass.CurrentDevice = deviceId;
+                Bass.StreamFree(mixerHandle);
+            }
+            finally
+            {
+                Bass.CurrentDevice = activeDevice;
+            }
         }
 
 #nullable enable
@@ -406,7 +479,7 @@ namespace YARG.Audio.BASS
                     if (File.Exists(sfxPath))
                     {
                         var sfxSample = sample.Kind;
-                        var sfx = BassSampleChannel.Create(sfxSample, sfxPath, 8,
+                        var sfx = BassSampleChannel.Create(sfxSample, sfxPath, 8, this,
                             CreateOutputChannel(SettingsManager.Settings?.OutputChannelSfx.Value ?? 0), sample.CanLoop);
                         if (sfx != null)
                         {
@@ -445,7 +518,7 @@ namespace YARG.Audio.BASS
                     if (File.Exists(sfxPath))
                     {
                         var sfxSample = sample.Kind;
-                        var sfx = BassDrumSampleChannel.Create(sfxSample, sfxPath, 8,
+                        var sfx = BassDrumSampleChannel.Create(sfxSample, sfxPath, 8, this,
                             CreateOutputChannel(SettingsManager.Settings?.OutputChannelDrumSfx.Value ?? 0));
                         if (sfx != null)
                         {
@@ -483,7 +556,7 @@ namespace YARG.Audio.BASS
                     if (File.Exists(voxPath))
                     {
                         var voxSample = sample.Kind;
-                        var vox = BassVoxSampleChannel.Create(voxSample, voxPath,
+                        var vox = BassVoxSampleChannel.Create(voxSample, voxPath, this,
                             CreateOutputChannel(SettingsManager.Settings?.OutputChannelVox.Value ?? 0));
 
                         if (vox != null)
@@ -538,7 +611,7 @@ namespace YARG.Audio.BASS
                 if (!String.IsNullOrEmpty(metronomeHiPath) && !String.IsNullOrEmpty(metronomeLoPath))
                 {
                     var metronomeSample = sample.Kind;
-                    var metronome = BassMetronomeSampleChannel.Create(metronomeSample, metronomeHiPath, metronomeLoPath,
+                    var metronome = BassMetronomeSampleChannel.Create(metronomeSample, metronomeHiPath, metronomeLoPath, this,
                         CreateOutputChannel(SettingsManager.Settings?.OutputChannelDefault.Value ?? 0));
                     if (metronome != null)
                     {
@@ -556,18 +629,63 @@ namespace YARG.Audio.BASS
             if (EditorUtility.audioMasterMute)
                 volume = 0;
 #endif
-            Bass.GlobalStreamVolume = (int) (10_000 * volume);
-            Bass.GlobalSampleVolume = (int) (10_000 * volume);
+            _masterVolume = volume;
+            if (_masterMixerHandle != 0 && !Bass.ChannelSetAttribute(_masterMixerHandle, ChannelAttribute.Volume, volume))
+            {
+                YargLogger.LogFormatError("Failed to set master mixer volume: {0}", Bass.LastError);
+            }
         }
 
 
         protected override void SetBufferLength_Internal(int length)
         {
-            Bass.PlaybackBufferLength = length;
+            SetMasterMixerBuffer(length);
+        }
+
+        private void SetMasterMixerBuffer(int length)
+        {
+            SetMasterMixerBuffer(_masterMixerHandle, length);
+        }
+
+        private void SetMasterMixerBuffer(int mixerHandle, int length)
+        {
+            // 0 disables buffering. Positive values must respect the device minimum when known.
+            if (length > 0 && MinimumBufferLength > 0 && length < MinimumBufferLength)
+            {
+                length = MinimumBufferLength;
+            }
+
+            float lengthInSeconds = length / 1000f;
+
+            if (mixerHandle != 0)
+            {
+                var state = Bass.ChannelIsActive(mixerHandle);
+                bool wasPlaying = state == PlaybackState.Playing || state == PlaybackState.Stalled;
+                if (wasPlaying)
+                {
+                    Bass.ChannelPause(mixerHandle);
+                }
+
+                if (!Bass.ChannelSetAttribute(mixerHandle, ChannelAttribute.Buffer, lengthInSeconds))
+                {
+                    YargLogger.LogFormatError("Failed to set master mixer playback buffer: {0}!", Bass.LastError);
+                }
+
+                if (wasPlaying)
+                {
+                    Bass.ChannelPlay(mixerHandle);
+                }
+            }
         }
 
         protected override void DisposeUnmanagedResources()
         {
+            if (_masterMixerHandle != 0)
+            {
+                Bass.StreamFree(_masterMixerHandle);
+                _masterMixerHandle = 0;
+            }
+
             YargLogger.LogInfo("Unloading BASS plugins");
             Bass.PluginFree(0);
             Bass.Free();
@@ -604,6 +722,93 @@ namespace YARG.Audio.BASS
             return pluginDirectory;
         }
 
+        private int CreateMasterMixer()
+        {
+            var info = Bass.Info;
+            int frequency = info.SampleRate > 0 ? info.SampleRate : 44100;
+            int channels = info.SpeakerCount > 0 ? info.SpeakerCount : 2;
+
+            // BASS uses Bass.PlaybackBufferLength (BASS_CONFIG_BUFFER) as the initial buffer size capacity
+            // when creating a stream. We temporarily set it to MaximumBufferLength (5000ms) to ensure
+            // the mixer is created with a large enough buffer capacity.
+            int originalBufferLength = Bass.PlaybackBufferLength;
+            Bass.PlaybackBufferLength = 5000;
+
+            int masterMixer;
+            try
+            {
+                masterMixer = BassMix.CreateMixerStream(frequency, channels, BassFlags.Float | BassFlags.MixerNonStop);
+            }
+            finally
+            {
+                Bass.PlaybackBufferLength = originalBufferLength;
+            }
+
+            if (masterMixer == 0)
+            {
+                YargLogger.LogFormatError("Failed to create master mixer: {0}!", Bass.LastError);
+                return 0;
+            }
+
+            if (!Bass.ChannelSetAttribute(masterMixer, ChannelAttribute.Volume, _masterVolume))
+            {
+                YargLogger.LogFormatError("Failed to set master mixer volume: {0}", Bass.LastError);
+            }
+
+            SetMasterMixerBuffer(masterMixer, SettingsManager.Settings?.PlaybackBufferLength.Value ?? Bass.PlaybackBufferLength);
+
+            if (!Bass.ChannelPlay(masterMixer))
+            {
+                YargLogger.LogFormatError("Failed to play master mixer: {0}!", Bass.LastError);
+                Bass.StreamFree(masterMixer);
+                return 0;
+            }
+
+            YargLogger.LogFormatInfo("Created BASS master mixer: {0}Hz, {1} channels", frequency, channels);
+            return masterMixer;
+        }
+
+#nullable enable
+        internal bool AddToMasterMixer(
+            int sourceHandle,
+            OutputChannel? outputChannel,
+            BassFlags extraFlags = BassFlags.Default,
+            long start = 0,
+            long length = 0)
+#nullable disable
+        {
+            if (_masterMixerHandle == 0)
+            {
+                return false;
+            }
+
+            var flags = BassHelpers.GetMixerSourceFlags(outputChannel, BassFlags.MixerChanDownMix | extraFlags);
+            if (!BassMix.MixerAddChannel(_masterMixerHandle, sourceHandle, flags, start, length))
+            {
+                YargLogger.LogFormatError("Failed to add source {0} to master mixer: {1}!", sourceHandle,
+                    Bass.LastError);
+                return false;
+            }
+
+            return true;
+        }
+
+        internal void RemoveFromMasterMixer(int sourceHandle)
+        {
+            if (sourceHandle == 0 || _masterMixerHandle == 0)
+            {
+                return;
+            }
+
+            if (!BassMix.MixerRemoveChannel(sourceHandle))
+            {
+                if (Bass.LastError != Errors.Handle)
+                {
+                    YargLogger.LogFormatError("Failed to remove source {0} from master mixer: {1}!", sourceHandle, Bass.LastError);
+                }
+            }
+        }
+
         private static bool CreateMixerHandle(out int mixerHandle)
         {
             // The float flag allows >0dB signals.
@@ -638,6 +843,7 @@ namespace YARG.Audio.BASS
             }
             return true;
         }
+
 
         internal static bool GetSpeed(int streamHandle, out float speed)
         {
