@@ -54,9 +54,13 @@ namespace YARG.Audio.BASS
             _samplePlayer.OutputChannel = channel;
         }
 
-        protected override void DisposeUnmanagedResources()
+        protected override void DisposeManagedResources()
         {
             _samplePlayer.Dispose();
+        }
+
+        protected override void DisposeUnmanagedResources()
+        {
             Bass.SampleFree(_sfxHandle);
         }
     }

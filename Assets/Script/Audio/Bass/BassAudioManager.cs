@@ -639,7 +639,6 @@ namespace YARG.Audio.BASS
 
         protected override void SetBufferLength_Internal(int length)
         {
-            Bass.PlaybackBufferLength = length;
             SetMasterMixerBuffer(length);
         }
 
@@ -656,9 +655,26 @@ namespace YARG.Audio.BASS
                 length = MinimumBufferLength;
             }
 
-            if (mixerHandle != 0 && !Bass.ChannelSetAttribute(mixerHandle, ChannelAttribute.Buffer, length))
+            float lengthInSeconds = length / 1000f;
+
+            if (mixerHandle != 0)
             {
-                YargLogger.LogFormatError("Failed to set master mixer playback buffer: {0}!", Bass.LastError);
+                var state = Bass.ChannelIsActive(mixerHandle);
+                bool wasPlaying = state == PlaybackState.Playing || state == PlaybackState.Stalled;
+                if (wasPlaying)
+                {
+                    Bass.ChannelPause(mixerHandle);
+                }
+
+                if (!Bass.ChannelSetAttribute(mixerHandle, ChannelAttribute.Buffer, lengthInSeconds))
+                {
+                    YargLogger.LogFormatError("Failed to set master mixer playback buffer: {0}!", Bass.LastError);
+                }
+
+                if (wasPlaying)
+                {
+                    Bass.ChannelPlay(mixerHandle);
+                }
             }
         }
 
@@ -712,7 +728,22 @@ namespace YARG.Audio.BASS
             int frequency = info.SampleRate > 0 ? info.SampleRate : 44100;
             int channels = info.SpeakerCount > 0 ? info.SpeakerCount : 2;
 
-            int masterMixer = BassMix.CreateMixerStream(frequency, channels, BassFlags.Float | BassFlags.MixerNonStop);
+            // BASS uses Bass.PlaybackBufferLength (BASS_CONFIG_BUFFER) as the initial buffer size capacity
+            // when creating a stream. We temporarily set it to MaximumBufferLength (5000ms) to ensure
+            // the mixer is created with a large enough buffer capacity.
+            int originalBufferLength = Bass.PlaybackBufferLength;
+            Bass.PlaybackBufferLength = 5000;
+
+            int masterMixer;
+            try
+            {
+                masterMixer = BassMix.CreateMixerStream(frequency, channels, BassFlags.Float | BassFlags.MixerNonStop);
+            }
+            finally
+            {
+                Bass.PlaybackBufferLength = originalBufferLength;
+            }
+
             if (masterMixer == 0)
             {
                 YargLogger.LogFormatError("Failed to create master mixer: {0}!", Bass.LastError);

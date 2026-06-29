@@ -10,7 +10,7 @@ namespace YARG.Audio.BASS
 {
     public sealed class BassVoxSampleChannel : VoxSampleChannel
     {
-        private static readonly List<BassVoxSampleChannel>  Channels = new();
+        private static          BassVoxSampleChannel?       _currentlyPlaying;
         private static readonly Queue<BassVoxSampleChannel> Queue    = new();
         private static          bool                        _queueActive;
 
@@ -62,15 +62,8 @@ namespace YARG.Audio.BASS
 
         private static bool IsAnyPlaying()
         {
-            foreach (var channel in Channels)
-            {
-                if (channel.IsPlaying())
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            var current = _currentlyPlaying;
+            return current != null && current.IsPlaying();
         }
 
 #nullable enable
@@ -81,7 +74,6 @@ namespace YARG.Audio.BASS
             _sampleHandle = handle;
             _samplePlayer = new BassSamplePlayer(manager, 1);
             SetOutputChannel_Internal(outputChannel);
-            Channels.Add(this);
             SetVolume_Internal(GlobalAudioHandler.GetTrueVolume(SongStem.VoxSample));
         }
 
@@ -98,6 +90,7 @@ namespace YARG.Audio.BASS
                 return;
             }
 
+            _currentlyPlaying = this;
             _samplePlayer.PlaySample(_sampleHandle, Sample.ToString(), GetScaledVolume());
         }
 
@@ -124,11 +117,14 @@ namespace YARG.Audio.BASS
             return _volumeSetting * AudioHelpers.VoxSamples[(int) Sample].Volume;
         }
 
+        protected override void DisposeManagedResources()
+        {
+            _samplePlayer.Dispose();
+        }
+
         protected override void DisposeUnmanagedResources()
         {
             _disposed = true;
-            Channels.Remove(this);
-            _samplePlayer.Dispose();
             Bass.SampleFree(_sampleHandle);
         }
     }

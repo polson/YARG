@@ -32,10 +32,23 @@ namespace YARG.Audio.BASS
                 ReverbHandles = reverbHandles;
             }
         }
+
+        private struct ScheduledSpeedChange
+        {
+            public readonly double MasterTime;
+            public readonly float  Speed;
+
+            public ScheduledSpeedChange(double masterTime, float speed)
+            {
+                MasterTime = masterTime;
+                Speed = speed;
+            }
+        }
         #nullable disable
 
         private const    float WHAMMY_SYNC_INTERVAL_SECONDS = 1f;
         private const    double MASTER_CLOCK_COMPARISON_LOG_INTERVAL_SECONDS = 5.0;
+        private const    double MAX_REASONABLE_OUTPUT_LATENCY_SECONDS = 10.0;
 
         private static bool IsWhammyEnabled => SettingsManager.Settings.UseWhammyFx.Value;
         private        bool IsPlaying       => _isPlaying;
@@ -50,14 +63,18 @@ namespace YARG.Audio.BASS
         private          bool           _isSeeking;
         private          OutputChannel  _outputChannel;
         private          float          _speed = 1.0f;
+        private          float          _audibleSpeed = 1.0f;
         private          int            _positionFallbackCount;
-        private          double         _masterClockAnchorMasterTime;
-        private          double         _masterClockAnchorSongPosition;
-        private          float          _masterClockAnchorSpeed = 1.0f;
-        private          bool           _masterClockAnchored;
+        private          double         _renderClockAnchorMasterTime;
+        private          double         _renderClockAnchorSongPosition;
+        private          bool           _renderClockAnchored;
+        private          double         _audibleClockAnchorMasterTime;
+        private          double         _audibleClockAnchorSongPosition;
+        private          bool           _audibleClockAnchored;
         private          double         _lastMasterClockComparisonLogTime = double.NegativeInfinity;
         private          Timer          _whammySyncTimer;
         private readonly List<StemData> _stemDatas = new();
+        private readonly List<ScheduledSpeedChange> _pendingAudibleSpeedChanges = new();
         private          int            _longestHandle;
 
         private readonly BassNormalizer _normalizer = new();
@@ -139,14 +156,15 @@ namespace YARG.Audio.BASS
             var flags = BassFlags.MixerChanBuffer | pausedFlag;
             if (_bassManager.AddToMasterMixer(_tempoStreamHandle, _outputChannel, flags))
             {
-                AnchorMasterClock(_positionOffset);
+                ReanchorTransport(_positionOffset, delayAudible: !paused);
             }
         }
 
         private void RemoveTempoStream()
         {
             _bassManager.RemoveFromMasterMixer(_tempoStreamHandle);
-            _masterClockAnchored = false;
+            _renderClockAnchored = false;
+            _audibleClockAnchored = false;
         }
 
         private bool SetTempoStreamPaused(bool paused)
@@ -175,8 +193,8 @@ namespace YARG.Audio.BASS
                 {
                     return (int) Bass.LastError;
                 }
-                AnchorMasterClock(_positionOffset);
                 _isPlaying = true;
+                ReanchorTransport(_positionOffset, delayAudible: true);
             }
 
             if (IsWhammyEnabled)
@@ -238,10 +256,7 @@ namespace YARG.Audio.BASS
 
             if (!_isSeeking)
             {
-                if (!BassMix.ChannelSetPosition(_tempoStreamHandle, 0, PositionFlags.Bytes))
-                {
-                    Bass.ChannelSetPosition(_tempoStreamHandle, 0);
-                }
+                FlushTempoStreamBuffer();
 
                 // Seek stems to the heard position
                 foreach (var channel in _channels)
@@ -251,21 +266,21 @@ namespace YARG.Audio.BASS
                 _positionOffset = pausePosition;
             }
 
-            AnchorMasterClock(pausePosition);
+            ReanchorTransport(pausePosition);
 
             return 0;
         }
 
         protected override double GetPosition_Internal()
         {
-            double fallbackPosition = GetTempoStreamPosition_Internal();
-            if (!TryGetMasterClockPosition(out double masterClockPosition))
+            if (!_bassManager.TryGetMasterMixerTime(out double masterTime) ||
+                !TryGetAudibleClockPosition(masterTime, out double audiblePosition))
             {
-                return fallbackPosition;
+                return GetTempoStreamPosition_Internal();
             }
 
-            LogMasterClockComparison(masterClockPosition, fallbackPosition);
-            return masterClockPosition;
+            LogMasterClockComparison(masterTime, audiblePosition);
+            return Math.Max(0, audiblePosition);
         }
 
         private double GetTempoStreamPosition_Internal()
@@ -296,75 +311,196 @@ namespace YARG.Audio.BASS
             return seconds + _positionOffset;
         }
 
-        private bool TryGetMasterClockPosition(out double position)
+        protected override double GetEstimatedOutputLatency_Internal()
         {
-            position = 0;
-            if (!_masterClockAnchored)
-            {
-                return false;
-            }
+            return EstimateOutputLatency();
+        }
 
+        private double EstimateOutputLatency()
+        {
+            double fallback = GetConfiguredOutputLatency();
+            double deviceLatency = GlobalAudioHandler.PlaybackLatency / 1000.0;
             if (!IsPlaying)
             {
-                position = _masterClockAnchorSongPosition;
-                return true;
+                return fallback + deviceLatency;
             }
 
-            if (!_bassManager.TryGetMasterMixerTime(out double masterTime))
+            if (TryGetRenderClockPosition(out double renderPosition) &&
+                TryGetTempoStreamPosition(out double heardPosition))
+            {
+                double sourceDelay = Math.Max(0, renderPosition - heardPosition);
+                double speed = Math.Max(Math.Abs(_speed), 0.001f);
+                double measured = Math.Min(sourceDelay / speed, MAX_REASONABLE_OUTPUT_LATENCY_SECONDS);
+                return Math.Max(measured, fallback) + deviceLatency;
+            }
+
+            return fallback + deviceLatency;
+        }
+
+        private static double GetConfiguredOutputLatency()
+        {
+            int bufferLength = SettingsManager.Settings?.PlaybackBufferLength.Value ?? 0;
+            int minimumLength = GlobalAudioHandler.MinimumBufferLength;
+            if (bufferLength > 0 && minimumLength > 0 && bufferLength < minimumLength)
+            {
+                bufferLength = minimumLength;
+            }
+
+            return Math.Max(0, bufferLength) / 1000.0;
+        }
+
+        private bool TryGetTempoStreamPosition(out double position)
+        {
+            position = 0;
+            long playedBytes = BassMix.ChannelGetPosition(_tempoStreamHandle, PositionFlags.Bytes);
+            if (playedBytes < 0)
             {
                 return false;
             }
 
-            double elapsed = masterTime - _masterClockAnchorMasterTime;
-            if (elapsed < 0)
+            double seconds = Bass.ChannelBytes2Seconds(_tempoStreamHandle, playedBytes);
+            if (seconds < 0)
             {
-                YargLogger.LogFormatWarning(
-                    "Master mixer clock moved backwards. Anchor: {0:0.000000}, now: {1:0.000000}",
-                    _masterClockAnchorMasterTime, masterTime);
                 return false;
             }
 
-            position = _masterClockAnchorSongPosition + elapsed * _masterClockAnchorSpeed;
+            position = seconds + _positionOffset;
             return true;
         }
 
-        private void AnchorMasterClock(double songPosition)
+        private bool TryGetRenderClockPosition(out double position)
+        {
+            position = 0;
+            if (!_renderClockAnchored)
+            {
+                return false;
+            }
+
+            if (!_bassManager.TryGetMasterMixerTime(out double masterTime))
+            {
+                return false;
+            }
+
+            double elapsed = masterTime - _renderClockAnchorMasterTime;
+            if (elapsed < 0)
+            {
+                YargLogger.LogFormatWarning(
+                    "Master mixer clock moved backwards. Render anchor: {0:0.000000}, now: {1:0.000000}",
+                    _renderClockAnchorMasterTime, masterTime);
+                return false;
+            }
+
+            position = _renderClockAnchorSongPosition + elapsed * _speed;
+            return true;
+        }
+
+        private bool TryGetAudibleClockPosition(double masterTime, out double position)
+        {
+            position = 0;
+            if (!_audibleClockAnchored)
+            {
+                return false;
+            }
+
+            ProcessPendingAudibleSpeedChanges(masterTime);
+
+            if (!IsPlaying)
+            {
+                position = _audibleClockAnchorSongPosition;
+                return true;
+            }
+
+            double elapsed = masterTime - _audibleClockAnchorMasterTime;
+            position = _audibleClockAnchorSongPosition + elapsed * _audibleSpeed;
+            return true;
+        }
+
+        private void ProcessPendingAudibleSpeedChanges(double masterTime)
+        {
+            while (_pendingAudibleSpeedChanges.Count > 0 &&
+                   _pendingAudibleSpeedChanges[0].MasterTime <= masterTime)
+            {
+                var speedChange = _pendingAudibleSpeedChanges[0];
+                _pendingAudibleSpeedChanges.RemoveAt(0);
+
+                double elapsed = Math.Max(0, speedChange.MasterTime - _audibleClockAnchorMasterTime);
+                _audibleClockAnchorSongPosition += elapsed * _audibleSpeed;
+                _audibleClockAnchorMasterTime = speedChange.MasterTime;
+                _audibleSpeed = speedChange.Speed;
+            }
+        }
+
+        private void ScheduleAudibleSpeedChange(double masterTime, float speed)
+        {
+            var speedChange = new ScheduledSpeedChange(masterTime, speed);
+            int index = _pendingAudibleSpeedChanges.FindIndex(change => masterTime < change.MasterTime);
+            if (index < 0)
+            {
+                _pendingAudibleSpeedChanges.Add(speedChange);
+            }
+            else
+            {
+                _pendingAudibleSpeedChanges.Insert(index, speedChange);
+            }
+        }
+
+        private void ReanchorTransport(double songPosition, bool delayAudible = false)
         {
             if (!_bassManager.TryGetMasterMixerTime(out double masterTime))
             {
-                _masterClockAnchored = false;
+                _renderClockAnchored = false;
+                _audibleClockAnchored = false;
                 return;
             }
 
-            _masterClockAnchorMasterTime = masterTime;
-            _masterClockAnchorSongPosition = songPosition;
-            _masterClockAnchorSpeed = _speed;
-            _masterClockAnchored = true;
+            _pendingAudibleSpeedChanges.Clear();
+            _audibleSpeed = _speed;
+
+            _renderClockAnchorMasterTime = masterTime;
+            _renderClockAnchorSongPosition = songPosition;
+            _renderClockAnchored = true;
+
+            double audibleDelay = delayAudible ? EstimateOutputLatency() : 0;
+            _audibleClockAnchorMasterTime = masterTime + audibleDelay;
+            _audibleClockAnchorSongPosition = songPosition;
+            _audibleClockAnchored = true;
         }
 
-        private void RollMasterClockAnchorForward()
+        private void RollRenderClockAnchorForward()
         {
-            if (TryGetMasterClockPosition(out double position))
+            if (TryGetRenderClockPosition(out double position) &&
+                _bassManager.TryGetMasterMixerTime(out double masterTime))
             {
-                AnchorMasterClock(position);
+                _renderClockAnchorMasterTime = masterTime;
+                _renderClockAnchorSongPosition = position;
+                _renderClockAnchored = true;
             }
         }
 
-        private void LogMasterClockComparison(double masterClockPosition, double tempoStreamPosition)
+        private void FlushTempoStreamBuffer()
         {
-            if (!_bassManager.TryGetMasterMixerTime(out double masterTime) ||
-                masterTime - _lastMasterClockComparisonLogTime < MASTER_CLOCK_COMPARISON_LOG_INTERVAL_SECONDS)
+            if (!BassMix.ChannelSetPosition(_tempoStreamHandle, 0, PositionFlags.Bytes))
+            {
+                Bass.ChannelSetPosition(_tempoStreamHandle, 0);
+            }
+        }
+
+        private void LogMasterClockComparison(double masterTime, double audiblePosition)
+        {
+            if (masterTime - _lastMasterClockComparisonLogTime < MASTER_CLOCK_COMPARISON_LOG_INTERVAL_SECONDS)
             {
                 return;
             }
 
             _lastMasterClockComparisonLogTime = masterTime;
-            double decodingPosition = GetDecodingPosition_Internal();
+            double tempoStreamPosition = GetTempoStreamPosition_Internal();
+            double renderPosition = TryGetRenderClockPosition(out double render) ? render : GetDecodingPosition_Internal();
+            double estimatedLatency = EstimateOutputLatency();
             YargLogger.LogFormatTrace(
-                "Master-clock position comparison. Master-derived: {0:0.000000}, tempo-played: {1:0.000000}, " +
-                "decoding/source: {2:0.000000}, master-tempo delta: {3:0.000000}, master-decoding delta: {4:0.000000}",
-                masterClockPosition, tempoStreamPosition, decodingPosition,
-                masterClockPosition - tempoStreamPosition, masterClockPosition - decodingPosition);
+                "Master-clock position comparison. Audible: {0:0.000000}, render: {1:0.000000}, " +
+                "tempo-heard: {2:0.000000}, render-audible delta: {3:0.000000}, estimated latency: {4:0.000000}",
+                audiblePosition, renderPosition, tempoStreamPosition,
+                renderPosition - audiblePosition, estimatedLatency);
         }
 
         protected override double GetDecodingPosition_Internal()
@@ -406,10 +542,7 @@ namespace YARG.Audio.BASS
                 var wasPlaying = IsPlaying;
                 Pause_Internal();
 
-                if (!BassMix.ChannelSetPosition(_tempoStreamHandle, 0, PositionFlags.Bytes))
-                {
-                    Bass.ChannelSetPosition(_tempoStreamHandle, 0);
-                }
+                FlushTempoStreamBuffer();
 
                 var channels = BassMix.MixerGetChannels(_mixerHandle);
                 if (channels != null)
@@ -429,7 +562,7 @@ namespace YARG.Audio.BASS
                     channel.SetPosition(position);
                 }
                 _positionOffset = position;
-                AnchorMasterClock(position);
+                ReanchorTransport(position);
 
                 if (wasPlaying)
                 {
@@ -531,9 +664,42 @@ namespace YARG.Audio.BASS
             {
                 return;
             }
-            RollMasterClockAnchorForward();
+
+            bool haveMasterTime = _bassManager.TryGetMasterMixerTime(out double masterTime);
+            double audiblePosition = _positionOffset;
+            bool haveAudiblePosition = haveMasterTime &&
+                TryGetAudibleClockPosition(masterTime, out audiblePosition);
+
+            RollRenderClockAnchorForward();
+
+            if (IsPlaying && haveMasterTime && haveAudiblePosition)
+            {
+                double latency = EstimateOutputLatency();
+                if (latency <= 0.001)
+                {
+                    _pendingAudibleSpeedChanges.Clear();
+                    _audibleClockAnchorMasterTime = masterTime;
+                    _audibleClockAnchorSongPosition = audiblePosition;
+                    _audibleSpeed = speed;
+                }
+                else
+                {
+                    ScheduleAudibleSpeedChange(masterTime + latency, speed);
+                }
+            }
+            else
+            {
+                _pendingAudibleSpeedChanges.Clear();
+                _audibleSpeed = speed;
+                if (haveMasterTime)
+                {
+                    _audibleClockAnchorMasterTime = masterTime;
+                    _audibleClockAnchorSongPosition = haveAudiblePosition ? audiblePosition : _positionOffset;
+                    _audibleClockAnchored = true;
+                }
+            }
+
             _speed = speed;
-            AnchorMasterClock(_masterClockAnchored ? _masterClockAnchorSongPosition : _positionOffset);
 
             BassAudioManager.SetSpeed(speed, _tempoStreamHandle, shiftPitch);
         }
@@ -610,10 +776,10 @@ namespace YARG.Audio.BASS
         {
             _outputChannel = channel;
             bool wasPlaying = IsPlaying;
-            double position = _masterClockAnchored || IsPlaying ? GetPosition_Internal() : _positionOffset;
+            double position = _audibleClockAnchored || IsPlaying ? GetPosition_Internal() : _positionOffset;
             RemoveTempoStream();
             AddTempoStream(!wasPlaying);
-            AnchorMasterClock(position);
+            ReanchorTransport(position, delayAudible: wasPlaying);
         }
 
         protected override void SetOutputDevice_Internal(OutputDevice device)
@@ -760,8 +926,16 @@ namespace YARG.Audio.BASS
 
         protected override void SetBufferLength_Internal(int length)
         {
-            // Playback buffer belongs to the non-decoding master mixer. This mixer is a decoding source,
-            // so BASS_ATTRIB_BUFFER is not available here.
+            // Playback buffering belongs to the non-decoding master mixer. Reinitialize this source's
+            // history buffer so large buffer changes are reflected in source-position lookups.
+            double position = _audibleClockAnchored || IsPlaying ? GetPosition_Internal() : _positionOffset;
+
+            bool wasPlaying = IsPlaying;
+            RemoveTempoStream();
+
+            SetPosition_Internal(position);
+
+            AddTempoStream(!wasPlaying);
         }
 
         protected override void DisposeManagedResources()

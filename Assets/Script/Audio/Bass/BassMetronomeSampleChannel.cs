@@ -75,9 +75,13 @@ namespace YARG.Audio.BASS
             return _volumeSetting * AudioHelpers.MetronomeSamples[(int) Sample].Volume;
         }
 
-        protected override void DisposeUnmanagedResources()
+        protected override void DisposeManagedResources()
         {
             _samplePlayer.Dispose();
+        }
+
+        protected override void DisposeUnmanagedResources()
+        {
             Bass.SampleFree(_hiHandle);
             Bass.SampleFree(_loHandle);
         }

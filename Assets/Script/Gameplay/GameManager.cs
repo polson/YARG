@@ -991,15 +991,18 @@ namespace YARG.Gameplay
         {
             YargLogger.LogFormatDebug("Rewinding {0} seconds at VisualTime {1}", seconds, VisualTime);
 
+            double rewindVisualTime = VisualTime - seconds - _songRunner.GetLatencyLeadInSongTime();
+            float rewindDuration = _songRunner.GetLatencyAdjustedRewindDuration(0.5f);
+
             if (_lyricBar.gameObject.activeSelf)
             {
-                _lyricBar.Rewind(VisualTime - seconds, 0.5f);
+                _lyricBar.Rewind(rewindVisualTime, rewindDuration);
             }
 
             // Rewind players
             foreach (var player in _players)
             {
-                player.Rewind(VisualTime - seconds);
+                player.Rewind(rewindVisualTime);
             }
 
             double? targetTime = null;
@@ -1017,7 +1020,7 @@ namespace YARG.Gameplay
 
             foreach (var player in _players)
             {
-                player.PostRewind(VisualTime - seconds);
+                player.PostRewind(rewindVisualTime);
             }
 
             CheckForRewindInvalidation();

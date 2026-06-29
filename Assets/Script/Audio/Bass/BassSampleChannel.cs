@@ -120,9 +120,13 @@ namespace YARG.Audio.BASS
 
         protected override bool IsPlaying_Internal => _samplePlayer.IsPlaying;
 
-        protected override void DisposeUnmanagedResources()
+        protected override void DisposeManagedResources()
         {
             _samplePlayer.Dispose();
+        }
+
+        protected override void DisposeUnmanagedResources()
+        {
             Bass.SampleFree(_sfxHandle);
         }
     }
