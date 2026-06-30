@@ -7,7 +7,6 @@ using ManagedBass.Mix;
 using UnityEngine;
 using YARG.Core.Audio;
 using YARG.Core.Logging;
-using YARG.Core.Song;
 using YARG.Menu.Persistent;
 using YARG.Settings;
 
@@ -102,25 +101,12 @@ namespace YARG.Audio.BASS
         private int _musicPlaybackMixerHandle;
         private int _sfxPlaybackMixerHandle;
         private double _masterVolume = 1.0;
-        private readonly object _activeMusicPlaybackMixerLock = new();
-        private readonly List<ActiveMusicPlaybackMixer> _activeMusicPlaybackMixers = new();
 
-        internal bool UsesSharedMusicPlaybackMixer => _musicPlaybackMixerHandle != 0 && _musicPlaybackMixerHandle == _sfxPlaybackMixerHandle;
+        internal event Action<double> MasterVolumeChanged;
+
+        internal bool UsesSinglePlaybackMixer => _musicPlaybackMixerHandle != 0 && _musicPlaybackMixerHandle == _sfxPlaybackMixerHandle;
+        internal double MasterVolume => _masterVolume;
         private static bool UseSinglePlaybackMixerSetting => SettingsManager.Settings?.UseSingleBassPlaybackMixer.Value ?? false;
-
-        private sealed class ActiveMusicPlaybackMixer
-        {
-            public readonly int Handle;
-            public readonly int DeviceId;
-            public double LogicalVolume;
-
-            public ActiveMusicPlaybackMixer(int handle, int deviceId, double logicalVolume)
-            {
-                Handle = handle;
-                DeviceId = deviceId;
-                LogicalVolume = logicalVolume;
-            }
-        }
 
         private readonly struct PlaybackMixerHandles
         {
@@ -134,9 +120,9 @@ namespace YARG.Audio.BASS
             }
         }
 
-        internal bool TryGetMasterMixerTime(out double time)
+        internal bool TryGetGlobalMusicPlaybackMixerTime(out double time)
         {
-            return TryGetPlaybackMixerTime(_musicPlaybackMixerHandle, "master", out time);
+            return TryGetPlaybackMixerTime(_musicPlaybackMixerHandle, "global music", out time);
         }
 
         internal bool TryGetPlaybackMixerTime(int playbackMixerHandle, string role, out double time)
@@ -329,10 +315,10 @@ namespace YARG.Audio.BASS
         {
             if (UseSinglePlaybackMixerSetting)
             {
-                return mixers.Music != 0 && mixers.Sfx != 0;
+                return mixers.Music != 0 && mixers.Music == mixers.Sfx;
             }
 
-            return mixers.Sfx != 0;
+            return mixers.Music == 0 && mixers.Sfx != 0;
         }
 
         private void RestorePreviousDeviceAndMixers(BassOutputDevice previousDevice, PlaybackMixerHandles previousMixers)
@@ -734,11 +720,11 @@ namespace YARG.Audio.BASS
 #endif
             _masterVolume = volume;
             SetPlaybackMixerVolume(_musicPlaybackMixerHandle, volume, "music");
-            SetActiveMusicPlaybackMixerVolumes();
             if (_sfxPlaybackMixerHandle != _musicPlaybackMixerHandle)
             {
                 SetPlaybackMixerVolume(_sfxPlaybackMixerHandle, volume, "SFX");
             }
+            MasterVolumeChanged?.Invoke(volume);
         }
 
         private static void SetPlaybackMixerVolume(int mixerHandle, double volume, string role)
@@ -746,18 +732,6 @@ namespace YARG.Audio.BASS
             if (mixerHandle != 0 && !Bass.ChannelSetAttribute(mixerHandle, ChannelAttribute.Volume, volume))
             {
                 YargLogger.LogFormatError("Failed to set {0} playback mixer volume: {1}", role, Bass.LastError);
-            }
-        }
-
-        private void SetActiveMusicPlaybackMixerVolumes()
-        {
-            lock (_activeMusicPlaybackMixerLock)
-            {
-                foreach (var mixer in _activeMusicPlaybackMixers)
-                {
-                    double combinedVolume = GetCombinedMusicPlaybackMixerVolume(mixer.LogicalVolume);
-                    SetPlaybackMixerVolume(mixer.Handle, combinedVolume, "music");
-                }
             }
         }
 
@@ -769,21 +743,9 @@ namespace YARG.Audio.BASS
         private void SetPlaybackMixerBuffers(int length)
         {
             SetPlaybackMixerBuffer(_musicPlaybackMixerHandle, length, "music");
-            SetActiveMusicPlaybackMixerBuffers(length);
             if (_sfxPlaybackMixerHandle != _musicPlaybackMixerHandle)
             {
                 SetPlaybackMixerBuffer(_sfxPlaybackMixerHandle, 0, "SFX");
-            }
-        }
-
-        private void SetActiveMusicPlaybackMixerBuffers(int length)
-        {
-            lock (_activeMusicPlaybackMixerLock)
-            {
-                foreach (var mixer in _activeMusicPlaybackMixers)
-                {
-                    SetPlaybackMixerBuffer(mixer.Handle, length, "music");
-                }
             }
         }
 
@@ -831,7 +793,6 @@ namespace YARG.Audio.BASS
                 Bass.StreamFree(mixers.Sfx);
             }
             SetPlaybackMixers(new PlaybackMixerHandles(0, 0));
-            FreeActiveMusicPlaybackMixers();
 
             YargLogger.LogInfo("Unloading BASS plugins");
             Bass.PluginFree(0);
@@ -934,176 +895,8 @@ namespace YARG.Audio.BASS
             return playbackMixer;
         }
 
-        internal int CreateOwnedMusicPlaybackMixer(double logicalVolume)
-        {
-            int configuredBufferLength = SettingsManager.Settings?.PlaybackBufferLength.Value ?? Bass.PlaybackBufferLength;
-            int playbackMixer = CreatePlaybackMixer("music", configuredBufferLength);
-            if (playbackMixer == 0)
-            {
-                return 0;
-            }
-
-            int deviceId = _currentDevice?.DeviceId ?? Bass.CurrentDevice;
-            lock (_activeMusicPlaybackMixerLock)
-            {
-                _activeMusicPlaybackMixers.Add(new ActiveMusicPlaybackMixer(playbackMixer, deviceId, logicalVolume));
-            }
-
-            SetOwnedMusicPlaybackMixerVolume(playbackMixer, logicalVolume);
-            return playbackMixer;
-        }
-
-        internal void FreeOwnedMusicPlaybackMixer(int playbackMixerHandle)
-        {
-            if (playbackMixerHandle == 0)
-            {
-                return;
-            }
-
-            int deviceId = Bass.CurrentDevice;
-            lock (_activeMusicPlaybackMixerLock)
-            {
-                int index = _activeMusicPlaybackMixers.FindIndex(mixer => mixer.Handle == playbackMixerHandle);
-                if (index >= 0)
-                {
-                    deviceId = _activeMusicPlaybackMixers[index].DeviceId;
-                    _activeMusicPlaybackMixers.RemoveAt(index);
-                }
-            }
-
-            FreeMixer(playbackMixerHandle, deviceId);
-        }
-
-        private void FreeActiveMusicPlaybackMixers()
-        {
-            ActiveMusicPlaybackMixer[] mixers;
-            lock (_activeMusicPlaybackMixerLock)
-            {
-                mixers = _activeMusicPlaybackMixers.ToArray();
-                _activeMusicPlaybackMixers.Clear();
-            }
-
-            foreach (var mixer in mixers)
-            {
-                FreeMixer(mixer.Handle, mixer.DeviceId);
-            }
-        }
-
-        internal bool SetOwnedMusicPlaybackMixerVolume(int playbackMixerHandle, double logicalVolume)
-        {
-            if (playbackMixerHandle == 0)
-            {
-                return false;
-            }
-
-            lock (_activeMusicPlaybackMixerLock)
-            {
-                var mixer = _activeMusicPlaybackMixers.Find(active => active.Handle == playbackMixerHandle);
-                if (mixer != null)
-                {
-                    mixer.LogicalVolume = logicalVolume;
-                }
-            }
-
-            double combinedVolume = GetCombinedMusicPlaybackMixerVolume(logicalVolume);
-            return SetPlaybackMixerVolumeWithResult(playbackMixerHandle, combinedVolume, "music");
-        }
-
-        internal bool SlideOwnedMusicPlaybackMixerVolume(int playbackMixerHandle, double logicalVolume, double duration)
-        {
-            if (playbackMixerHandle == 0)
-            {
-                return false;
-            }
-
-            lock (_activeMusicPlaybackMixerLock)
-            {
-                var mixer = _activeMusicPlaybackMixers.Find(active => active.Handle == playbackMixerHandle);
-                if (mixer != null)
-                {
-                    mixer.LogicalVolume = logicalVolume;
-                }
-            }
-
-            float combinedVolume = (float) GetCombinedMusicPlaybackMixerVolume(logicalVolume);
-            if (!Bass.ChannelSlideAttribute(playbackMixerHandle, ChannelAttribute.Volume, combinedVolume,
-                    (int) (duration * SongMetadata.MILLISECOND_FACTOR)))
-            {
-                YargLogger.LogFormatError("Failed to slide music playback mixer volume: {0}", Bass.LastError);
-                return false;
-            }
-
-            return true;
-        }
-
-        internal bool PauseOwnedMusicPlaybackMixer(int playbackMixerHandle)
-        {
-            if (playbackMixerHandle == 0)
-            {
-                return false;
-            }
-
-            var state = Bass.ChannelIsActive(playbackMixerHandle);
-            if (state == PlaybackState.Paused)
-            {
-                return true;
-            }
-
-            if (!Bass.ChannelPause(playbackMixerHandle))
-            {
-                YargLogger.LogFormatError("Failed to pause music playback mixer: {0}!", Bass.LastError);
-                return false;
-            }
-
-            return true;
-        }
-
-        internal bool ResumeOwnedMusicPlaybackMixer(int playbackMixerHandle)
-        {
-            if (playbackMixerHandle == 0)
-            {
-                return false;
-            }
-
-            var state = Bass.ChannelIsActive(playbackMixerHandle);
-            bool alreadyPlaying = state == PlaybackState.Playing || state == PlaybackState.Stalled;
-            if (alreadyPlaying)
-            {
-                return true;
-            }
-
-            if (!Bass.ChannelPlay(playbackMixerHandle))
-            {
-                YargLogger.LogFormatError("Failed to resume music playback mixer: {0}!", Bass.LastError);
-                return false;
-            }
-
-            return true;
-        }
-
-        private double GetCombinedMusicPlaybackMixerVolume(double logicalVolume)
-        {
-            return _masterVolume * ExponentialVolume(logicalVolume);
-        }
-
-        private static bool SetPlaybackMixerVolumeWithResult(int mixerHandle, double volume, string role)
-        {
-            if (mixerHandle == 0)
-            {
-                return false;
-            }
-
-            if (!Bass.ChannelSetAttribute(mixerHandle, ChannelAttribute.Volume, volume))
-            {
-                YargLogger.LogFormatError("Failed to set {0} playback mixer volume: {1}", role, Bass.LastError);
-                return false;
-            }
-
-            return true;
-        }
-
 #nullable enable
-        internal bool AddToMusicPlaybackMixer(
+        internal bool AddToGlobalMusicPlaybackMixer(
             int sourceHandle,
             OutputChannel? outputChannel,
             BassFlags extraFlags = BassFlags.Default,
@@ -1111,42 +904,17 @@ namespace YARG.Audio.BASS
             long length = 0)
 #nullable disable
         {
-            return AddToPlaybackMixer(_musicPlaybackMixerHandle, "music", sourceHandle, outputChannel, extraFlags, start, length);
-        }
-
-#nullable enable
-        internal bool AddToMusicPlaybackMixer(
-            int playbackMixerHandle,
-            int sourceHandle,
-            OutputChannel? outputChannel,
-            BassFlags extraFlags = BassFlags.Default,
-            long start = 0,
-            long length = 0)
-#nullable disable
-        {
-            return AddToPlaybackMixer(playbackMixerHandle, "music", sourceHandle, outputChannel, extraFlags, start, length);
-        }
-
-        internal int GetNewestMusicPlaybackMixerHandle()
-        {
-            if (UsesSharedMusicPlaybackMixer)
+            if (!UsesSinglePlaybackMixer)
             {
-                return _musicPlaybackMixerHandle;
+                return false;
             }
 
-            lock (_activeMusicPlaybackMixerLock)
-            {
-                for (int i = _activeMusicPlaybackMixers.Count - 1; i >= 0; i--)
-                {
-                    int handle = _activeMusicPlaybackMixers[i].Handle;
-                    if (handle != 0)
-                    {
-                        return handle;
-                    }
-                }
-            }
+            return AddToPlaybackMixer(_musicPlaybackMixerHandle, "global music", sourceHandle, outputChannel, extraFlags, start, length);
+        }
 
-            return _musicPlaybackMixerHandle;
+        internal int GetGlobalMusicPlaybackMixerHandle()
+        {
+            return UsesSinglePlaybackMixer ? _musicPlaybackMixerHandle : 0;
         }
 
 #nullable enable
@@ -1202,16 +970,6 @@ namespace YARG.Audio.BASS
                     YargLogger.LogFormatError("Failed to remove source {0} from playback mixer: {1}!", sourceHandle, Bass.LastError);
                 }
             }
-        }
-
-        internal bool PauseMusicPlaybackMixer()
-        {
-            return true;
-        }
-
-        internal bool ResumeMusicPlaybackMixer()
-        {
-            return true;
         }
 
         private static bool CreateMixerHandle(out int mixerHandle)
