@@ -1336,6 +1336,10 @@
                 "Name": "Output Device",
                 "Description": "The interface to use when playing sounds."
             },
+            "UseSingleBassPlaybackMixer": {
+                "Name": "Use Single BASS Playback Mixer",
+                "Description": "Routes music and sound effects through one BASS playback mixer. Intended for future ASIO support. Leave off for lower-latency sound effects on standard output devices."
+            },
             "PlayAShowTimeout": {
                 "Name": "Show Selection Timeout",
                 "Description": "The amount of time to wait for votes before picking a song or refreshing the categories."

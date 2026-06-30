@@ -591,6 +591,7 @@ namespace YARG.Settings
             public SliderSetting FontScaling { get; } = new(0f, 0f, 100f, FontScalingCallback);
 
             public OutputDeviceSetting OutputDevice { get; } = new("Default", OutputDeviceCallback);
+            public ToggleSetting UseSingleBassPlaybackMixer { get; } = new(false, UseSingleBassPlaybackMixerCallback);
             public OutputChannelDefaultSetting OutputChannelDefault { get; } = new(1, OutputChannelDefaultCallback);
             public OutputChannelSetting OutputChannelDrumSfx { get; } = new(-1, OutputChannelDrumSfxCallback);
             public OutputChannelSetting OutputChannelSfx { get; } = new(-1, OutputChannelSfxCallback);
@@ -861,6 +862,17 @@ namespace YARG.Settings
                 ResetChannelSetting(Settings.OutputChannelSfx, SongStem.Sfx);
                 ResetChannelSetting(Settings.OutputChannelVox, SongStem.VoxSample);
                 ResetChannelSetting(Settings.OutputChannelMetronome, SongStem.Metronome);
+            }
+
+            private static void UseSingleBassPlaybackMixerCallback(bool value)
+            {
+                // Unity saves this information automatically
+                if (!IsInitialized)
+                {
+                    return;
+                }
+
+                GlobalAudioHandler.ReinitializeOutputDevice(Settings.OutputDevice.Value);
             }
 
             private static void OutputChannelDefaultCallback(int channelId)

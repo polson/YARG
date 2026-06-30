@@ -154,7 +154,7 @@ namespace YARG.Audio.BASS
         {
             var pausedFlag = paused ? BassFlags.MixerChanPause : BassFlags.Default;
             var flags = BassFlags.MixerChanBuffer | pausedFlag;
-            if (_bassManager.AddToMasterMixer(_tempoStreamHandle, _outputChannel, flags))
+            if (_bassManager.AddToMusicPlaybackMixer(_tempoStreamHandle, _outputChannel, flags))
             {
                 ReanchorTransport(_positionOffset, delayAudible: !paused);
             }
@@ -162,7 +162,7 @@ namespace YARG.Audio.BASS
 
         private void RemoveTempoStream()
         {
-            _bassManager.RemoveFromMasterMixer(_tempoStreamHandle);
+            _bassManager.RemoveFromPlaybackMixer(_tempoStreamHandle);
             _renderClockAnchored = false;
             _audibleClockAnchored = false;
         }
@@ -199,6 +199,10 @@ namespace YARG.Audio.BASS
                 UnpauseDelay = 0;
 
                 ReanchorTransport(_positionOffset, delayAudible: true, delay);
+                if (!_bassManager.ResumeMusicPlaybackMixer())
+                {
+                    return (int) Bass.LastError;
+                }
             }
 
             if (IsWhammyEnabled)
@@ -251,6 +255,9 @@ namespace YARG.Audio.BASS
             // Get current heard position in seconds before we pause
             double pausePosition = GetPosition_Internal();
 
+            // Do not pause the shared music playback mixer here. Multiple StemMixers can be active
+            // during library-preview crossfades; pausing the playback mixer for the old preview also
+            // silences the new preview when separate music/SFX playback mixers are in use.
             if (!SetTempoStreamPaused(true))
             {
                 return (int) Bass.LastError;
@@ -930,7 +937,7 @@ namespace YARG.Audio.BASS
 
         protected override void SetBufferLength_Internal(int length)
         {
-            // Playback buffering belongs to the non-decoding master mixer. Reinitialize this source's
+            // Playback buffering belongs to the non-decoding music playback mixer. Reinitialize this source's
             // history buffer so large buffer changes are reflected in source-position lookups.
             double position = _audibleClockAnchored || IsPlaying ? GetPosition_Internal() : _positionOffset;
 

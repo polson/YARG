@@ -9,7 +9,7 @@ using YARG.Core.Logging;
 namespace YARG.Audio.BASS
 {
     /// <summary>
-    /// Sample channel helper class for adding samples to the master mixer, and playback
+    /// Sample channel helper class for adding samples to the SFX playback mixer, and playback
     /// </summary>
     internal sealed class BassSamplePlayer : IDisposable
     {
@@ -104,7 +104,7 @@ namespace YARG.Audio.BASS
                     return 0;
                 }
 
-                if (playingSample.AddToMaster(OutputChannel))
+                if (playingSample.AddToSfxPlaybackMixer(OutputChannel))
                 {
                     _playingSamples.Add(playingSample);
                 }
@@ -228,14 +228,14 @@ namespace YARG.Audio.BASS
             }
 
             /// <summary>
-            /// Adds the sample's channel to the master mixer (which starts playback) and sets up the end-of-channel sync callback for automatic cleanup.
+            /// Adds the sample's channel to the SFX playback mixer (which starts playback) and sets up the end-of-channel sync callback for automatic cleanup.
             /// </summary>
             /// <param name="outputChannel">The output channel configuration, or null for default routing.</param>
             /// <param name="extraFlags">Additional flags to apply to the mixer source channel.</param>
-            /// <returns>True if successfully added to the master mixer; otherwise, false.</returns>
-            public bool AddToMaster(OutputChannel? outputChannel, BassFlags extraFlags = BassFlags.Default)
+            /// <returns>True if successfully added to the SFX playback mixer; otherwise, false.</returns>
+            public bool AddToSfxPlaybackMixer(OutputChannel? outputChannel, BassFlags extraFlags = BassFlags.Default)
             {
-                if (!_manager.AddToMasterMixer(Channel, outputChannel, extraFlags))
+                if (!_manager.AddToSfxPlaybackMixer(Channel, outputChannel, extraFlags))
                 {
                     return false;
                 }
@@ -329,7 +329,7 @@ namespace YARG.Audio.BASS
                     _stopped = true;
                 }
 
-                _manager.RemoveFromMasterMixer(Channel);
+                _manager.RemoveFromPlaybackMixer(Channel);
                 if (!Bass.StreamFree(Channel))
                 {
                     YargLogger.LogFormatError("Failed to free {0} stream: {1}!", _name, Bass.LastError);

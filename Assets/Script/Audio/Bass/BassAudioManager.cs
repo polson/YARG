@@ -98,27 +98,47 @@ namespace YARG.Audio.BASS
 
         private readonly int _opusHandle = 0;
         private BassOutputDevice _currentDevice;
-        private int _masterMixerHandle;
+        private int _musicPlaybackMixerHandle;
+        private int _sfxPlaybackMixerHandle;
         private double _masterVolume = 1.0;
 
-        internal int MasterMixerHandle => _masterMixerHandle;
+        internal int MasterMixerHandle => _musicPlaybackMixerHandle;
+        private static bool UseSinglePlaybackMixerSetting => SettingsManager.Settings?.UseSingleBassPlaybackMixer.Value ?? false;
+        private bool UsesSeparatePlaybackMixers =>
+            _musicPlaybackMixerHandle != 0 &&
+            _sfxPlaybackMixerHandle != 0 &&
+            _musicPlaybackMixerHandle != _sfxPlaybackMixerHandle;
+
+        private readonly struct PlaybackMixerHandles
+        {
+            public readonly int Music;
+            public readonly int Sfx;
+
+            public PlaybackMixerHandles(int music, int sfx)
+            {
+                Music = music;
+                Sfx = sfx;
+            }
+
+            public bool IsValid => Music != 0 && Sfx != 0;
+        }
 
         internal bool TryGetMasterMixerTime(out double time)
         {
             time = 0;
-            if (_masterMixerHandle == 0)
+            if (_musicPlaybackMixerHandle == 0)
             {
                 return false;
             }
 
-            long positionBytes = Bass.ChannelGetPosition(_masterMixerHandle, PositionFlags.Bytes);
+            long positionBytes = Bass.ChannelGetPosition(_musicPlaybackMixerHandle, PositionFlags.Bytes);
             if (positionBytes < 0)
             {
                 YargLogger.LogFormatError("Failed to get master mixer position: {0}", Bass.LastError);
                 return false;
             }
 
-            time = Bass.ChannelBytes2Seconds(_masterMixerHandle, positionBytes);
+            time = Bass.ChannelBytes2Seconds(_musicPlaybackMixerHandle, positionBytes);
             if (time < 0)
             {
                 YargLogger.LogFormatError("Failed to convert master mixer position to seconds: {0}", Bass.LastError);
@@ -211,14 +231,25 @@ namespace YARG.Audio.BASS
 
         protected override bool SetOutputDevice(string name)
         {
+            return SetOutputDevice(name, forceReinitialize: false);
+        }
+
+        protected override bool ReinitializeOutputDevice(string name)
+        {
+            return SetOutputDevice(name, forceReinitialize: true);
+        }
+
+        private bool SetOutputDevice(string name, bool forceReinitialize)
+        {
+            int previousDeviceId = Bass.CurrentDevice;
             if (GetOutputDevice(name) is not BassOutputDevice newDevice)
             {
                 return false;
             }
 
-            bool deviceAlreadyActive = newDevice.DeviceId == Bass.CurrentDevice;
-            bool mixerAlreadyInitialized = _masterMixerHandle != 0;
-            if (deviceAlreadyActive && mixerAlreadyInitialized)
+            bool deviceAlreadyActive = newDevice.DeviceId == previousDeviceId;
+            bool mixersAlreadyInitialized = _musicPlaybackMixerHandle != 0 && _sfxPlaybackMixerHandle != 0;
+            if (!forceReinitialize && deviceAlreadyActive && mixersAlreadyInitialized)
             {
                 return false;
             }
@@ -226,35 +257,35 @@ namespace YARG.Audio.BASS
             YargLogger.LogFormatInfo("Changing BASS Device to: {0}", newDevice.DisplayName);
 
             var previousDevice = _currentDevice;
-            var previousMixer = _masterMixerHandle;
+            var previousMixers = GetPlaybackMixers();
             _currentDevice = newDevice.Use();
-            
-            int newMixer = CreateMasterMixer();
-            if (newMixer == 0)
+
+            var newMixers = CreatePlaybackMixers();
+            if (!newMixers.IsValid)
             {
-                if (previousMixer != 0 && previousDevice is not null)
-                {
-                    _currentDevice = previousDevice.Use();
-                    _masterMixerHandle = previousMixer;
-                }
-                else
-                {
-                    _masterMixerHandle = 0;
-                }
-                newDevice.Dispose();
+                RestorePreviousDeviceAndMixers(previousDevice, previousMixers);
+                DisposeFailedNewDevice(newDevice, previousDevice);
                 return false;
             }
 
-            _masterMixerHandle = newMixer;
+            SetPlaybackMixers(newMixers);
+            base.SetOutputDevice(newDevice);
 
-            base.SetOutputDevice(newDevice.DisplayName);
-
-            if (previousMixer != 0 && previousDevice is not null)
+            if (previousDevice is not null)
             {
-                FreeMixer(previousMixer, previousDevice.DeviceId);
+                FreePlaybackMixers(previousMixers, previousDevice.DeviceId);
             }
 
-            previousDevice?.Dispose();
+            if (previousDevice is not null && previousDevice.DeviceId != newDevice.DeviceId)
+            {
+                previousDevice.Dispose();
+            }
+
+            if (previousDevice is not null && previousDevice.DeviceId == newDevice.DeviceId)
+            {
+                _currentDevice = previousDevice;
+            }
+
             _currentDevice.Use();
 
             YargLogger.LogFormatInfo("Current BASS Device: {0}", Bass.GetDeviceInfo(Bass.CurrentDevice).Name);
@@ -265,6 +296,37 @@ namespace YARG.Audio.BASS
             LoadMetronome();
 
             return true;
+        }
+
+        private PlaybackMixerHandles GetPlaybackMixers()
+        {
+            return new PlaybackMixerHandles(_musicPlaybackMixerHandle, _sfxPlaybackMixerHandle);
+        }
+
+        private void SetPlaybackMixers(PlaybackMixerHandles mixers)
+        {
+            _musicPlaybackMixerHandle = mixers.Music;
+            _sfxPlaybackMixerHandle = mixers.Sfx;
+        }
+
+        private void RestorePreviousDeviceAndMixers(BassOutputDevice previousDevice, PlaybackMixerHandles previousMixers)
+        {
+            if (previousMixers.IsValid && previousDevice is not null)
+            {
+                _currentDevice = previousDevice.Use();
+                SetPlaybackMixers(previousMixers);
+                return;
+            }
+
+            SetPlaybackMixers(new PlaybackMixerHandles(0, 0));
+        }
+
+        private static void DisposeFailedNewDevice(BassOutputDevice newDevice, BassOutputDevice previousDevice)
+        {
+            if (previousDevice is null || previousDevice.DeviceId != newDevice.DeviceId)
+            {
+                newDevice.Dispose();
+            }
         }
 
         private static void FreeMixer(int mixerHandle, int deviceId)
@@ -278,6 +340,19 @@ namespace YARG.Audio.BASS
             finally
             {
                 Bass.CurrentDevice = activeDevice;
+            }
+        }
+
+        private static void FreePlaybackMixers(PlaybackMixerHandles mixers, int deviceId)
+        {
+            if (mixers.Music != 0)
+            {
+                FreeMixer(mixers.Music, deviceId);
+            }
+
+            if (mixers.Sfx != 0 && mixers.Sfx != mixers.Music)
+            {
+                FreeMixer(mixers.Sfx, deviceId);
             }
         }
 
@@ -627,27 +702,41 @@ namespace YARG.Audio.BASS
         {
 #if UNITY_EDITOR
             if (EditorUtility.audioMasterMute)
+            {
                 volume = 0;
+            }
 #endif
             _masterVolume = volume;
-            if (_masterMixerHandle != 0 && !Bass.ChannelSetAttribute(_masterMixerHandle, ChannelAttribute.Volume, volume))
+            SetPlaybackMixerVolume(_musicPlaybackMixerHandle, volume, "music");
+            if (_sfxPlaybackMixerHandle != _musicPlaybackMixerHandle)
             {
-                YargLogger.LogFormatError("Failed to set master mixer volume: {0}", Bass.LastError);
+                SetPlaybackMixerVolume(_sfxPlaybackMixerHandle, volume, "SFX");
             }
         }
 
+        private static void SetPlaybackMixerVolume(int mixerHandle, double volume, string role)
+        {
+            if (mixerHandle != 0 && !Bass.ChannelSetAttribute(mixerHandle, ChannelAttribute.Volume, volume))
+            {
+                YargLogger.LogFormatError("Failed to set {0} playback mixer volume: {1}", role, Bass.LastError);
+            }
+        }
 
         protected override void SetBufferLength_Internal(int length)
         {
-            SetMasterMixerBuffer(length);
+            SetPlaybackMixerBuffers(length);
         }
 
-        private void SetMasterMixerBuffer(int length)
+        private void SetPlaybackMixerBuffers(int length)
         {
-            SetMasterMixerBuffer(_masterMixerHandle, length);
+            SetPlaybackMixerBuffer(_musicPlaybackMixerHandle, length, "music");
+            if (_sfxPlaybackMixerHandle != _musicPlaybackMixerHandle)
+            {
+                SetPlaybackMixerBuffer(_sfxPlaybackMixerHandle, 0, "SFX");
+            }
         }
 
-        private void SetMasterMixerBuffer(int mixerHandle, int length)
+        private void SetPlaybackMixerBuffer(int mixerHandle, int length, string role)
         {
             // 0 disables buffering. Positive values must respect the device minimum when known.
             if (length > 0 && MinimumBufferLength > 0 && length < MinimumBufferLength)
@@ -668,7 +757,7 @@ namespace YARG.Audio.BASS
 
                 if (!Bass.ChannelSetAttribute(mixerHandle, ChannelAttribute.Buffer, lengthInSeconds))
                 {
-                    YargLogger.LogFormatError("Failed to set master mixer playback buffer: {0}!", Bass.LastError);
+                    YargLogger.LogFormatError("Failed to set {0} playback mixer buffer: {1}!", role, Bass.LastError);
                 }
 
                 if (wasPlaying)
@@ -680,11 +769,17 @@ namespace YARG.Audio.BASS
 
         protected override void DisposeUnmanagedResources()
         {
-            if (_masterMixerHandle != 0)
+            var mixers = GetPlaybackMixers();
+            if (mixers.Music != 0)
             {
-                Bass.StreamFree(_masterMixerHandle);
-                _masterMixerHandle = 0;
+                Bass.StreamFree(mixers.Music);
             }
+
+            if (mixers.Sfx != 0 && mixers.Sfx != mixers.Music)
+            {
+                Bass.StreamFree(mixers.Sfx);
+            }
+            SetPlaybackMixers(new PlaybackMixerHandles(0, 0));
 
             YargLogger.LogInfo("Unloading BASS plugins");
             Bass.PluginFree(0);
@@ -722,7 +817,32 @@ namespace YARG.Audio.BASS
             return pluginDirectory;
         }
 
-        private int CreateMasterMixer()
+        private PlaybackMixerHandles CreatePlaybackMixers()
+        {
+            int configuredBufferLength = SettingsManager.Settings?.PlaybackBufferLength.Value ?? Bass.PlaybackBufferLength;
+            if (UseSinglePlaybackMixerSetting)
+            {
+                int singleMixer = CreatePlaybackMixer("single", configuredBufferLength);
+                return new PlaybackMixerHandles(singleMixer, singleMixer);
+            }
+
+            int musicMixer = CreatePlaybackMixer("music", configuredBufferLength);
+            if (musicMixer == 0)
+            {
+                return new PlaybackMixerHandles(0, 0);
+            }
+
+            int sfxMixer = CreatePlaybackMixer("SFX", 0);
+            if (sfxMixer == 0)
+            {
+                Bass.StreamFree(musicMixer);
+                return new PlaybackMixerHandles(0, 0);
+            }
+
+            return new PlaybackMixerHandles(musicMixer, sfxMixer);
+        }
+
+        private int CreatePlaybackMixer(string role, int bufferLength)
         {
             var info = Bass.Info;
             int frequency = info.SampleRate > 0 ? info.SampleRate : 44100;
@@ -734,42 +854,43 @@ namespace YARG.Audio.BASS
             int originalBufferLength = Bass.PlaybackBufferLength;
             Bass.PlaybackBufferLength = 5000;
 
-            int masterMixer;
+            int playbackMixer;
             try
             {
-                masterMixer = BassMix.CreateMixerStream(frequency, channels, BassFlags.Float | BassFlags.MixerNonStop);
+                playbackMixer = BassMix.CreateMixerStream(frequency, channels, BassFlags.Float | BassFlags.MixerNonStop);
             }
             finally
             {
                 Bass.PlaybackBufferLength = originalBufferLength;
             }
 
-            if (masterMixer == 0)
+            if (playbackMixer == 0)
             {
-                YargLogger.LogFormatError("Failed to create master mixer: {0}!", Bass.LastError);
+                YargLogger.LogFormatError("Failed to create {0} playback mixer: {1}!", role, Bass.LastError);
                 return 0;
             }
 
-            if (!Bass.ChannelSetAttribute(masterMixer, ChannelAttribute.Volume, _masterVolume))
+            if (!Bass.ChannelSetAttribute(playbackMixer, ChannelAttribute.Volume, _masterVolume))
             {
-                YargLogger.LogFormatError("Failed to set master mixer volume: {0}", Bass.LastError);
+                YargLogger.LogFormatError("Failed to set {0} playback mixer volume: {1}", role, Bass.LastError);
             }
 
-            SetMasterMixerBuffer(masterMixer, SettingsManager.Settings?.PlaybackBufferLength.Value ?? Bass.PlaybackBufferLength);
+            SetPlaybackMixerBuffer(playbackMixer, bufferLength, role);
 
-            if (!Bass.ChannelPlay(masterMixer))
+            if (!Bass.ChannelPlay(playbackMixer))
             {
-                YargLogger.LogFormatError("Failed to play master mixer: {0}!", Bass.LastError);
-                Bass.StreamFree(masterMixer);
+                YargLogger.LogFormatError("Failed to play {0} playback mixer: {1}!", role, Bass.LastError);
+                Bass.StreamFree(playbackMixer);
                 return 0;
             }
 
-            YargLogger.LogFormatInfo("Created BASS master mixer: {0}Hz, {1} channels", frequency, channels);
-            return masterMixer;
+            YargLogger.LogFormatInfo("Created BASS {0} playback mixer: handle {1}, {2}Hz, {3} channels", role,
+                playbackMixer, frequency, channels);
+            return playbackMixer;
         }
 
 #nullable enable
-        internal bool AddToMasterMixer(
+        internal bool AddToMusicPlaybackMixer(
             int sourceHandle,
             OutputChannel? outputChannel,
             BassFlags extraFlags = BassFlags.Default,
@@ -777,25 +898,51 @@ namespace YARG.Audio.BASS
             long length = 0)
 #nullable disable
         {
-            if (_masterMixerHandle == 0)
+            return AddToPlaybackMixer(_musicPlaybackMixerHandle, "music", sourceHandle, outputChannel, extraFlags, start, length);
+        }
+
+#nullable enable
+        internal bool AddToSfxPlaybackMixer(
+            int sourceHandle,
+            OutputChannel? outputChannel,
+            BassFlags extraFlags = BassFlags.Default,
+            long start = 0,
+            long length = 0)
+#nullable disable
+        {
+            return AddToPlaybackMixer(_sfxPlaybackMixerHandle, "SFX", sourceHandle, outputChannel, extraFlags, start, length);
+        }
+
+#nullable enable
+        private static bool AddToPlaybackMixer(
+            int playbackMixerHandle,
+            string role,
+            int sourceHandle,
+            OutputChannel? outputChannel,
+            BassFlags extraFlags,
+            long start,
+            long length)
+#nullable disable
+        {
+            if (playbackMixerHandle == 0)
             {
                 return false;
             }
 
             var flags = BassHelpers.GetMixerSourceFlags(outputChannel, BassFlags.MixerChanDownMix | extraFlags);
-            if (!BassMix.MixerAddChannel(_masterMixerHandle, sourceHandle, flags, start, length))
+            if (!BassMix.MixerAddChannel(playbackMixerHandle, sourceHandle, flags, start, length))
             {
-                YargLogger.LogFormatError("Failed to add source {0} to master mixer: {1}!", sourceHandle,
-                    Bass.LastError);
+                YargLogger.LogFormatError("Failed to add source {0} to {1} playback mixer: {2}!", sourceHandle,
+                    role, Bass.LastError);
                 return false;
             }
 
             return true;
         }
 
-        internal void RemoveFromMasterMixer(int sourceHandle)
+        internal void RemoveFromPlaybackMixer(int sourceHandle)
         {
-            if (sourceHandle == 0 || _masterMixerHandle == 0)
+            if (sourceHandle == 0)
             {
                 return;
             }
@@ -804,9 +951,54 @@ namespace YARG.Audio.BASS
             {
                 if (Bass.LastError != Errors.Handle)
                 {
-                    YargLogger.LogFormatError("Failed to remove source {0} from master mixer: {1}!", sourceHandle, Bass.LastError);
+                    YargLogger.LogFormatError("Failed to remove source {0} from playback mixer: {1}!", sourceHandle, Bass.LastError);
                 }
             }
+        }
+
+        internal bool PauseMusicPlaybackMixer()
+        {
+            if (!UsesSeparatePlaybackMixers)
+            {
+                return true;
+            }
+
+            var state = Bass.ChannelIsActive(_musicPlaybackMixerHandle);
+            if (state == PlaybackState.Paused)
+            {
+                return true;
+            }
+
+            if (!Bass.ChannelPause(_musicPlaybackMixerHandle))
+            {
+                YargLogger.LogFormatError("Failed to pause music playback mixer: {0}!", Bass.LastError);
+                return false;
+            }
+
+            return true;
+        }
+
+        internal bool ResumeMusicPlaybackMixer()
+        {
+            if (!UsesSeparatePlaybackMixers)
+            {
+                return true;
+            }
+
+            var state = Bass.ChannelIsActive(_musicPlaybackMixerHandle);
+            bool alreadyPlaying = state == PlaybackState.Playing || state == PlaybackState.Stalled;
+            if (alreadyPlaying)
+            {
+                return true;
+            }
+
+            if (!Bass.ChannelPlay(_musicPlaybackMixerHandle))
+            {
+                YargLogger.LogFormatError("Failed to resume music playback mixer: {0}!", Bass.LastError);
+                return false;
+            }
+
+            return true;
         }
 
         private static bool CreateMixerHandle(out int mixerHandle)

@@ -104,7 +104,7 @@ namespace YARG.Audio.BASS
 
         protected override void SetEndCallback_Internal()
         {
-            // Dynamic per-play sources set their own end syncs when added to the master mixer.
+            // Dynamic per-play sources set their own end syncs when added to the SFX playback mixer.
         }
 
 #nullable enable
