@@ -30,15 +30,9 @@ namespace YARG.Audio.BASS
 
         public OutputChannel? OutputChannel { get; set; }
 
-        private bool CanPlay
+        private bool IsAtPlaybackLimitLocked()
         {
-            get
-            {
-                lock (_lock)
-                {
-                    return _playingSamples.Count < _maxPlaybacks;
-                }
-            }
+            return _playingSamples.Count >= _maxPlaybacks;
         }
 
         /// <summary>
@@ -76,9 +70,12 @@ namespace YARG.Audio.BASS
         /// <returns>The BASS channel handle if successful; otherwise, 0.</returns>
         public int PlaySample(int sampleHandle, string name, double volume, bool loop = false)
         {
-            if (!CanPlay)
+            lock (_lock)
             {
-                return 0;
+                if (IsAtPlaybackLimitLocked())
+                {
+                    return 0;
+                }
             }
 
             int channel = Bass.SampleGetChannel(sampleHandle, BassFlags.Decode | SAMPLE_CHANNEL_STREAM);
@@ -93,10 +90,20 @@ namespace YARG.Audio.BASS
                 Bass.ChannelAddFlag(channel, BassFlags.Loop);
             }
 
+            var playingSample = new PlayingSample(_manager, channel, name, OnPlayingSampleStopped);
+            playingSample.SetVolume(volume);
+
             lock (_lock)
             {
-                var playingSample = new PlayingSample(_manager, channel, name, OnPlayingSampleStopped);
-                playingSample.SetVolume(volume);
+                if (IsAtPlaybackLimitLocked())
+                {
+                    if (!Bass.StreamFree(channel))
+                    {
+                        YargLogger.LogFormatError("Failed to free unused {0} stream: {1}!", name, Bass.LastError);
+                    }
+                    return 0;
+                }
+
                 if (playingSample.AddToMaster(OutputChannel))
                 {
                     _playingSamples.Add(playingSample);
@@ -104,6 +111,7 @@ namespace YARG.Audio.BASS
                 else
                 {
                     playingSample.Stop();
+                    return 0;
                 }
             }
 

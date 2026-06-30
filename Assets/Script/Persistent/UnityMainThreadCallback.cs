@@ -8,6 +8,7 @@ namespace YARG
     public class UnityMainThreadCallback : MonoBehaviour
     {
         private static readonly Queue<Action> CallbackQueue = new();
+        private static readonly List<Action> CallbackBuffer = new();
 
         private void Update()
         {
@@ -15,16 +16,23 @@ namespace YARG
             {
                 while (CallbackQueue.Count > 0)
                 {
-                    try
-                    {
-                        CallbackQueue.Dequeue().Invoke();
-                    }
-                    catch (Exception e)
-                    {
-                        YargLogger.LogException(e, "Failed to run main thread callbacks");
-                    }
+                    CallbackBuffer.Add(CallbackQueue.Dequeue());
                 }
             }
+
+            foreach (var callback in CallbackBuffer)
+            {
+                try
+                {
+                    callback.Invoke();
+                }
+                catch (Exception e)
+                {
+                    YargLogger.LogException(e, "Failed to run main thread callbacks");
+                }
+            }
+
+            CallbackBuffer.Clear();
         }
 
         public static void QueueEvent(Action action)
