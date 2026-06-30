@@ -487,8 +487,6 @@ namespace YARG.Playback
                     worstDelta = _syncWorstDelta;
                 }
 
-                double outputLatency = _mixer.GetEstimatedOutputLatency();
-
                 // Smooth the drift over a few frames (Low-Pass Filter)
                 if (float.IsNaN(smoothedDrift))
                 {
@@ -499,14 +497,11 @@ namespace YARG.Playback
                     smoothedDrift = Mathf.Lerp(smoothedDrift, (float) delta, 0.15f);
                 }
 
-                // Proportional Gain: tiny drift trimming only. Large measured errors are corrected
-                // by seeking, which avoids delayed overcorrection from tempo pulses.
+                // Proportional Gain: drift trimming only. Never seek during sync correction.
                 const float DEAD_BAND = 0.005f;
                 const float P_GAIN = 0.05f;
                 const float MAX_ADJUSTMENT = 0.01f;
                 const double MIN_SYNC_COMMAND_INTERVAL = 0.1;
-                const double SEEK_MIN_DELTA = 0.020;
-                const double SEEK_SETTLE_EXTRA = 0.05;
 
                 float targetAdjustment;
                 if (currentInputTime < syncCorrectionSuppressedUntil)
@@ -514,34 +509,6 @@ namespace YARG.Playback
                     targetAdjustment = 0f;
                     smoothedDrift = float.NaN;
                     speedMultiplierState = 0;
-                }
-                else if (Math.Abs(delta) >= SEEK_MIN_DELTA)
-                {
-                    double latencyCompensatedPosition = syncVisualTime + (outputLatency * songSpeed);
-                    double seekPosition = Math.Clamp(latencyCompensatedPosition, 0, _mixer.Length);
-
-                    targetAdjustment = 0f;
-                    speedAdjustment = 0f;
-                    smoothedDrift = float.NaN;
-                    speedMultiplierState = 0;
-                    startDelta = (float) delta;
-                    worstDelta = startDelta;
-                    syncAudioTime = syncVisualTime;
-                    _mixer.SetSpeed((float) songSpeed, false);
-                    _mixer.SetPosition(seekPosition);
-
-                    double settleUntil = currentInputTime + outputLatency + SEEK_SETTLE_EXTRA;
-                    syncCorrectionSuppressedUntil = settleUntil;
-                    nextSyncSpeedChangeTime = settleUntil;
-
-                    YargLogger.LogDebug(
-                        $"Sync seek correction applied. " +
-                        $"Delta: {delta * 1000.0:0.000}ms, " +
-                        $"position: {seekPosition:0.000000}, " +
-                        $"sync visual: {syncVisualTime:0.000000}, " +
-                        $"latency compensation: {(outputLatency * songSpeed) * 1000.0:0.000}ms, " +
-                        $"output latency: {outputLatency * 1000.0:0.000}ms."
-                    );
                 }
                 else
                 {

@@ -440,12 +440,13 @@ namespace YARG.Gameplay
 
         public bool PlayerHasFailed { get; set; } = false;
 
-        public async void Resume(double? rewindDuration = null)
+        public async void Resume(double? rewindDuration = null, bool compensatePracticeOutputLatency = false)
         {
             // Practice/replay skip rewind. Practice pause resumes still compensate output latency instantly.
             if (IsPractice || IsReplay)
             {
-                bool compensateOutputLatency = IsPractice && _practicePauseResumeCompensationPending;
+                bool compensateOutputLatency = IsPractice &&
+                    (_practicePauseResumeCompensationPending || compensatePracticeOutputLatency);
                 _practicePauseResumeCompensationPending = false;
 
                 _pauseMenu.PopAllMenus();
