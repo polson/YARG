@@ -172,6 +172,7 @@ namespace YARG.Gameplay
         private double _rewindLimit = double.MinValue;
         private bool   _resumeInProgress;
         private bool   _autoCalibrateVideoOnPause;
+        private bool   _practicePauseResumeCompensationPending;
         private double _preFadeOutVolume = DEFAULT_VOLUME;
 
         public bool PlayingAShow => GlobalVariables.State.PlayingAShow;
@@ -321,6 +322,7 @@ namespace YARG.Gameplay
 
         public void SetSongTime(double time, double delayTime = SONG_START_DELAY)
         {
+            _practicePauseResumeCompensationPending = false;
             _songRunner.SetSongTime(time, delayTime);
 
             BeatEventHandler.Reset();
@@ -424,6 +426,10 @@ namespace YARG.Gameplay
             }
 
             _autoCalibrateVideoOnPause = SettingsManager.Settings.AutoCalibrateVideo.Value;
+            if (IsPractice && showMenu)
+            {
+                _practicePauseResumeCompensationPending = true;
+            }
 
             // Pause any audio samples that are currently playing
             GlobalAudioHandler.PauseAllSfx();
@@ -436,11 +442,14 @@ namespace YARG.Gameplay
 
         public async void Resume(double? rewindDuration = null)
         {
-            // We don't rewind in practice mode or in replay, so we can skip all the BS
+            // Practice/replay skip rewind. Practice pause resumes still compensate output latency instantly.
             if (IsPractice || IsReplay)
             {
+                bool compensateOutputLatency = IsPractice && _practicePauseResumeCompensationPending;
+                _practicePauseResumeCompensationPending = false;
+
                 _pauseMenu.PopAllMenus();
-                _songRunner.Resume();
+                _songRunner.Resume(compensateOutputLatency);
                 ResumeCore();
                 return;
             }

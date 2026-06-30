@@ -641,6 +641,26 @@ namespace YARG.Playback
             _syncSmoothedDrift = float.NaN;
         }
 
+        private void CompensateResumeOutputLatency()
+        {
+            double outputLatency = _mixer.GetEstimatedOutputLatency();
+            if (double.IsNaN(outputLatency) || double.IsInfinity(outputLatency) || outputLatency <= 0)
+            {
+                return;
+            }
+
+            double audioOffset = SongOffset - (AudioCalibration * SongSpeed);
+            double syncVisualTime = InputTime - audioOffset;
+            double seekPosition = Math.Clamp(syncVisualTime + (outputLatency * SongSpeed), 0, _mixer.Length);
+
+            _mixer.SetPosition(seekPosition);
+
+            YargLogger.LogFormatDebug(
+                "Compensated resume output latency. Output latency: {0:0.000000}, sync visual: {1:0.000000}, seek position: {2:0.000000}",
+                outputLatency, syncVisualTime, seekPosition
+            );
+        }
+
         private void SuppressSyncCorrection()
         {
             double now = InputManager.CurrentInputTime;
@@ -860,7 +880,7 @@ namespace YARG.Playback
         /// <summary>
         /// Resumes the song.
         /// </summary>
-        public void Resume()
+        public void Resume(bool compensateOutputLatency = false)
         {
             if (PauseOverridden)
             {
@@ -877,6 +897,10 @@ namespace YARG.Playback
                 SetInputBaseChecked(InputTime);
                 ResetSync();
                 ResetSyncEstimate();
+                if (compensateOutputLatency)
+                {
+                    CompensateResumeOutputLatency();
+                }
                 _justResumed = true;
                 Paused = false;
             }
