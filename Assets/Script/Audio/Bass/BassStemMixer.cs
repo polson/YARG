@@ -935,11 +935,19 @@ namespace YARG.Audio.BASS
             double position = _audibleClockAnchored || IsPlaying ? GetPosition_Internal() : _positionOffset;
 
             bool wasPlaying = IsPlaying;
+            if (wasPlaying)
+            {
+                Pause_Internal();
+            }
+
             RemoveTempoStream();
-
             SetPosition_Internal(position);
+            AddTempoStream(true);
 
-            AddTempoStream(!wasPlaying);
+            if (wasPlaying)
+            {
+                Play_Internal();
+            }
         }
 
         protected override void DisposeManagedResources()

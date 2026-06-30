@@ -210,6 +210,7 @@ namespace YARG.Playback
         private volatile float _syncStartDelta;
         private volatile float _syncWorstDelta;
         private volatile float _syncSmoothedDrift = float.NaN;
+        private bool _syncRecoveryActive;
         private double _syncCorrectionSuppressedUntil = double.NegativeInfinity;
         private double _nextSyncSpeedChangeTime = double.NegativeInfinity;
 
@@ -471,12 +472,18 @@ namespace YARG.Playback
                 }
 
                 double delta = syncVisualTime - syncAudioTime;
+                double outputLatency = _mixer.GetEstimatedOutputLatency();
+                if (double.IsNaN(outputLatency) || double.IsInfinity(outputLatency) || outputLatency < 0)
+                {
+                    outputLatency = 0;
+                }
 
                 float smoothedDrift;
                 float speedAdjustment;
                 int speedMultiplierState;
                 float startDelta;
                 float worstDelta;
+                bool recoveryActive;
 
                 lock (_syncThread)
                 {
@@ -485,6 +492,7 @@ namespace YARG.Playback
                     speedMultiplierState = _syncSpeedMultiplier;
                     startDelta = _syncStartDelta;
                     worstDelta = _syncWorstDelta;
+                    recoveryActive = _syncRecoveryActive;
                 }
 
                 // Smooth the drift over a few frames (Low-Pass Filter)
@@ -497,24 +505,65 @@ namespace YARG.Playback
                     smoothedDrift = Mathf.Lerp(smoothedDrift, (float) delta, 0.15f);
                 }
 
-                // Proportional Gain: drift trimming only. Never seek during sync correction.
+                // General sync correction. Small drift uses gentle PLL trimming; larger step errors
+                // use faster catch-up. The current speed adjustment keeps affecting audible audio until
+                // the next command exits the output buffer, so predict drift at that effect time.
                 const float DEAD_BAND = 0.005f;
                 const float P_GAIN = 0.05f;
                 const float MAX_ADJUSTMENT = 0.01f;
+                const float RECOVERY_ENTER_BAND = 0.010f;
+                const float RECOVERY_EXIT_BAND = 0.002f;
+                const float RECOVERY_TIME = 0.5f;
+                const float MAX_RECOVERY_ADJUSTMENT = 0.03f;
                 const double MIN_SYNC_COMMAND_INTERVAL = 0.1;
 
                 float targetAdjustment;
+                bool previousRecoveryActive = recoveryActive;
+                float predictedDrift = (float) (delta - (speedAdjustment * outputLatency));
+                float predictedSmoothedDrift = (float) (smoothedDrift - (speedAdjustment * outputLatency));
                 if (currentInputTime < syncCorrectionSuppressedUntil)
                 {
                     targetAdjustment = 0f;
                     smoothedDrift = float.NaN;
                     speedMultiplierState = 0;
+                    recoveryActive = false;
                 }
                 else
                 {
-                    targetAdjustment = Math.Abs(smoothedDrift) <= DEAD_BAND
-                        ? 0f
-                        : Mathf.Clamp(smoothedDrift * P_GAIN, -MAX_ADJUSTMENT, MAX_ADJUSTMENT);
+                    if (recoveryActive)
+                    {
+                        recoveryActive = Math.Abs(predictedDrift) > RECOVERY_EXIT_BAND;
+                    }
+                    else
+                    {
+                        recoveryActive = Math.Abs(predictedDrift) > RECOVERY_ENTER_BAND ||
+                            Math.Abs(smoothedDrift) > RECOVERY_ENTER_BAND;
+                    }
+
+                    if (recoveryActive)
+                    {
+                        targetAdjustment = Mathf.Clamp(
+                            predictedDrift / RECOVERY_TIME,
+                            -MAX_RECOVERY_ADJUSTMENT,
+                            MAX_RECOVERY_ADJUSTMENT
+                        );
+                    }
+                    else
+                    {
+                        targetAdjustment = Math.Abs(predictedSmoothedDrift) <= DEAD_BAND
+                            ? 0f
+                            : Mathf.Clamp(predictedSmoothedDrift * P_GAIN, -MAX_ADJUSTMENT, MAX_ADJUSTMENT);
+                    }
+                }
+
+                if (previousRecoveryActive != recoveryActive)
+                {
+                    YargLogger.LogDebug(
+                        $"Sync recovery {(recoveryActive ? "started" : "stopped")}. " +
+                        $"Delta: {delta * 1000.0:0.000}ms, predicted drift: {predictedDrift * 1000.0f:0.000}ms, " +
+                        $"smoothed drift: {smoothedDrift * 1000.0f:0.000}ms, output latency: {outputLatency * 1000.0:0.000}ms, " +
+                        $"adjustment: {targetAdjustment:0.000000}."
+                    );
                 }
 
                 // Update debug/status variables using hysteresis to prevent boundary oscillation
@@ -574,7 +623,7 @@ namespace YARG.Playback
                     speedAdjustment = targetAdjustment;
                     _mixer.SetSpeed((float) (songSpeed + targetAdjustment), false);
                     nextSyncSpeedChangeTime = currentInputTime +
-                        Math.Max(MIN_SYNC_COMMAND_INTERVAL, _mixer.GetEstimatedOutputLatency());
+                        Math.Max(MIN_SYNC_COMMAND_INTERVAL, outputLatency);
                 }
 
                 // Write everything back under the lock
@@ -585,6 +634,7 @@ namespace YARG.Playback
                     _syncSmoothedDrift = smoothedDrift;
                     _syncSpeedAdjustment = speedAdjustment;
                     _syncSpeedMultiplier = speedMultiplierState;
+                    _syncRecoveryActive = recoveryActive;
                     _syncStartDelta = startDelta;
                     _syncWorstDelta = worstDelta;
                     _syncCorrectionSuppressedUntil = syncCorrectionSuppressedUntil;
@@ -598,6 +648,7 @@ namespace YARG.Playback
             _syncSpeedMultiplier = 0;
             _syncSpeedAdjustment = 0f;
             _syncSmoothedDrift = float.NaN;
+            _syncRecoveryActive = false;
             _justResumed = false;
             _mixer.SetSpeed(RealSongSpeed, true);
             SuppressSyncCorrection();
