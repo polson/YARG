@@ -59,6 +59,8 @@ namespace YARG.Audio.BASS
         private readonly int            _tempoStreamHandle;
         private          double         _positionOffset;
         private          int            _songEndHandle;
+        private          int            _musicPlaybackMixerHandle;
+        private          double         _logicalVolume = 1.0;
         private          bool           _isPlaying;
         private          bool           _isSeeking;
         private          OutputChannel  _outputChannel;
@@ -150,14 +152,75 @@ namespace YARG.Audio.BASS
         }
 
 
+        private bool UsesOwnedMusicPlaybackMixer => !_bassManager.UsesSharedMusicPlaybackMixer;
+
+        private bool EnsureOwnedMusicPlaybackMixer()
+        {
+            if (!UsesOwnedMusicPlaybackMixer)
+            {
+                return true;
+            }
+
+            if (_musicPlaybackMixerHandle != 0)
+            {
+                return true;
+            }
+
+            _musicPlaybackMixerHandle = _bassManager.CreateOwnedMusicPlaybackMixer(_logicalVolume);
+            return _musicPlaybackMixerHandle != 0;
+        }
+
+        private void FreeOwnedMusicPlaybackMixer()
+        {
+            if (_musicPlaybackMixerHandle == 0)
+            {
+                return;
+            }
+
+            _bassManager.FreeOwnedMusicPlaybackMixer(_musicPlaybackMixerHandle);
+            _musicPlaybackMixerHandle = 0;
+        }
+
         private void AddTempoStream(bool paused)
         {
+            if (UsesOwnedMusicPlaybackMixer)
+            {
+                AddTempoStreamToOwnedPlaybackMixer(paused);
+                return;
+            }
+
             var pausedFlag = paused ? BassFlags.MixerChanPause : BassFlags.Default;
             var flags = BassFlags.MixerChanBuffer | pausedFlag;
             if (_bassManager.AddToMusicPlaybackMixer(_tempoStreamHandle, _outputChannel, flags))
             {
                 ReanchorTransport(_positionOffset, delayAudible: !paused);
             }
+        }
+
+        private void AddTempoStreamToOwnedPlaybackMixer(bool paused)
+        {
+            if (!EnsureOwnedMusicPlaybackMixer())
+            {
+                return;
+            }
+
+            if (paused)
+            {
+                _bassManager.PauseOwnedMusicPlaybackMixer(_musicPlaybackMixerHandle);
+            }
+
+            var flags = BassFlags.MixerChanBuffer;
+            if (!_bassManager.AddToMusicPlaybackMixer(_musicPlaybackMixerHandle, _tempoStreamHandle, _outputChannel, flags))
+            {
+                return;
+            }
+
+            if (!paused)
+            {
+                _bassManager.ResumeOwnedMusicPlaybackMixer(_musicPlaybackMixerHandle);
+            }
+
+            ReanchorTransport(_positionOffset, delayAudible: !paused);
         }
 
         private void RemoveTempoStream()
@@ -189,7 +252,14 @@ namespace YARG.Audio.BASS
 
             if (!IsPlaying)
             {
-                if (!SetTempoStreamPaused(false))
+                if (UsesOwnedMusicPlaybackMixer)
+                {
+                    if (!EnsureOwnedMusicPlaybackMixer() || !_bassManager.ResumeOwnedMusicPlaybackMixer(_musicPlaybackMixerHandle))
+                    {
+                        return (int) Bass.LastError;
+                    }
+                }
+                else if (!SetTempoStreamPaused(false))
                 {
                     return (int) Bass.LastError;
                 }
@@ -236,12 +306,32 @@ namespace YARG.Audio.BASS
 
         protected override void FadeIn_Internal(double maxVolume, double duration)
         {
+            _logicalVolume = maxVolume;
+            if (UsesOwnedMusicPlaybackMixer)
+            {
+                if (EnsureOwnedMusicPlaybackMixer())
+                {
+                    _bassManager.SlideOwnedMusicPlaybackMixerVolume(_musicPlaybackMixerHandle, maxVolume, duration);
+                }
+                return;
+            }
+
             float scaled = (float) BassAudioManager.ExponentialVolume(maxVolume);
             Bass.ChannelSlideAttribute(_tempoStreamHandle, ChannelAttribute.Volume, scaled, (int) (duration * SongMetadata.MILLISECOND_FACTOR));
         }
 
         protected override void FadeOut_Internal(double duration)
         {
+            _logicalVolume = 0;
+            if (UsesOwnedMusicPlaybackMixer)
+            {
+                if (EnsureOwnedMusicPlaybackMixer())
+                {
+                    _bassManager.SlideOwnedMusicPlaybackMixerVolume(_musicPlaybackMixerHandle, 0, duration);
+                }
+                return;
+            }
+
             Bass.ChannelSlideAttribute(_tempoStreamHandle, ChannelAttribute.Volume, 0, (int) (duration * SongMetadata.MILLISECOND_FACTOR));
         }
 
@@ -252,8 +342,19 @@ namespace YARG.Audio.BASS
                 return 0;
             }
 
-            // Get current heard position in seconds before we pause
             double pausePosition = GetPosition_Internal();
+
+            if (UsesOwnedMusicPlaybackMixer)
+            {
+                if (!EnsureOwnedMusicPlaybackMixer() || !_bassManager.PauseOwnedMusicPlaybackMixer(_musicPlaybackMixerHandle))
+                {
+                    return (int) Bass.LastError;
+                }
+
+                _isPlaying = false;
+                ReanchorTransport(pausePosition);
+                return 0;
+            }
 
             // Do not pause the shared music playback mixer here. Multiple StemMixers can be active
             // during library-preview crossfades; pausing the playback mixer for the old preview also
@@ -284,7 +385,7 @@ namespace YARG.Audio.BASS
 
         protected override double GetPosition_Internal()
         {
-            if (!_bassManager.TryGetMasterMixerTime(out double masterTime) ||
+            if (!TryGetMusicPlaybackMixerTime(out double masterTime) ||
                 !TryGetAudibleClockPosition(masterTime, out double audiblePosition))
             {
                 return GetTempoStreamPosition_Internal();
@@ -379,6 +480,16 @@ namespace YARG.Audio.BASS
             return true;
         }
 
+        private bool TryGetMusicPlaybackMixerTime(out double masterTime)
+        {
+            if (UsesOwnedMusicPlaybackMixer)
+            {
+                return _bassManager.TryGetPlaybackMixerTime(_musicPlaybackMixerHandle, "music", out masterTime);
+            }
+
+            return _bassManager.TryGetMasterMixerTime(out masterTime);
+        }
+
         private bool TryGetRenderClockPosition(out double position)
         {
             position = 0;
@@ -387,7 +498,7 @@ namespace YARG.Audio.BASS
                 return false;
             }
 
-            if (!_bassManager.TryGetMasterMixerTime(out double masterTime))
+            if (!TryGetMusicPlaybackMixerTime(out double masterTime))
             {
                 return false;
             }
@@ -457,7 +568,7 @@ namespace YARG.Audio.BASS
 
         private void ReanchorTransport(double songPosition, bool delayAudible = false, double unpauseDelay = 0)
         {
-            if (!_bassManager.TryGetMasterMixerTime(out double masterTime))
+            if (!TryGetMusicPlaybackMixerTime(out double masterTime))
             {
                 _renderClockAnchored = false;
                 _audibleClockAnchored = false;
@@ -480,7 +591,7 @@ namespace YARG.Audio.BASS
         private void RollRenderClockAnchorForward()
         {
             if (TryGetRenderClockPosition(out double position) &&
-                _bassManager.TryGetMasterMixerTime(out double masterTime))
+                TryGetMusicPlaybackMixerTime(out double masterTime))
             {
                 _renderClockAnchorMasterTime = masterTime;
                 _renderClockAnchorSongPosition = position;
@@ -538,6 +649,11 @@ namespace YARG.Audio.BASS
 
         protected override double GetVolume_Internal()
         {
+            if (UsesOwnedMusicPlaybackMixer)
+            {
+                return _logicalVolume;
+            }
+
             if (!Bass.ChannelGetAttribute(_tempoStreamHandle, ChannelAttribute.Volume, out float volume))
             {
                 YargLogger.LogFormatError("Failed to get volume: {0}", Bass.LastError);
@@ -588,8 +704,19 @@ namespace YARG.Audio.BASS
 
         protected override void SetVolume_Internal(double volume)
         {
-            volume = BassAudioManager.ExponentialVolume(volume);
-            if (!Bass.ChannelSetAttribute(_tempoStreamHandle, ChannelAttribute.Volume, volume))
+            _logicalVolume = volume;
+            if (UsesOwnedMusicPlaybackMixer)
+            {
+                Bass.ChannelSetAttribute(_tempoStreamHandle, ChannelAttribute.Volume, 1.0);
+                if (_musicPlaybackMixerHandle != 0)
+                {
+                    _bassManager.SetOwnedMusicPlaybackMixerVolume(_musicPlaybackMixerHandle, volume);
+                }
+                return;
+            }
+
+            double scaledVolume = BassAudioManager.ExponentialVolume(volume);
+            if (!Bass.ChannelSetAttribute(_tempoStreamHandle, ChannelAttribute.Volume, scaledVolume))
             {
                 YargLogger.LogFormatError("Failed to set tempo stream volume: {0}", Bass.LastError);
             }
@@ -624,12 +751,13 @@ namespace YARG.Audio.BASS
                 flags |= (int) DataFlags.FFTComplex;
             }
 
-            if (_bassManager.MasterMixerHandle == 0)
+            int playbackMixerHandle = _bassManager.GetNewestMusicPlaybackMixerHandle();
+            if (playbackMixerHandle == 0)
             {
                 return -1;
             }
 
-            int data = Bass.ChannelGetData(_bassManager.MasterMixerHandle, buffer, flags);
+            int data = Bass.ChannelGetData(playbackMixerHandle, buffer, flags);
             if (data < 0)
             {
                 return (int) Bass.LastError;
@@ -639,12 +767,13 @@ namespace YARG.Audio.BASS
 
         protected override int GetSampleData_Internal(float[] buffer)
         {
-            if (_bassManager.MasterMixerHandle == 0)
+            int playbackMixerHandle = _bassManager.GetNewestMusicPlaybackMixerHandle();
+            if (playbackMixerHandle == 0)
             {
                 return -1;
             }
 
-            int data = Bass.ChannelGetData(_bassManager.MasterMixerHandle, buffer, (buffer.Length * 4) | (int) (DataFlags.Float));
+            int data = Bass.ChannelGetData(playbackMixerHandle, buffer, (buffer.Length * 4) | (int) (DataFlags.Float));
             if (data < 0)
             {
                 return (int) Bass.LastError;
@@ -654,12 +783,13 @@ namespace YARG.Audio.BASS
 
         protected override int GetLevel_Internal(float[] level)
         {
-            if (_bassManager.MasterMixerHandle == 0)
+            int playbackMixerHandle = _bassManager.GetNewestMusicPlaybackMixerHandle();
+            if (playbackMixerHandle == 0)
             {
                 return -1;
             }
 
-            bool status = Bass.ChannelGetLevel(_bassManager.MasterMixerHandle, level, 0.2f, LevelRetrievalFlags.Mono | LevelRetrievalFlags.RMS);
+            bool status = Bass.ChannelGetLevel(playbackMixerHandle, level, 0.2f, LevelRetrievalFlags.Mono | LevelRetrievalFlags.RMS);
             if (!status)
             {
                 return (int) Bass.LastError;
@@ -676,7 +806,7 @@ namespace YARG.Audio.BASS
                 return;
             }
 
-            bool haveMasterTime = _bassManager.TryGetMasterMixerTime(out double masterTime);
+            bool haveMasterTime = TryGetMusicPlaybackMixerTime(out double masterTime);
             double audiblePosition = _positionOffset;
             bool haveAudiblePosition = haveMasterTime &&
                 TryGetAudibleClockPosition(masterTime, out audiblePosition);
@@ -803,6 +933,7 @@ namespace YARG.Audio.BASS
             bool wasPlaying = IsPlaying;
             double position = GetPosition_Internal();
             RemoveTempoStream();
+            FreeOwnedMusicPlaybackMixer();
 
             foreach (StemData stemData in _stemDatas)
             {
@@ -937,6 +1068,11 @@ namespace YARG.Audio.BASS
 
         protected override void SetBufferLength_Internal(int length)
         {
+            if (UsesOwnedMusicPlaybackMixer)
+            {
+                return;
+            }
+
             // Playback buffering belongs to the non-decoding music playback mixer. Reinitialize this source's
             // history buffer so large buffer changes are reflected in source-position lookups.
             double position = _audibleClockAnchored || IsPlaying ? GetPosition_Internal() : _positionOffset;
@@ -980,6 +1116,7 @@ namespace YARG.Audio.BASS
         protected override void DisposeUnmanagedResources()
         {
             RemoveTempoStream();
+            FreeOwnedMusicPlaybackMixer();
 
             bool mixerFreedByTempo = false;
             if (_tempoStreamHandle != 0)
