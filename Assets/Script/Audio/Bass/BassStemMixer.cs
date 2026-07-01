@@ -329,6 +329,11 @@ namespace YARG.Audio.BASS
             return Math.Max(0, GetTempoStreamPosition_Internal());
         }
 
+        protected override double GetSyncPosition_Internal()
+        {
+            return GetTempoStreamPosition_Internal() - GetAudibleSyncLatency_Internal();
+        }
+
         private double GetTempoStreamPosition_Internal()
         {
             long playedBytes = _usesSinglePlaybackMixer
@@ -361,9 +366,32 @@ namespace YARG.Audio.BASS
 
         protected override double GetEstimatedOutputLatency_Internal()
         {
-            double bufferLatency = GetConfiguredOutputLatency();
-            double deviceLatency = GlobalAudioHandler.PlaybackLatency / 1000.0;
-            return bufferLatency + deviceLatency;
+            return GetAudibleSyncLatency_Internal();
+        }
+
+        protected override double GetAudibleSyncLatency_Internal()
+        {
+            if (!_usesSinglePlaybackMixer)
+            {
+                return 0;
+            }
+
+            return GetConfiguredOutputLatency() + GetDeviceOutputLatency();
+        }
+
+        protected override double GetCommandLatency_Internal()
+        {
+            return GetConfiguredOutputLatency() + GetDeviceOutputLatency();
+        }
+
+        protected override double GetStartLatency_Internal()
+        {
+            return GetDeviceOutputLatency();
+        }
+
+        private static double GetDeviceOutputLatency()
+        {
+            return Math.Max(0, GlobalAudioHandler.PlaybackLatency) / 1000.0;
         }
 
         private static double GetConfiguredOutputLatency()
@@ -444,6 +472,14 @@ namespace YARG.Audio.BASS
             {
                 AddTempoStream(paused: true);
             }
+
+            YargLogger.LogFormatDebug(
+                "Set BASS stem mixer position. Single mixer: {0}, configured buffer: {1:0.000000}, device latency: {2:0.000000}, " +
+                "audible latency: {3:0.000000}, command latency: {4:0.000000}, requested position: {5:0.000000}, " +
+                "raw position: {6:0.000000}, sync position: {7:0.000000}",
+                _usesSinglePlaybackMixer, GetConfiguredOutputLatency(), GetDeviceOutputLatency(), GetAudibleSyncLatency_Internal(),
+                GetCommandLatency_Internal(), position, GetPosition_Internal(), GetSyncPosition_Internal()
+            );
 
             if (wasPlaying)
             {
