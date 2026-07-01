@@ -104,8 +104,10 @@ namespace YARG.Audio.BASS
         internal event Action<double> MasterVolumeChanged;
 
         internal bool UsesSinglePlaybackMixer => _playbackMixerHandle != 0 && UseSinglePlaybackMixerSetting;
+        private string PlaybackMixerRole => UseSinglePlaybackMixerSetting ? "single" : "SFX";
         internal double MasterVolume => _masterVolume;
         private static bool UseSinglePlaybackMixerSetting => SettingsManager.Settings?.UseSingleBassPlaybackMixer.Value ?? false;
+        private static int PlaybackBufferLengthSetting => SettingsManager.Settings?.PlaybackBufferLength.Value ?? Bass.PlaybackBufferLength;
 
         public BassAudioManager()
         {
@@ -272,7 +274,8 @@ namespace YARG.Audio.BASS
                 return null;
             }
             return new BassStemMixer(name, this, speed, mixerVolume, handle, clampStemVolume: clampStemVolume,
-                normalize: normalize, outputChannel: CreateOutputChannel(SettingsManager.Settings?.OutputChannelDefault.Value ?? 0));
+                normalize: normalize, outputChannel: CreateOutputChannel(SettingsManager.Settings?.OutputChannelDefault.Value ?? 0),
+                isDecodeStream: UsesSinglePlaybackMixer);
         }
 
         protected override MicDevice? GetInputDevice(string name)
@@ -609,58 +612,53 @@ namespace YARG.Audio.BASS
             }
 #endif
             _masterVolume = volume;
-            SetPlaybackMixerVolume(_playbackMixerHandle, volume, UsesSinglePlaybackMixer ? "single" : "SFX");
+            SetPlaybackMixerVolume(_playbackMixerHandle, volume);
             MasterVolumeChanged?.Invoke(volume);
         }
 
-        private static void SetPlaybackMixerVolume(int mixerHandle, double volume, string role)
+        private void SetPlaybackMixerVolume(int mixerHandle, double volume)
         {
             if (mixerHandle != 0 && !Bass.ChannelSetAttribute(mixerHandle, ChannelAttribute.Volume, volume))
             {
-                YargLogger.LogFormatError("Failed to set {0} playback mixer volume: {1}", role, Bass.LastError);
+                YargLogger.LogFormatError("Failed to set {0} playback mixer volume: {1}", PlaybackMixerRole, Bass.LastError);
             }
         }
 
         protected override void SetBufferLength_Internal(int length)
         {
-            SetPlaybackMixerBuffers(length);
-        }
-
-        private void SetPlaybackMixerBuffers(int length)
-        {
             int bufferLength = UsesSinglePlaybackMixer ? length : 0;
-            string role = UsesSinglePlaybackMixer ? "single" : "SFX";
-            SetPlaybackMixerBuffer(_playbackMixerHandle, bufferLength, role);
+            SetPlaybackMixerBuffer(_playbackMixerHandle, bufferLength);
         }
 
-        private void SetPlaybackMixerBuffer(int mixerHandle, int length, string role)
+        private void SetPlaybackMixerBuffer(int mixerHandle, int length)
         {
-            // 0 disables buffering. Positive values must respect the device minimum when known.
-            if (length > 0 && MinimumBufferLength > 0 && length < MinimumBufferLength)
+            if (mixerHandle == 0)
             {
-                length = MinimumBufferLength;
+                return;
+            }
+
+            // 0 disables buffering. Positive values must respect the device minimum when known.
+            if (length > 0)
+            {
+                length = Math.Max(length, MinimumBufferLength);
             }
 
             float lengthInSeconds = length / 1000f;
-
-            if (mixerHandle != 0)
+            var state = Bass.ChannelIsActive(mixerHandle);
+            bool wasPlaying = state is PlaybackState.Playing or PlaybackState.Stalled;
+            if (wasPlaying)
             {
-                var state = Bass.ChannelIsActive(mixerHandle);
-                bool wasPlaying = state == PlaybackState.Playing || state == PlaybackState.Stalled;
-                if (wasPlaying)
-                {
-                    Bass.ChannelPause(mixerHandle);
-                }
+                Bass.ChannelPause(mixerHandle);
+            }
 
-                if (!Bass.ChannelSetAttribute(mixerHandle, ChannelAttribute.Buffer, lengthInSeconds))
-                {
-                    YargLogger.LogFormatError("Failed to set {0} playback mixer buffer: {1}!", role, Bass.LastError);
-                }
+            if (!Bass.ChannelSetAttribute(mixerHandle, ChannelAttribute.Buffer, lengthInSeconds))
+            {
+                YargLogger.LogFormatError("Failed to set {0} playback mixer buffer: {1}!", PlaybackMixerRole, Bass.LastError);
+            }
 
-                if (wasPlaying)
-                {
-                    Bass.ChannelPlay(mixerHandle);
-                }
+            if (wasPlaying)
+            {
+                Bass.ChannelPlay(mixerHandle);
             }
         }
 
@@ -709,11 +707,11 @@ namespace YARG.Audio.BASS
 
         private int CreatePlaybackMixer()
         {
-            bool useSingle = UseSinglePlaybackMixerSetting;
-            string role = useSingle ? "single" : "SFX";
-            int bufferLength = useSingle ? (SettingsManager.Settings?.PlaybackBufferLength.Value ?? Bass.PlaybackBufferLength) : 0;
+            int bufferLength = UseSinglePlaybackMixerSetting ? PlaybackBufferLengthSetting : 0;
 
             var info = Bass.Info;
+            // Create the playback mixer at the device's native sample rate and channel count
+            // to avoid redundant resampling and channel mixing.
             int frequency = info.SampleRate > 0 ? info.SampleRate : 44100;
             int channels = info.SpeakerCount > 0 ? info.SpeakerCount : 2;
 
@@ -735,25 +733,25 @@ namespace YARG.Audio.BASS
 
             if (playbackMixer == 0)
             {
-                YargLogger.LogFormatError("Failed to create {0} playback mixer: {1}!", role, Bass.LastError);
+                YargLogger.LogFormatError("Failed to create {0} playback mixer: {1}!", PlaybackMixerRole, Bass.LastError);
                 return 0;
             }
 
             if (!Bass.ChannelSetAttribute(playbackMixer, ChannelAttribute.Volume, _masterVolume))
             {
-                YargLogger.LogFormatError("Failed to set {0} playback mixer volume: {1}", role, Bass.LastError);
+                YargLogger.LogFormatError("Failed to set {0} playback mixer volume: {1}", PlaybackMixerRole, Bass.LastError);
             }
 
-            SetPlaybackMixerBuffer(playbackMixer, bufferLength, role);
+            SetPlaybackMixerBuffer(playbackMixer, bufferLength);
 
             if (!Bass.ChannelPlay(playbackMixer))
             {
-                YargLogger.LogFormatError("Failed to play {0} playback mixer: {1}!", role, Bass.LastError);
+                YargLogger.LogFormatError("Failed to play {0} playback mixer: {1}!", PlaybackMixerRole, Bass.LastError);
                 Bass.StreamFree(playbackMixer);
                 return 0;
             }
 
-            YargLogger.LogFormatInfo("Created BASS {0} playback mixer: handle {1}, {2}Hz, {3} channels", role,
+            YargLogger.LogFormatInfo("Created BASS {0} playback mixer: handle {1}, {2}Hz, {3} channels", PlaybackMixerRole,
                 playbackMixer, frequency, channels);
             return playbackMixer;
         }
@@ -839,6 +837,8 @@ namespace YARG.Audio.BASS
         {
             // The float flag allows >0dB signals.
             // Note that the compressor attempts to normalize signals >-2dB, but some mixes will pierce through.
+            // We hardcode 44100 Hz and 2 channels (stereo) here because most song stems on disk are natively
+            // 44100 Hz. Mixing them at their native rate prevents costly per-stem resampling.
             mixerHandle = BassMix.CreateMixerStream(44100, 2, BassFlags.Float | BassFlags.Decode);
             if (mixerHandle == 0)
             {

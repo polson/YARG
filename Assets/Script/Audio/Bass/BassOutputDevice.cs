@@ -15,6 +15,8 @@ namespace YARG.Audio.BASS
         {
             try
             {
+                // Request 44100 Hz as a default/fallback. On modern systems in shared mode,
+                // the OS will force BASS to initialize at the native system rate instead.
                 if (!Bass.Init(deviceId, 44100, DeviceInitFlags.Default | DeviceInitFlags.Latency, IntPtr.Zero))
                 {
                     if (Bass.LastError != Errors.Already)
