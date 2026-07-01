@@ -99,13 +99,9 @@ namespace YARG.Audio.BASS
         private readonly int _opusHandle = 0;
         private BassOutputDevice _currentDevice;
         private int _playbackMixerHandle;
-        private double _masterVolume = 1.0;
-
-        internal event Action<double> MasterVolumeChanged;
 
         internal bool UsesSinglePlaybackMixer => _playbackMixerHandle != 0 && UseSinglePlaybackMixerSetting;
         private string PlaybackMixerRole => UseSinglePlaybackMixerSetting ? "single" : "SFX";
-        internal double MasterVolume => _masterVolume;
         private static bool UseSinglePlaybackMixerSetting => SettingsManager.Settings?.UseSingleBassPlaybackMixer.Value ?? false;
         private static int PlaybackBufferLengthSetting => SettingsManager.Settings?.PlaybackBufferLength.Value ?? Bass.PlaybackBufferLength;
 
@@ -611,17 +607,9 @@ namespace YARG.Audio.BASS
                 volume = 0;
             }
 #endif
-            _masterVolume = volume;
-            SetPlaybackMixerVolume(_playbackMixerHandle, volume);
-            MasterVolumeChanged?.Invoke(volume);
-        }
-
-        private void SetPlaybackMixerVolume(int mixerHandle, double volume)
-        {
-            if (mixerHandle != 0 && !Bass.ChannelSetAttribute(mixerHandle, ChannelAttribute.Volume, volume))
-            {
-                YargLogger.LogFormatError("Failed to set {0} playback mixer volume: {1}", PlaybackMixerRole, Bass.LastError);
-            }
+            int bassVolume = (int) (10_000 * volume);
+            Bass.GlobalStreamVolume = bassVolume;
+            Bass.GlobalSampleVolume = bassVolume;
         }
 
         protected override void SetBufferLength_Internal(int length)
@@ -737,7 +725,7 @@ namespace YARG.Audio.BASS
                 return 0;
             }
 
-            if (!Bass.ChannelSetAttribute(playbackMixer, ChannelAttribute.Volume, _masterVolume))
+            if (!Bass.ChannelSetAttribute(playbackMixer, ChannelAttribute.Volume, 1.0))
             {
                 YargLogger.LogFormatError("Failed to set {0} playback mixer volume: {1}", PlaybackMixerRole, Bass.LastError);
             }

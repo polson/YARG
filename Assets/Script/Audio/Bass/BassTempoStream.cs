@@ -64,6 +64,17 @@ namespace YARG.Audio.BASS
             }
         }
 
+        public double GetVolume()
+        {
+            if (!Bass.ChannelGetAttribute(Handle, ChannelAttribute.Volume, out float scaledVolume))
+            {
+                YargLogger.LogFormatError("Failed to get tempo stream volume: {0}", Bass.LastError);
+                return 0;
+            }
+
+            return BassAudioManager.LogarithmicVolume(scaledVolume);
+        }
+
         public virtual void Dispose()
         {
             if (Handle != 0)
@@ -254,7 +265,6 @@ namespace YARG.Audio.BASS
 
     public sealed class DirectBassTempoStream : BassTempoStream
     {
-        private double _logicalVolume = 1.0;
         private int _positionFallbackCount;
 
         public override bool IsDecodeStream => false;
@@ -264,39 +274,25 @@ namespace YARG.Audio.BASS
         public DirectBassTempoStream(BassAudioManager bassManager, int mixerHandle)
             : base(bassManager, mixerHandle, BassFlags.Default)
         {
-            BassManager.MasterVolumeChanged += OnMasterVolumeChanged;
         }
 
         public override void SetVolume(double logicalVolume)
         {
-            _logicalVolume = logicalVolume;
-            UpdateVolume();
-        }
-
-        private void UpdateVolume()
-        {
-            double scaledVolume = BassAudioManager.ExponentialVolume(_logicalVolume) * BassManager.MasterVolume;
+            double scaledVolume = BassAudioManager.ExponentialVolume(logicalVolume);
             if (!Bass.ChannelSetAttribute(Handle, ChannelAttribute.Volume, scaledVolume))
             {
                 YargLogger.LogFormatError("Failed to set tempo stream volume: {0}", Bass.LastError);
             }
         }
 
-        private void OnMasterVolumeChanged(double volume)
-        {
-            UpdateVolume();
-        }
-
         public override void FadeIn(double maxVolume, double duration)
         {
-            _logicalVolume = maxVolume;
-            double scaledVolume = BassAudioManager.ExponentialVolume(maxVolume) * BassManager.MasterVolume;
+            double scaledVolume = BassAudioManager.ExponentialVolume(maxVolume);
             Bass.ChannelSlideAttribute(Handle, ChannelAttribute.Volume, (float) scaledVolume, (int) (duration * SongMetadata.MILLISECOND_FACTOR));
         }
 
         public override void FadeOut(double duration)
         {
-            _logicalVolume = 0;
             Bass.ChannelSlideAttribute(Handle, ChannelAttribute.Volume, 0f, (int) (duration * SongMetadata.MILLISECOND_FACTOR));
         }
 
@@ -376,12 +372,6 @@ namespace YARG.Audio.BASS
         public override double GetAudibleSyncLatency()
         {
             return 0;
-        }
-
-        public override void Dispose()
-        {
-            BassManager.MasterVolumeChanged -= OnMasterVolumeChanged;
-            base.Dispose();
         }
     }
 #nullable disable

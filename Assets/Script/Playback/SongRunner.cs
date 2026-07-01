@@ -550,7 +550,6 @@ namespace YARG.Playback
                         );
                     }
 
-                    _mixer.UnpauseDelay = delay;
                     _mixer.Play();
                     rawAudioTime = _mixer.GetPosition();
                     syncAudioTime = _mixer.GetSyncPosition();

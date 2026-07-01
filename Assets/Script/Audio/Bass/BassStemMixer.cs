@@ -47,7 +47,6 @@ namespace YARG.Audio.BASS
         private          double         _positionOffset;
         private          bool           _didSetPosition;
         private          int            _songEndHandle;
-        private          double         _logicalVolume = 1.0;
         private          OutputChannel  _outputChannel;
         private          float          _speed = 1.0f;
         private          int            _positionFallbackCount;
@@ -155,8 +154,6 @@ namespace YARG.Audio.BASS
                 _didSetPosition = false;
             }
 
-            UnpauseDelay = 0;
-
             if (IsWhammyEnabled)
             {
                 _whammySyncTimer.Start(WHAMMY_SYNC_INTERVAL_SECONDS, SyncWhammyDrift);
@@ -188,13 +185,11 @@ namespace YARG.Audio.BASS
 
         protected override void FadeIn_Internal(double maxVolume, double duration)
         {
-            _logicalVolume = maxVolume;
             _tempoStream.FadeIn(maxVolume, duration);
         }
 
         protected override void FadeOut_Internal(double duration)
         {
-            _logicalVolume = 0;
             _tempoStream.FadeOut(duration);
         }
 
@@ -272,7 +267,7 @@ namespace YARG.Audio.BASS
 
         protected override double GetVolume_Internal()
         {
-            return _logicalVolume;
+            return _tempoStream.GetVolume();
         }
 
         protected override void SetPosition_Internal(double position)
@@ -320,7 +315,6 @@ namespace YARG.Audio.BASS
 
         protected override void SetVolume_Internal(double volume)
         {
-            _logicalVolume = volume;
             _tempoStream.SetVolume(volume);
         }
 
