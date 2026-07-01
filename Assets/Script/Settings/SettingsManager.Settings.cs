@@ -872,7 +872,7 @@ namespace YARG.Settings
                     return;
                 }
 
-                GlobalAudioHandler.ReinitializeOutputDevice(Settings.OutputDevice.Value);
+                GlobalAudioHandler.SetOutputDevice(Settings.OutputDevice.Value, forceReinitialize: true);
             }
 
             private static void OutputChannelDefaultCallback(int channelId)
