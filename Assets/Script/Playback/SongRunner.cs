@@ -801,12 +801,12 @@ namespace YARG.Playback
 
         private static double GetResumeStartLatency(double audibleSyncLatency, double startLatency)
         {
-            return audibleSyncLatency > 0 ? audibleSyncLatency : startLatency;
+            return Math.Max(audibleSyncLatency, startLatency);
         }
 
         private static double GetResumeSeekLatency(double audibleSyncLatency, double startLatency)
         {
-            return audibleSyncLatency > 0 ? audibleSyncLatency : startLatency;
+            return Math.Max(audibleSyncLatency, startLatency);
         }
 
         private double GetLatencyAlignedSeekPosition(double syncVisualTime, double syncLatency, double songSpeed)

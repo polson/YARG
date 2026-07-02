@@ -144,7 +144,7 @@ namespace Editor
                 double resumeStartLatency = (double) getResumeStartLatencyMethod.Invoke(null, new object[] { audibleSyncLatency, startLatency });
                 double resumeSeekLatency = (double) getResumeSeekLatencyMethod.Invoke(null, new object[] { audibleSyncLatency, startLatency });
 
-                Debug.Log($"Calculated parameters: Device Latency: {deviceLatency*1000:0.0}ms, Configured Buffer Latency: {configuredLatency*1000:0.0}ms");
+                Debug.Log($"Calculated parameters: Device Latency: {deviceLatency*1000:0.0}ms, Configured Buffer Latency: {configuredLatency*1000:0.0}ms, Command Update Latency: {GetExpectedCommandUpdateLatency()*1000:0.0}ms");
                 Debug.Log($"Mixer reported latencies: AudibleSync: {audibleSyncLatency*1000:0.0}ms, Command: {commandLatency*1000:0.0}ms, Start: {startLatency*1000:0.0}ms");
                 Debug.Log($"SongRunner resume latencies: Start: {resumeStartLatency*1000:0.0}ms, Seek: {resumeSeekLatency*1000:0.0}ms");
 
@@ -167,15 +167,15 @@ namespace Editor
                         throw new Exception($"Single Mixer: CommandLatency did not match! Actual: {commandLatency * 1000:0.0}ms ({commandLatency}s), Expected: {expectedCommand * 1000:0.0}ms ({expectedCommand}s)");
                     }
 
-                    // 3. StartLatency must be: device latency
+                    // 3. StartLatency must be: device latency + command update midpoint
                     double expectedStart = GetExpectedStartLatency(expectedSingleMixer, deviceLatency);
                     if (Math.Abs(startLatency - expectedStart) > EPSILON)
                     {
                         throw new Exception($"Single Mixer: StartLatency did not match! Actual: {startLatency * 1000:0.0}ms ({startLatency}s), Expected: {expectedStart * 1000:0.0}ms ({expectedStart}s)");
                     }
 
-                    // 4. Resume latency (start and seek) must be: configured buffer + device latency
-                    double expectedResume = configuredLatency + deviceLatency;
+                    // 4. Resume latency (start and seek) must be the higher of audible sync and start latency
+                    double expectedResume = Math.Max(expectedAudible, expectedStart);
                     if (Math.Abs(resumeStartLatency - expectedResume) > EPSILON)
                     {
                         throw new Exception($"Single Mixer: resumeStartLatency did not match! Actual: {resumeStartLatency * 1000:0.0}ms ({resumeStartLatency}s), Expected: {expectedResume * 1000:0.0}ms ({expectedResume}s)");
@@ -201,7 +201,7 @@ namespace Editor
                         throw new Exception($"Non-Single Mixer: CommandLatency did not match! Actual: {commandLatency * 1000:0.0}ms ({commandLatency}s), Expected: {expectedCommand * 1000:0.0}ms ({expectedCommand}s)");
                     }
 
-                    // 3. StartLatency must be: device latency (+ BASS device buffer on Windows direct channels)
+                    // 3. StartLatency must be: device latency + command update midpoint + clamped BASS device buffer
                     double expectedStart = GetExpectedStartLatency(expectedSingleMixer, deviceLatency);
                     if (Math.Abs(startLatency - expectedStart) > EPSILON)
                     {
@@ -227,14 +227,18 @@ namespace Editor
 
         private static double GetExpectedStartLatency(bool expectedSingleMixer, double deviceLatency)
         {
-#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            double latency = deviceLatency + GetExpectedCommandUpdateLatency();
             if (!expectedSingleMixer)
             {
-                return deviceLatency + Math.Max(0, Bass.DeviceBufferLength) / 1000.0;
+                latency += Math.Max(0, Bass.DeviceBufferLength) / 1000.0;
             }
-#endif
 
-            return deviceLatency;
+            return latency;
+        }
+
+        private static double GetExpectedCommandUpdateLatency()
+        {
+            return Math.Max(0, Bass.UpdatePeriod) / 2000.0;
         }
 
         private static void SetSettingValue<T>(AbstractSetting<T> setting, T value)
@@ -420,13 +424,14 @@ namespace Editor
                     int infoLatency = info.Latency;
                     int deviceBufferLength = Bass.DeviceBufferLength;
                     int devPeriod = Bass.GetConfig(Configuration.DevicePeriod);
+                    int updatePeriod = Bass.UpdatePeriod;
                     int minBufferLength = info.MinBufferLength;
                     double deviceLatency = GlobalAudioHandler.PlaybackLatency;
                     double audibleSync = mixer.GetAudibleSyncLatency() * 1000.0;
                     double start = mixer.GetStartLatency() * 1000.0;
-                    double expectedSongRunnerSeek = audibleSync > 0
-                        ? audibleSync
-                        : GetExpectedStartLatency(expectedSingleMixer, deviceLatency / 1000.0) * 1000.0;
+                    double expectedSongRunnerSeek = Math.Max(
+                        audibleSync,
+                        GetExpectedStartLatency(expectedSingleMixer, deviceLatency / 1000.0) * 1000.0);
 
                     Debug.Log($"<b>[Real Seek Latency] Single Mixer: {expectedSingleMixer}</b>\n" +
                               $"  - Measured Total Elapsed (to 200ms mark): {totalElapsedMs}ms\n" +
@@ -436,8 +441,8 @@ namespace Editor
                               $"  - Reported Device Latency: {deviceLatency:0.0}ms\n" +
                               $"  - Reported Start Latency: {start:0.0}ms\n" +
                               $"  - BASS Latency Components: info.Latency={infoLatency}ms, " +
-                              $"DeviceBufferLength={deviceBufferLength}ms, devPeriod={devPeriod}ms, " +
-                              $"MinBuf={minBufferLength}ms");
+                              $"DeviceBufferLength={deviceBufferLength}ms, updatePeriod={updatePeriod}ms, " +
+                              $"devPeriod={devPeriod}ms, MinBuf={minBufferLength}ms");
                 }
                 else
                 {
