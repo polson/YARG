@@ -240,7 +240,19 @@ namespace YARG.Audio.BASS
 
         protected override double GetStartLatency_Internal()
         {
-            return DecodeBassTempoStream.GetDeviceOutputLatency();
+            double latency = DecodeBassTempoStream.GetDeviceOutputLatency();
+
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            // Direct playback channels on Windows need the BASS device buffer filled after start/seek.
+            // ChannelGetPosition already accounts for this during steady-state playback, but audible
+            // resume/seek alignment still needs the physical device-buffer delay.
+            if (!_tempoStream.IsDecodeStream)
+            {
+                latency += Math.Max(0, Bass.DeviceBufferLength) / 1000.0;
+            }
+#endif
+
+            return latency;
         }
 
         protected override double GetDecodingPosition_Internal()

@@ -36,7 +36,6 @@ namespace Editor
 
             // 2. Backup and set up temporary settings
             var originalSettings = SettingsManager.Settings;
-            string originalDevice = originalSettings?.OutputDevice?.Value ?? string.Empty;
 
             var settingsProp = typeof(SettingsManager).GetProperty("Settings", BindingFlags.Static | BindingFlags.Public);
             var settingsSetter = settingsProp?.GetSetMethod(nonPublic: true);
@@ -68,18 +67,12 @@ namespace Editor
                 // --- TEST 1: Single Playback Mixer Mode ---
                 Debug.Log("Testing Single Playback Mixer Mode...");
                 SetSettingValue(SettingsManager.Settings.UseSingleBassPlaybackMixer, true);
-                
-                // Force reinitialize device to apply setting changes
-                GlobalAudioHandler.SetOutputDevice(originalDevice, forceReinitialize: true);
 
                 VerifyMixerDelays(audioManager, true, 150);
 
                 // --- TEST 2: Non-Single Playback Mixer Mode ---
                 Debug.Log("Testing Non-Single Playback Mixer Mode...");
                 SetSettingValue(SettingsManager.Settings.UseSingleBassPlaybackMixer, false);
-
-                // Force reinitialize device to apply setting changes
-                GlobalAudioHandler.SetOutputDevice(originalDevice, forceReinitialize: true);
 
                 VerifyMixerDelays(audioManager, false, 150);
 
@@ -94,13 +87,8 @@ namespace Editor
             finally
             {
                 // Restore original settings
-                Debug.Log("Restoring original settings and reinitializing...");
+                Debug.Log("Restoring original settings...");
                 settingsSetter.Invoke(null, new object[] { originalSettings });
-
-                if (originalSettings != null)
-                {
-                    GlobalAudioHandler.SetOutputDevice(originalDevice, forceReinitialize: true);
-                }
                 Debug.Log("Restore complete.");
             }
         }
@@ -180,9 +168,10 @@ namespace Editor
                     }
 
                     // 3. StartLatency must be: device latency
-                    if (Math.Abs(startLatency - deviceLatency) > EPSILON)
+                    double expectedStart = GetExpectedStartLatency(expectedSingleMixer, deviceLatency);
+                    if (Math.Abs(startLatency - expectedStart) > EPSILON)
                     {
-                        throw new Exception($"Single Mixer: StartLatency did not match! Actual: {startLatency * 1000:0.0}ms ({startLatency}s), Expected: {deviceLatency * 1000:0.0}ms ({deviceLatency}s)");
+                        throw new Exception($"Single Mixer: StartLatency did not match! Actual: {startLatency * 1000:0.0}ms ({startLatency}s), Expected: {expectedStart * 1000:0.0}ms ({expectedStart}s)");
                     }
 
                     // 4. Resume latency (start and seek) must be: configured buffer + device latency
@@ -212,20 +201,21 @@ namespace Editor
                         throw new Exception($"Non-Single Mixer: CommandLatency did not match! Actual: {commandLatency * 1000:0.0}ms ({commandLatency}s), Expected: {expectedCommand * 1000:0.0}ms ({expectedCommand}s)");
                     }
 
-                    // 3. StartLatency must be: device latency
-                    if (Math.Abs(startLatency - deviceLatency) > EPSILON)
+                    // 3. StartLatency must be: device latency (+ BASS device buffer on Windows direct channels)
+                    double expectedStart = GetExpectedStartLatency(expectedSingleMixer, deviceLatency);
+                    if (Math.Abs(startLatency - expectedStart) > EPSILON)
                     {
-                        throw new Exception($"Non-Single Mixer: StartLatency did not match! Actual: {startLatency * 1000:0.0}ms ({startLatency}s), Expected: {deviceLatency * 1000:0.0}ms ({deviceLatency}s)");
+                        throw new Exception($"Non-Single Mixer: StartLatency did not match! Actual: {startLatency * 1000:0.0}ms ({startLatency}s), Expected: {expectedStart * 1000:0.0}ms ({expectedStart}s)");
                     }
 
-                    // 4. Resume latency (start and seek) must be: only device latency (unaffected by buffer size)
-                    if (Math.Abs(resumeStartLatency - deviceLatency) > EPSILON)
+                    // 4. Resume latency (start and seek) falls back to StartLatency when AudibleSyncLatency is 0
+                    if (Math.Abs(resumeStartLatency - expectedStart) > EPSILON)
                     {
-                        throw new Exception($"Non-Single Mixer: resumeStartLatency did not match! Actual: {resumeStartLatency * 1000:0.0}ms ({resumeStartLatency}s), Expected: {deviceLatency * 1000:0.0}ms ({deviceLatency}s)");
+                        throw new Exception($"Non-Single Mixer: resumeStartLatency did not match! Actual: {resumeStartLatency * 1000:0.0}ms ({resumeStartLatency}s), Expected: {expectedStart * 1000:0.0}ms ({expectedStart}s)");
                     }
-                    if (Math.Abs(resumeSeekLatency - deviceLatency) > EPSILON)
+                    if (Math.Abs(resumeSeekLatency - expectedStart) > EPSILON)
                     {
-                        throw new Exception($"Non-Single Mixer: resumeSeekLatency did not match! Actual: {resumeSeekLatency * 1000:0.0}ms ({resumeSeekLatency}s), Expected: {deviceLatency * 1000:0.0}ms ({deviceLatency}s)");
+                        throw new Exception($"Non-Single Mixer: resumeSeekLatency did not match! Actual: {resumeSeekLatency * 1000:0.0}ms ({resumeSeekLatency}s), Expected: {expectedStart * 1000:0.0}ms ({expectedStart}s)");
                     }
                 }
             }
@@ -233,6 +223,18 @@ namespace Editor
             {
                 mixer.Dispose();
             }
+        }
+
+        private static double GetExpectedStartLatency(bool expectedSingleMixer, double deviceLatency)
+        {
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            if (!expectedSingleMixer)
+            {
+                return deviceLatency + Math.Max(0, Bass.DeviceBufferLength) / 1000.0;
+            }
+#endif
+
+            return deviceLatency;
         }
 
         private static void SetSettingValue<T>(AbstractSetting<T> setting, T value)
@@ -265,7 +267,6 @@ namespace Editor
 
             // 2. Backup and set up temporary settings
             var originalSettings = SettingsManager.Settings;
-            string originalDevice = originalSettings?.OutputDevice?.Value ?? string.Empty;
 
             var settingsProp = typeof(SettingsManager).GetProperty("Settings", BindingFlags.Static | BindingFlags.Public);
             var settingsSetter = settingsProp?.GetSetMethod(nonPublic: true);
@@ -293,17 +294,16 @@ namespace Editor
                 // --- TEST 1: Single Playback Mixer Mode ---
                 Debug.Log("Testing Single Playback Mixer Mode...");
                 SetSettingValue(SettingsManager.Settings.UseSingleBassPlaybackMixer, true);
-                GlobalAudioHandler.SetOutputDevice(originalDevice, forceReinitialize: true);
+                GlobalAudioHandler.SetBufferLength(150);
                 await MeasureMixerSeekLatency(audioManager, true);
 
                 // --- TEST 2: Non-Single Playback Mixer Mode ---
                 Debug.Log("Testing Non-Single Playback Mixer Mode...");
                 SetSettingValue(SettingsManager.Settings.UseSingleBassPlaybackMixer, false);
-                GlobalAudioHandler.SetOutputDevice(originalDevice, forceReinitialize: true);
+                GlobalAudioHandler.SetBufferLength(150);
                 await MeasureMixerSeekLatency(audioManager, false);
 
                 Debug.Log("Real Seek Latency Measurement complete!");
-                EditorUtility.DisplayDialog("Measurement Complete", "Check console for results.", "OK");
             }
             catch (Exception ex)
             {
@@ -312,13 +312,13 @@ namespace Editor
             }
             finally
             {
-                // Restore original settings
-                Debug.Log("Restoring original settings and reinitializing...");
+                // Restore original settings and buffer
+                Debug.Log("Restoring original settings and buffer...");
                 settingsSetter.Invoke(null, new object[] { originalSettings });
 
                 if (originalSettings != null)
                 {
-                    GlobalAudioHandler.SetOutputDevice(originalDevice, forceReinitialize: true);
+                    GlobalAudioHandler.SetBufferLength(originalSettings.PlaybackBufferLength.Value);
                 }
                 Debug.Log("Restore complete.");
             }
@@ -420,18 +420,24 @@ namespace Editor
                     int infoLatency = info.Latency;
                     int deviceBufferLength = Bass.DeviceBufferLength;
                     int devPeriod = Bass.GetConfig(Configuration.DevicePeriod);
+                    int minBufferLength = info.MinBufferLength;
                     double deviceLatency = GlobalAudioHandler.PlaybackLatency;
                     double audibleSync = mixer.GetAudibleSyncLatency() * 1000.0;
                     double start = mixer.GetStartLatency() * 1000.0;
+                    double expectedSongRunnerSeek = audibleSync > 0
+                        ? audibleSync
+                        : GetExpectedStartLatency(expectedSingleMixer, deviceLatency / 1000.0) * 1000.0;
 
                     Debug.Log($"<b>[Real Seek Latency] Single Mixer: {expectedSingleMixer}</b>\n" +
                               $"  - Measured Total Elapsed (to 200ms mark): {totalElapsedMs}ms\n" +
                               $"  - Calculated Actual Seek Latency: <b>{actualSeekLatencyMs}ms</b>\n" +
+                              $"  - Expected SongRunner Seek Latency: {expectedSongRunnerSeek:0.0}ms\n" +
                               $"  - Reported AudibleSync Latency: {audibleSync:0.0}ms\n" +
                               $"  - Reported Device Latency: {deviceLatency:0.0}ms\n" +
                               $"  - Reported Start Latency: {start:0.0}ms\n" +
                               $"  - BASS Latency Components: info.Latency={infoLatency}ms, " +
-                              $"DeviceBufferLength={deviceBufferLength}ms, devPeriod={devPeriod}ms");
+                              $"DeviceBufferLength={deviceBufferLength}ms, devPeriod={devPeriod}ms, " +
+                              $"MinBuf={minBufferLength}ms");
                 }
                 else
                 {
