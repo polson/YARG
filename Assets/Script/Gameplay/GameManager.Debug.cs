@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Cysharp.Text;
@@ -561,7 +561,7 @@ namespace YARG.Gameplay
                 {
                     using var text = ZString.CreateStringBuilder(true);
 
-                    text.AppendFormat("Audio/visual difference: {0:0.000000}\n", _songRunner.SyncDelta);
+                    text.AppendFormat("Audio/Input Sync: {0:0.0}ms ({1:0.000000}s)\n", _songRunner.SyncDelta * 1000.0, _songRunner.SyncDelta);
                     text.AppendFormat("Resync start delta: {0:0.000000}\n", _songRunner.SyncStartDelta);
                     text.AppendFormat("Resync worst delta: {0:0.000000}\n", _songRunner.SyncWorstDelta);
                     text.AppendFormat("Speed adjustment: {0:0.00}\n", _songRunner.SyncSpeedAdjustment);
