@@ -245,7 +245,7 @@ namespace YARG.Gameplay
             if (HasUpdatedAbPositions)
             {
                 SetPracticeSection(_tickStart, _tickEnd, TimeStart, TimeEnd);
-                GameManager.Resume(compensatePracticeOutputLatency: true);
+                GameManager.Resume();
                 HasUpdatedAbPositions = false;
                 return;
             }
@@ -257,7 +257,7 @@ namespace YARG.Gameplay
             GameManager.VocalTrack.ResetPracticeSection();
 
             GameManager.SetSongTime(TimeStart, SettingsManager.Settings.PracticeRestartDelay.Value);
-            GameManager.Resume(compensatePracticeOutputLatency: true);
+            GameManager.Resume();
         }
 
         private Section[] GetSectionsInPractice(uint start, uint end)
