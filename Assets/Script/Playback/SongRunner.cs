@@ -428,6 +428,11 @@ namespace YARG.Playback
             return SanitizeLatency(_mixer.GetStartLatency());
         }
 
+        private double GetPausedResumeLatency()
+        {
+            return SanitizeLatency(_mixer.GetPausedResumeLatency());
+        }
+
         private void ApplyAudibleSyncSpeedCommands(double currentTime)
         {
             while (_pendingSyncSpeedCommands.Count > 0 &&
@@ -498,7 +503,7 @@ namespace YARG.Playback
                     paused = Paused;
                 }
 
-                double currentInputTime = InputManager.CurrentInputTime;
+                double currentInputTime = GetEstimatedCurrentInputTime();
                 double audioOffset = songOffset - (audioCalibration * songSpeed);
                 double currentSongTime = (currentInputTime - inputTimeOffset) * songSpeed;
                 double rawAudioTime = _mixer.GetPosition();
@@ -507,8 +512,9 @@ namespace YARG.Playback
                 double audibleSyncLatency = GetAudibleSyncLatency();
                 double commandLatency = GetCommandLatency();
                 double startLatency = GetStartLatency();
-                double resumeStartLatency = GetResumeStartLatency(audibleSyncLatency, startLatency);
-                double resumeSeekLatency = GetResumeSeekLatency(audibleSyncLatency, startLatency);
+                double pausedResumeLatency = GetPausedResumeLatency();
+                double resumeStartLatency = GetResumeStartLatency(audibleSyncLatency, startLatency, pausedResumeLatency);
+                double resumeSeekLatency = GetResumeSeekLatency(audibleSyncLatency, startLatency, pausedResumeLatency);
                 double preRollSongTime = resumeStartLatency * songSpeed;
 
                 // Reset justResumed if we are still in the lead-in
@@ -540,14 +546,19 @@ namespace YARG.Playback
                             delay = Math.Max(0, now - frameStart);
                         }
 
-                        double seekPosition = GetLatencyAlignedSeekPosition(syncVisualTime, resumeSeekLatency, songSpeed);
+                        // Align to the input clock, not the render frame. InputState.currentTime can be stale
+                        // between input updates, so extrapolate from the last input timestamp using CPU time.
+                        double resumeCommandInputTime = GetEstimatedCurrentInputTime();
+                        double adjustedSyncVisualTime = ((resumeCommandInputTime - inputTimeOffset) * songSpeed) - audioOffset;
+                        double seekPosition = GetLatencyAlignedSeekPosition(adjustedSyncVisualTime, resumeSeekLatency, songSpeed);
                         _mixer.SetPosition(seekPosition);
 
                         YargLogger.LogFormatDebug(
-                            "Aligned resumed audio. Sync visual: {0:0.000000}, seek position: {1:0.000000}, " +
-                            "audible latency: {2:0.000000}, start latency: {3:0.000000}, command latency: {4:0.000000}, " +
-                            "resume command delay: {5:0.000000}",
-                            syncVisualTime, seekPosition, audibleSyncLatency, startLatency, commandLatency, delay
+                            "Aligned resumed audio. Sync visual: {0:0.000000}, adjusted sync visual: {1:0.000000}, seek position: {2:0.000000}, " +
+                            "audible latency: {3:0.000000}, start latency: {4:0.000000}, paused resume latency: {5:0.000000}, " +
+                            "resume seek latency: {6:0.000000}, command latency: {7:0.000000}, resume command delay: {8:0.000000}",
+                            syncVisualTime, adjustedSyncVisualTime, seekPosition, audibleSyncLatency, startLatency, pausedResumeLatency,
+                            resumeSeekLatency, commandLatency, delay
                         );
                     }
 
@@ -804,9 +815,19 @@ namespace YARG.Playback
             return Math.Max(audibleSyncLatency, startLatency);
         }
 
+        private static double GetResumeStartLatency(double audibleSyncLatency, double startLatency, double pausedResumeLatency)
+        {
+            return Math.Max(GetResumeStartLatency(audibleSyncLatency, startLatency), pausedResumeLatency);
+        }
+
         private static double GetResumeSeekLatency(double audibleSyncLatency, double startLatency)
         {
             return Math.Max(audibleSyncLatency, startLatency);
+        }
+
+        private static double GetResumeSeekLatency(double audibleSyncLatency, double startLatency, double pausedResumeLatency)
+        {
+            return Math.Max(GetResumeSeekLatency(audibleSyncLatency, startLatency), pausedResumeLatency);
         }
 
         private double GetLatencyAlignedSeekPosition(double syncVisualTime, double syncLatency, double songSpeed)
@@ -818,7 +839,8 @@ namespace YARG.Playback
         {
             double audibleSyncLatency = GetAudibleSyncLatency();
             double startLatency = GetStartLatency();
-            double resumeSeekLatency = GetResumeSeekLatency(audibleSyncLatency, startLatency);
+            double pausedResumeLatency = GetPausedResumeLatency();
+            double resumeSeekLatency = GetResumeSeekLatency(audibleSyncLatency, startLatency, pausedResumeLatency);
             if (resumeSeekLatency <= 0)
             {
                 return;
@@ -831,18 +853,20 @@ namespace YARG.Playback
             _mixer.SetPosition(seekPosition);
 
             YargLogger.LogFormatDebug(
-                "Pre-aligned resume audio. Audible sync latency: {0:0.000000}, start latency: {1:0.000000}, command latency: {2:0.000000}, sync visual: {3:0.000000}, seek position: {4:0.000000}",
-                audibleSyncLatency, startLatency, GetCommandLatency(), syncVisualTime, seekPosition
+                "Pre-aligned resume audio. Audible sync latency: {0:0.000000}, start latency: {1:0.000000}, paused resume latency: {2:0.000000}, " +
+                "resume seek latency: {3:0.000000}, command latency: {4:0.000000}, sync visual: {5:0.000000}, seek position: {6:0.000000}",
+                audibleSyncLatency, startLatency, pausedResumeLatency, resumeSeekLatency, GetCommandLatency(), syncVisualTime, seekPosition
             );
         }
 
         private void SuppressSyncCorrection()
         {
-            double now = InputManager.CurrentInputTime;
+            double now = GetEstimatedCurrentInputTime();
             double audibleSyncLatency = GetAudibleSyncLatency();
             double startLatency = GetStartLatency();
             double commandLatency = GetCommandLatency();
-            double resumeStartLatency = GetResumeStartLatency(audibleSyncLatency, startLatency);
+            double pausedResumeLatency = GetPausedResumeLatency();
+            double resumeStartLatency = GetResumeStartLatency(audibleSyncLatency, startLatency, pausedResumeLatency);
             double latency = Math.Max(resumeStartLatency, commandLatency);
             _syncCorrectionSuppressedUntil = now + latency;
             _nextSyncSpeedChangeTime = Math.Max(_nextSyncSpeedChangeTime, _syncCorrectionSuppressedUntil);
@@ -867,6 +891,25 @@ namespace YARG.Playback
         public double GetRelativeInputTime(double timeFromInputSystem)
         {
             return (timeFromInputSystem - InputTimeOffset) * SongSpeed;
+        }
+
+        private static double GetCurrentCpuTime()
+        {
+            return (double) System.Diagnostics.Stopwatch.GetTimestamp() / System.Diagnostics.Stopwatch.Frequency;
+        }
+
+        private static double GetEstimatedCurrentInputTime()
+        {
+            double currentInputTime = InputManager.CurrentInputTime;
+            double inputUpdateCpuTime = InputManager.InputUpdateCpuTime;
+            if (inputUpdateCpuTime <= 0)
+            {
+                return currentInputTime;
+            }
+
+            double elapsed = Math.Max(0, GetCurrentCpuTime() - inputUpdateCpuTime);
+            double estimatedInputTime = InputManager.InputUpdateTime + elapsed;
+            return Math.Max(currentInputTime, estimatedInputTime);
         }
 
         private double GetUpdateInputSystemTime()
@@ -951,7 +994,7 @@ namespace YARG.Playback
 
         private void SetResumeInputBase()
         {
-            double resumeInputSystemTime = InputManager.CurrentInputTime;
+            double resumeInputSystemTime = GetEstimatedCurrentInputTime();
             _minimumUpdateInputSystemTime = Math.Max(_minimumUpdateInputSystemTime, resumeInputSystemTime);
             SetInputBaseChecked(InputTime, resumeInputSystemTime);
         }

@@ -50,6 +50,11 @@ namespace YARG.Input
         public static double CurrentInputTime => InputState.currentTime;
 
         /// <summary>
+        /// The high-precision CPU timestamp when <see cref="InputUpdateTime"/> was last sampled.
+        /// </summary>
+        public static double InputUpdateCpuTime { get; private set; }
+
+        /// <summary>
         /// The high-precision CPU timestamp at the start of the current input update frame.
         /// </summary>
         public static double FrameStartCpuTime { get; private set; }
@@ -196,13 +201,16 @@ namespace YARG.Input
 
         private static void OnBeforeUpdate()
         {
+            double now = (double) System.Diagnostics.Stopwatch.GetTimestamp() / System.Diagnostics.Stopwatch.Frequency;
             InputUpdateTime = CurrentInputTime;
-            FrameStartCpuTime = (double) System.Diagnostics.Stopwatch.GetTimestamp() / System.Diagnostics.Stopwatch.Frequency;
+            InputUpdateCpuTime = now;
+            FrameStartCpuTime = now;
         }
 
         private static void OnAfterUpdate()
         {
             InputUpdateTime = CurrentInputTime;
+            InputUpdateCpuTime = (double) System.Diagnostics.Stopwatch.GetTimestamp() / System.Diagnostics.Stopwatch.Frequency;
 
             if (InputUpdateTime < _latestInputTime)
             {

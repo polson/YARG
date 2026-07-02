@@ -255,6 +255,13 @@ namespace YARG.Audio.BASS
             return latency;
         }
 
+        protected override double GetPausedResumeLatency_Internal()
+        {
+            // Resuming from pause can land anywhere within the hardware/device period before newly
+            // audible data reaches the output pipeline. Use midpoint to avoid one-sided 0..devPeriod error.
+            return GetStartLatency_Internal() + GetDevicePeriodUpdateLatency();
+        }
+
         private static double GetCommandUpdateLatency()
         {
             return Math.Max(0, Bass.UpdatePeriod) / 2000.0;
@@ -263,6 +270,11 @@ namespace YARG.Audio.BASS
         private static double GetDeviceBufferLatency()
         {
             return Math.Max(0, Bass.DeviceBufferLength) / 1000.0;
+        }
+
+        private static double GetDevicePeriodUpdateLatency()
+        {
+            return Math.Max(0, Bass.GetConfig(Configuration.DevicePeriod)) / 2000.0;
         }
 
         protected override double GetDecodingPosition_Internal()
