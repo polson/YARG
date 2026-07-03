@@ -235,7 +235,7 @@ namespace YARG.Audio.BASS
 
         protected override double GetCommandLatency_Internal()
         {
-            return DecodeBassTempoStream.GetConfiguredOutputLatency() + DecodeBassTempoStream.GetDeviceOutputLatency();
+            return _tempoStream.GetOutputBufferLatency() + DecodeBassTempoStream.GetDeviceOutputLatency();
         }
 
         protected override double GetStartLatency_Internal()

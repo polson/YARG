@@ -44,8 +44,12 @@ namespace YARG.Audio.BASS
         
         public abstract double GetPosition(double positionOffset, Func<double> decodingPositionFallback);
         public abstract double GetAudibleSyncLatency();
+        public virtual double GetOutputBufferLatency()
+        {
+            return DecodeBassTempoStream.GetConfiguredOutputLatency();
+        }
 
-        public void FlushBuffer()
+        public virtual void FlushBuffer()
         {
             if (Handle != 0)
             {
@@ -214,6 +218,11 @@ namespace YARG.Audio.BASS
             return GetConfiguredOutputLatency() + GetDeviceOutputLatency();
         }
 
+        public override double GetOutputBufferLatency()
+        {
+            return GetConfiguredOutputLatency();
+        }
+
         internal static double GetDeviceOutputLatency()
         {
             return Math.Max(0, GlobalAudioHandler.PlaybackLatency) / 1000.0;
@@ -266,6 +275,7 @@ namespace YARG.Audio.BASS
     public sealed class DirectBassTempoStream : BassTempoStream
     {
         private int _positionFallbackCount;
+        private BassOutputBufferTracker? _bufferTracker;
 
         public override bool IsDecodeStream => false;
         public override bool IsPlaying => Bass.ChannelIsActive(Handle) == PlaybackState.Playing;
@@ -274,6 +284,10 @@ namespace YARG.Audio.BASS
         public DirectBassTempoStream(BassAudioManager bassManager, int mixerHandle)
             : base(bassManager, mixerHandle, BassFlags.Default)
         {
+            if (Handle != 0)
+            {
+                _bufferTracker = new BassOutputBufferTracker(Handle);
+            }
         }
 
         public override void SetVolume(double logicalVolume)
@@ -303,6 +317,12 @@ namespace YARG.Audio.BASS
                 YargLogger.LogFormatError("Failed to play tempo stream: {0}", Bass.LastError);
                 return false;
             }
+
+            if (didSetPosition)
+            {
+                _bufferTracker?.ResetToCurrentPosition();
+            }
+
             return true;
         }
 
@@ -340,7 +360,10 @@ namespace YARG.Audio.BASS
             if (!Bass.ChannelSetAttribute(Handle, ChannelAttribute.Buffer, lengthInSeconds))
             {
                 YargLogger.LogFormatError("Failed to set tempo stream buffer: {0}!", Bass.LastError);
+                return;
             }
+
+            _bufferTracker?.ResetToCurrentPosition();
         }
 
         public override double GetPosition(double positionOffset, Func<double> decodingPositionFallback)
@@ -372,6 +395,35 @@ namespace YARG.Audio.BASS
         public override double GetAudibleSyncLatency()
         {
             return 0;
+        }
+
+        public override double GetOutputBufferLatency()
+        {
+            double staticLatency = DecodeBassTempoStream.GetConfiguredOutputLatency();
+            if (staticLatency <= 0)
+            {
+                return 0;
+            }
+
+            if (_bufferTracker == null || !_bufferTracker.TryGetRemainingSeconds(out double dynamicLatency))
+            {
+                return staticLatency;
+            }
+
+            return Math.Clamp(dynamicLatency, 0, staticLatency);
+        }
+
+        public override void FlushBuffer()
+        {
+            base.FlushBuffer();
+            _bufferTracker?.ResetToCurrentPosition();
+        }
+
+        public override void Dispose()
+        {
+            _bufferTracker?.Dispose();
+            _bufferTracker = null;
+            base.Dispose();
         }
     }
 #nullable disable
