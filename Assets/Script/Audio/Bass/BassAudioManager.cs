@@ -587,7 +587,7 @@ namespace YARG.Audio.BASS
 
         protected override void SetBufferLength_Internal(int length)
         {
-            Bass.PlaybackBufferLength = length;
+            Bass.PlaybackBufferLength = BassHelpers.ClampPlaybackBufferLength(length);
         }
 
         protected override void DisposeUnmanagedResources()
