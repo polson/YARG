@@ -182,6 +182,7 @@ namespace YARG
             if (!_disposed)
             {
                 await Wait();
+                GlobalVariables.RestartProfileMicrophones();
                 LoadingScreen.Instance.gameObject.SetActive(false);
                 Navigator.Instance.DisableMenuInputs = false;
                 _disposed = true;
