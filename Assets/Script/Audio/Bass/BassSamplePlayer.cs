@@ -22,6 +22,7 @@ namespace YARG.Audio.BASS
             public readonly SyncProcedure EndSync;
             public readonly SyncProcedure FadeSync;
             public bool FadingOut;
+            public bool Paused;
 
             public Voice(int channel, SyncProcedure endSync, SyncProcedure fadeSync)
             {
@@ -61,7 +62,7 @@ namespace YARG.Audio.BASS
             {
                 lock (_lock)
                 {
-                    return HasVoiceInState(PlaybackState.Paused);
+                    return _voices.Exists(voice => voice.Paused);
                 }
             }
         }
@@ -99,6 +100,7 @@ namespace YARG.Audio.BASS
 
                 SetLooping(voice.Channel, loop);
                 voice.FadingOut = false;
+                voice.Paused = false;
                 BassMix.ChannelFlags(voice.Channel, 0, BassFlags.MixerChanPause);
 
                 double initialVolume = fadeInMilliseconds > 0 ? 0 : _volume;
@@ -161,7 +163,11 @@ namespace YARG.Audio.BASS
                 {
                     if (Bass.ChannelIsActive(voice.Channel) is PlaybackState.Playing or PlaybackState.Stalled)
                     {
-                        BassMix.ChannelFlags(voice.Channel, BassFlags.MixerChanPause, BassFlags.MixerChanPause);
+                        if (BassMix.ChannelFlags(voice.Channel, BassFlags.MixerChanPause,
+                                BassFlags.MixerChanPause) >= 0)
+                        {
+                            voice.Paused = true;
+                        }
                     }
                 }
             }
@@ -173,9 +179,12 @@ namespace YARG.Audio.BASS
             {
                 foreach (var voice in _voices)
                 {
-                    if (Bass.ChannelIsActive(voice.Channel) == PlaybackState.Paused)
+                    if (voice.Paused)
                     {
-                        BassMix.ChannelFlags(voice.Channel, 0, BassFlags.MixerChanPause);
+                        if (BassMix.ChannelFlags(voice.Channel, 0, BassFlags.MixerChanPause) >= 0)
+                        {
+                            voice.Paused = false;
+                        }
                     }
                 }
             }
@@ -226,6 +235,12 @@ namespace YARG.Audio.BASS
                 }
             }
             return false;
+        }
+
+        private bool HasActiveVoice()
+        {
+            return _voices.Exists(voice => voice.Paused ||
+                Bass.ChannelIsActive(voice.Channel) is PlaybackState.Playing or PlaybackState.Stalled);
         }
 
         private Voice? GetAvailableVoice()
@@ -312,7 +327,7 @@ namespace YARG.Audio.BASS
                 {
                     _output.RemoveSample(channel);
                 }
-                playbackEnded = !HasVoiceInState(PlaybackState.Playing, PlaybackState.Stalled, PlaybackState.Paused);
+                playbackEnded = !HasActiveVoice();
             }
 
             if (playbackEnded)
@@ -323,6 +338,7 @@ namespace YARG.Audio.BASS
 
         private void StopVoice(Voice voice)
         {
+            voice.Paused = false;
             _output.RemoveSample(voice.Channel);
             Bass.ChannelSetPosition(voice.Channel, 0, PositionFlags.Bytes);
         }
