@@ -44,6 +44,25 @@ namespace YARG.Audio.BASS
             }
         }
 
+        public BassSongPlayback CreateSongPlayback(int tempoStreamHandle)
+        {
+            lock (_lock)
+            {
+                if (_disposed)
+                {
+                    return new BassSongPlayback(tempoStreamHandle, this, 0);
+                }
+
+                if (!_useSingleMixer)
+                {
+                    return new BassSongPlayback(tempoStreamHandle);
+                }
+
+                EnsureMixer();
+                return new BassSongPlayback(tempoStreamHandle, this, _mixerHandle);
+            }
+        }
+
         public bool PlaySample(int sourceHandle, OutputChannel? outputChannel)
         {
             lock (_lock)
@@ -125,6 +144,30 @@ namespace YARG.Audio.BASS
             }
         }
 
+        public void SetOutputDevice(BassOutputDevice device)
+        {
+            if (!_useSingleMixer)
+            {
+                return;
+            }
+
+            lock (_lock)
+            {
+                if (_mixerHandle == 0 || _deviceId == device.DeviceId)
+                {
+                    return;
+                }
+
+                if (!Bass.ChannelSetDevice(_mixerHandle, device.DeviceId))
+                {
+                    YargLogger.LogFormatError("Failed to change master mixer device: {0}", Bass.LastError);
+                    return;
+                }
+
+                _deviceId = device.DeviceId;
+            }
+        }
+
         /// <summary>
         /// Releases resources belonging to the current output device while allowing later reuse.
         /// </summary>
@@ -134,7 +177,10 @@ namespace YARG.Audio.BASS
             {
                 _activeSources.Clear();
                 _idleTimer.Change(Timeout.Infinite, Timeout.Infinite);
-                FreeMixer();
+                if (!_useSingleMixer)
+                {
+                    FreeMixer();
+                }
             }
         }
 

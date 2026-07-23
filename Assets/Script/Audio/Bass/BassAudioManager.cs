@@ -231,6 +231,7 @@ namespace YARG.Audio.BASS
             YargLogger.LogFormatInfo("Changing BASS Device to: {0}", bassDevice.DisplayName);
 
             base.SetOutputDevice(bassDevice.DisplayName);
+            _audioOutput.SetOutputDevice(bassDevice);
 
             if (_currentDevice != null)
             {
@@ -276,6 +277,11 @@ namespace YARG.Audio.BASS
             }
             return new BassStemMixer(name, this, speed, mixerVolume, handle, clampStemVolume: clampStemVolume,
                 normalize: normalize, outputChannel: CreateOutputChannel(SettingsManager.Settings?.OutputChannelDefault.Value ?? 0));
+        }
+
+        internal BassSongPlayback CreateSongPlayback(int tempoStreamHandle)
+        {
+            return _audioOutput.CreateSongPlayback(tempoStreamHandle);
         }
 
         protected override MicDevice? GetInputDevice(string name)

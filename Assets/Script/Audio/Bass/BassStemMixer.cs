@@ -102,7 +102,7 @@ namespace YARG.Audio.BASS
                 return;
             }
 
-            _playback = new BassSongPlayback(_tempoStreamHandle);
+            _playback = manager.CreateSongPlayback(_tempoStreamHandle);
             if (!_playback.IsValid)
             {
                 return;
