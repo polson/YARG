@@ -96,11 +96,13 @@ namespace YARG.Audio.BASS
 
         private readonly int _opusHandle = 0;
         private BassOutputDevice _currentDevice;
-        private readonly BassAudioOutput _audioOutput = new();
+        private readonly BassAudioOutput _audioOutput;
 
         public BassAudioManager()
         {
             YargLogger.LogInfo("Initializing BASS...");
+            _audioOutput = new BassAudioOutput(
+                SettingsManager.Settings?.UseSingleMixer.Value ?? false);
             string bassPath = GetBassDirectory();
             string opusLibDirectory = Path.Combine(bassPath, "bassopus");
 
@@ -242,6 +244,7 @@ namespace YARG.Audio.BASS
 
             _currentDevice?.Dispose();
             _currentDevice = bassDevice.Use();
+            _audioOutput.InitializeForDevice();
             UpdatePlaybackLatency();
 
             YargLogger.LogFormatInfo("Current BASS Device: {0}", Bass.GetDeviceInfo(Bass.CurrentDevice).Name);
@@ -658,7 +661,9 @@ namespace YARG.Audio.BASS
 
         protected override void SetBufferLength_Internal(int length)
         {
-            Bass.PlaybackBufferLength = BassHelpers.ClampPlaybackBufferLength(length);
+            length = BassHelpers.ClampPlaybackBufferLength(length);
+            Bass.PlaybackBufferLength = length;
+            _audioOutput.SetBufferLength(length);
         }
 
         protected override void DisposeUnmanagedResources()

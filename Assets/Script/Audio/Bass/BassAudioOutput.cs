@@ -16,6 +16,7 @@ namespace YARG.Audio.BASS
     {
         private const int IDLE_TIMEOUT_MILLISECONDS = 10_000;
 
+        private readonly bool _useSingleMixer;
         private readonly object _lock = new();
         private readonly HashSet<int> _activeSources = new();
         private readonly System.Threading.Timer _idleTimer;
@@ -24,9 +25,23 @@ namespace YARG.Audio.BASS
         private int _deviceId = -1;
         private bool _disposed;
 
-        public BassAudioOutput()
+        public BassAudioOutput(bool useSingleMixer)
         {
+            _useSingleMixer = useSingleMixer;
             _idleTimer = new System.Threading.Timer(OnIdleTimer, null, Timeout.Infinite, Timeout.Infinite);
+        }
+
+        public void InitializeForDevice()
+        {
+            if (!_useSingleMixer)
+            {
+                return;
+            }
+
+            lock (_lock)
+            {
+                EnsureMixer();
+            }
         }
 
         public bool PlaySample(int sourceHandle, OutputChannel? outputChannel)
@@ -38,7 +53,10 @@ namespace YARG.Audio.BASS
                     return false;
                 }
 
-                _idleTimer.Change(IDLE_TIMEOUT_MILLISECONDS, Timeout.Infinite);
+                if (!_useSingleMixer)
+                {
+                    _idleTimer.Change(IDLE_TIMEOUT_MILLISECONDS, Timeout.Infinite);
+                }
 
                 var flags = BassFlags.MixerChanDownMix | BassFlags.MixerChanNoRampin;
                 if (outputChannel is BassOutputChannel bassOutputChannel)
@@ -73,7 +91,7 @@ namespace YARG.Audio.BASS
                     YargLogger.LogFormatError("Failed to remove sample voice from SFX mixer: {0}!", Bass.LastError);
                 }
 
-                if (_activeSources.Count == 0 && !_disposed)
+                if (_activeSources.Count == 0 && !_disposed && !_useSingleMixer)
                 {
                     _idleTimer.Change(IDLE_TIMEOUT_MILLISECONDS, Timeout.Infinite);
                 }
@@ -88,6 +106,22 @@ namespace YARG.Audio.BASS
                     ? bassOutputChannel.Flags
                     : BassFlags.Default;
                 BassMix.ChannelFlags(sourceHandle, flags, BassFlags.SpeakerFront);
+            }
+        }
+
+        public void SetBufferLength(int length)
+        {
+            if (!_useSingleMixer)
+            {
+                return;
+            }
+
+            lock (_lock)
+            {
+                if (_mixerHandle != 0)
+                {
+                    SetMixerBufferLength(length);
+                }
             }
         }
 
@@ -123,10 +157,8 @@ namespace YARG.Audio.BASS
                 return false;
             }
 
-            if (!Bass.ChannelSetAttribute(mixerHandle, ChannelAttribute.Buffer, 0f))
-            {
-                YargLogger.LogFormatError("Failed to disable SFX mixer buffering: {0}!", Bass.LastError);
-            }
+            SetMixerBufferLength(mixerHandle,
+                _useSingleMixer ? BassHelpers.ConfiguredPlaybackBufferLength : 0);
 
             if (!Bass.ChannelPlay(mixerHandle))
             {
@@ -137,9 +169,24 @@ namespace YARG.Audio.BASS
 
             _mixerHandle = mixerHandle;
             _deviceId = Bass.CurrentDevice;
-            YargLogger.LogFormatInfo("Created BASS SFX mixer: handle {0}, {1}Hz, {2} channels",
-                mixerHandle, frequency, channels);
+            string mixerName = _useSingleMixer ? "master" : "SFX";
+            YargLogger.LogFormatInfo("Created BASS {0} mixer: handle {1}, {2}Hz, {3} channels",
+                mixerName, mixerHandle, frequency, channels);
             return true;
+        }
+
+        private void SetMixerBufferLength(int length)
+        {
+            SetMixerBufferLength(_mixerHandle, length);
+        }
+
+        private static void SetMixerBufferLength(int mixerHandle, int length)
+        {
+            float lengthInSeconds = length / 1000f;
+            if (!Bass.ChannelSetAttribute(mixerHandle, ChannelAttribute.Buffer, lengthInSeconds))
+            {
+                YargLogger.LogFormatError("Failed to set audio output buffer: {0}!", Bass.LastError);
+            }
         }
 
         private void OnIdleTimer(object? _)
@@ -151,7 +198,7 @@ namespace YARG.Audio.BASS
         {
             lock (_lock)
             {
-                if (_disposed)
+                if (_disposed || _useSingleMixer)
                 {
                     return;
                 }
@@ -185,7 +232,7 @@ namespace YARG.Audio.BASS
 
                 if (!Bass.StreamFree(_mixerHandle))
                 {
-                    YargLogger.LogFormatError("Failed to free SFX mixer: {0}!", Bass.LastError);
+                    YargLogger.LogFormatError("Failed to free audio output mixer: {0}!", Bass.LastError);
                 }
             }
             finally
