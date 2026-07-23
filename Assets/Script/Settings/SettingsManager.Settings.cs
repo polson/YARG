@@ -697,7 +697,7 @@ namespace YARG.Settings
             public ToggleSetting SaveScoresWithBots { get; } = new(false);
             public SliderSetting FontScaling { get; } = new(0f, 0f, 100f, FontScalingCallback);
 
-            public ToggleSetting UseSingleMixer { get; } = new(false);
+            public ToggleSetting UseSingleMixer { get; } = new(false, UseSingleMixerCallback);
             public OutputDeviceSetting OutputDevice { get; } = new("Default", OutputDeviceCallback);
             public OutputChannelDefaultSetting OutputChannelDefault { get; } = new(1, OutputChannelDefaultCallback);
             public OutputChannelSetting OutputChannelDrumSfx { get; } = new(-1, OutputChannelDrumSfxCallback);
@@ -974,6 +974,16 @@ namespace YARG.Settings
                 ResetChannelSetting(Settings.OutputChannelSfx, SongStem.Sfx);
                 ResetChannelSetting(Settings.OutputChannelVox, SongStem.VoxSample);
                 ResetChannelSetting(Settings.OutputChannelMetronome, SongStem.Metronome);
+            }
+
+            private static void UseSingleMixerCallback(bool enabled)
+            {
+                if (!IsInitialized)
+                {
+                    return;
+                }
+
+                GlobalAudioHandler.SetSingleMixer(enabled);
             }
 
             private static void OutputChannelDefaultCallback(int channelId)

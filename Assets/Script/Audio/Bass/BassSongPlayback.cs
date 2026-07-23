@@ -28,7 +28,10 @@ namespace YARG.Audio.BASS
             get
             {
                 int handle = _usesMaster ? _tempoStreamHandle : _outputMixerHandle;
-                return Bass.ChannelIsActive(handle) is PlaybackState.Playing or PlaybackState.Stalled;
+                bool isActive = Bass.ChannelIsActive(handle) is
+                    PlaybackState.Playing or PlaybackState.Stalled;
+                return isActive && (!_usesMaster ||
+                    !BassMix.ChannelHasFlag(_tempoStreamHandle, BassFlags.MixerChanPause));
             }
         }
 

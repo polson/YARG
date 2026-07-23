@@ -711,6 +711,8 @@ namespace YARG.Audio.BASS
             private readonly int    _tempoStreamHandle;
             private          double _songStart;
             private          double _playbackDelay;
+            private          long   _positionBeforeSeek;
+            private          bool   _seekPending;
 
             public  double AlignmentDelay { get; private set; }
 
@@ -736,7 +738,9 @@ namespace YARG.Audio.BASS
 
             public double GetSongPosition(long tempoStreamPosition)
             {
-                double position = Bass.ChannelBytes2Seconds(_tempoStreamHandle, tempoStreamPosition);
+                // Explicit positions come from the decode timeline. They already belong to the
+                // newly prepared route and must not consume the pending heard-position boundary.
+                double position = GetPositionSeconds(tempoStreamPosition);
                 return position - TotalDelay + _songStart;
             }
             /// <summary>
@@ -744,6 +748,14 @@ namespace YARG.Audio.BASS
             /// </summary>
             public void Reset(double songStart, double alignmentDelay, double playbackDelay)
             {
+                _positionBeforeSeek = BassMix.ChannelGetPosition(_tempoStreamHandle, PositionFlags.Bytes);
+                if (_positionBeforeSeek < 0)
+                {
+                    YargLogger.LogFormatError("Failed to capture position before seek: {0}!",
+                        Bass.LastError);
+                }
+                _seekPending = _positionBeforeSeek > 0;
+
                 _songStart = songStart;
                 AlignmentDelay = alignmentDelay;
                 _playbackDelay = playbackDelay;
@@ -763,6 +775,29 @@ namespace YARG.Audio.BASS
                     return -1;
                 }
 
+                return GetTempoStreamPosition(positionBytes);
+            }
+
+            private double GetTempoStreamPosition(long positionBytes)
+            {
+                if (_seekPending)
+                {
+                    if (positionBytes >= _positionBeforeSeek)
+                    {
+                        // BASSmix reports position currently heard. Immediately after resetting a source
+                        // inside a playing mixer, this can still be its pre-seek position for one output
+                        // buffer. Hold prepared position until reported position crosses seek boundary.
+                        return 0;
+                    }
+
+                    _seekPending = false;
+                }
+
+                return GetPositionSeconds(positionBytes);
+            }
+
+            private double GetPositionSeconds(long positionBytes)
+            {
                 double position = Bass.ChannelBytes2Seconds(_tempoStreamHandle, positionBytes);
                 if (position < 0)
                 {

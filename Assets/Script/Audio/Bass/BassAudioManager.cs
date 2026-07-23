@@ -97,6 +97,7 @@ namespace YARG.Audio.BASS
         private readonly int _opusHandle = 0;
         private BassOutputDevice _currentDevice;
         private readonly BassAudioOutput _audioOutput;
+        private bool? _pendingSingleMixer;
 
         public BassAudioManager()
         {
@@ -265,6 +266,8 @@ namespace YARG.Audio.BASS
 #nullable enable
         protected override StemMixer? CreateMixer(string name, float speed, double mixerVolume, bool clampStemVolume, bool normalize)
         {
+            ApplyPendingSingleMixer();
+
             if (GlobalAudioHandler.LogMixerStatus)
             {
                 YargLogger.LogDebug("Loading song");
@@ -669,6 +672,78 @@ namespace YARG.Audio.BASS
             length = BassHelpers.ClampPlaybackBufferLength(length);
             Bass.PlaybackBufferLength = length;
             _audioOutput.SetBufferLength(length);
+        }
+
+        protected override void SetSingleMixer(bool enabled)
+        {
+            if (_audioOutput.UsesSingleMixer == enabled)
+            {
+                _pendingSingleMixer = null;
+                return;
+            }
+
+            if (HasActiveMixers)
+            {
+                _pendingSingleMixer = enabled;
+                YargLogger.LogInfo("Single mixer change deferred until current audio closes");
+                return;
+            }
+
+            ApplySingleMixer(enabled);
+        }
+
+        protected override void OnMixersIdle()
+        {
+            UnityMainThreadCallback.QueueEvent(ApplyPendingSingleMixer);
+        }
+
+        private void ApplyPendingSingleMixer()
+        {
+            if (_pendingSingleMixer is not bool enabled)
+            {
+                return;
+            }
+
+            if (HasActiveMixers)
+            {
+                return;
+            }
+
+            _pendingSingleMixer = null;
+            ApplySingleMixer(enabled);
+        }
+
+        private void ApplySingleMixer(bool enabled)
+        {
+            var venueSamples = new List<(string Name, byte[] Data, OutputChannel OutputChannel)>();
+            foreach (var sample in VenueSamples.Values)
+            {
+                if (sample is BassVenueSampleChannel bassSample)
+                {
+                    venueSamples.Add((bassSample.SampleName, bassSample.SampleData, bassSample.OutputChannel));
+                }
+            }
+
+            UnloadSfx();
+            UnloadDrumSfx();
+            UnloadVox();
+            UnloadVenueSamples();
+
+            bool changed = _audioOutput.SetSingleMixer(enabled);
+
+            LoadSfx();
+            LoadDrumSfx();
+            LoadVox();
+            foreach (var sample in venueSamples)
+            {
+                LoadVenueSample(sample.Name, sample.Data, sample.OutputChannel);
+            }
+
+            if (changed)
+            {
+                YargLogger.LogFormatInfo("BASS audio topology changed to {0}",
+                    enabled ? "single mixer" : "legacy mixers");
+            }
         }
 
         protected override void DisposeUnmanagedResources()

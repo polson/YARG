@@ -16,7 +16,7 @@ namespace YARG.Audio.BASS
     {
         private const int IDLE_TIMEOUT_MILLISECONDS = 10_000;
 
-        private readonly bool _useSingleMixer;
+        private bool _useSingleMixer;
         private readonly object _lock = new();
         private readonly HashSet<int> _activeSources = new();
         private readonly System.Threading.Timer _idleTimer;
@@ -29,6 +29,47 @@ namespace YARG.Audio.BASS
         {
             _useSingleMixer = useSingleMixer;
             _idleTimer = new System.Threading.Timer(OnIdleTimer, null, Timeout.Infinite, Timeout.Infinite);
+        }
+
+        public bool UsesSingleMixer
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _useSingleMixer;
+                }
+            }
+        }
+
+        public bool SetSingleMixer(bool enabled)
+        {
+            lock (_lock)
+            {
+                if (_disposed || _useSingleMixer == enabled)
+                {
+                    return !_disposed;
+                }
+
+                if (_activeSources.Count != 0)
+                {
+                    YargLogger.LogError("Cannot change audio topology while samples are loaded");
+                    return false;
+                }
+
+                _idleTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                FreeMixer();
+                bool previousMode = _useSingleMixer;
+                _useSingleMixer = enabled;
+
+                if (enabled && !EnsureMixer())
+                {
+                    _useSingleMixer = previousMode;
+                    return false;
+                }
+
+                return true;
+            }
         }
 
         public void InitializeForDevice()
