@@ -209,6 +209,17 @@ namespace YARG.Audio.BASS
         {
             int currentDevice = Bass.CurrentDevice;
 
+#nullable enable
+            var venueSamples = new List<(string Name, byte[] Data, OutputChannel? OutputChannel)>();
+#nullable disable
+            foreach (var sample in VenueSamples.Values)
+            {
+                if (sample is BassVenueSampleChannel bassSample)
+                {
+                    venueSamples.Add((bassSample.SampleName, bassSample.SampleData, bassSample.OutputChannel));
+                }
+            }
+
             var device = GetOutputDevice(name);
             if (device is not BassOutputDevice bassDevice || bassDevice.DeviceId == currentDevice)
             {
@@ -225,6 +236,7 @@ namespace YARG.Audio.BASS
                 UnloadSfx();
                 UnloadDrumSfx();
                 UnloadVox();
+                UnloadVenueSamples();
                 _sfxMixer.Reset();
             }
 
@@ -239,6 +251,10 @@ namespace YARG.Audio.BASS
             LoadDrumSfx(); // TODO: move drum sfx loading/disposal to song start/end respectively IF there are any drum players
             LoadVox();
             LoadMetronome();
+            foreach (var sample in venueSamples)
+            {
+                LoadVenueSample(sample.Name, sample.Data, sample.OutputChannel);
+            }
 
             return true;
         }
@@ -604,12 +620,22 @@ namespace YARG.Audio.BASS
         public override void LoadVenueSample(string name, byte[] sampleData, OutputChannel? outputChannel = null)
 #nullable disable
         {
-            VenueSamples[name] = BassVenueSampleChannel.Create(name, sampleData, outputChannel);
+            if (VenueSamples.TryGetValue(name, out var existing))
+            {
+                existing.Dispose();
+            }
+
+            VenueSamples[name] = BassVenueSampleChannel.Create(name, sampleData, _sfxMixer, outputChannel);
         }
 
         public override void ClearVenueSamples()
         {
-            foreach(var sample in VenueSamples.Values)
+            UnloadVenueSamples();
+        }
+
+        private void UnloadVenueSamples()
+        {
+            foreach (var sample in VenueSamples.Values)
             {
                 sample.Stop();
                 sample.Dispose();
