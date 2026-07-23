@@ -96,6 +96,7 @@ namespace YARG.Audio.BASS
 
         private readonly int _opusHandle = 0;
         private BassOutputDevice _currentDevice;
+        private readonly BassSfxMixer _sfxMixer = new();
 
         public BassAudioManager()
         {
@@ -217,6 +218,13 @@ namespace YARG.Audio.BASS
             YargLogger.LogFormatInfo("Changing BASS Device to: {0}", bassDevice.DisplayName);
 
             base.SetOutputDevice(bassDevice.DisplayName);
+
+            if (_currentDevice != null)
+            {
+                _currentDevice.Use();
+                UnloadDrumSfx();
+                _sfxMixer.Reset();
+            }
 
             _currentDevice?.Dispose();
             _currentDevice = bassDevice.Use();
@@ -450,14 +458,7 @@ namespace YARG.Audio.BASS
         {
             YargLogger.LogInfo("Loading Drum SFX");
 
-#nullable enable
-            foreach (BassDrumSampleChannel? sample in DrumSfxSamples)
-#nullable disable
-            {
-                sample?.Dispose();
-            }
-
-            DrumSfxSamples = new DrumSampleChannel[AudioHelpers.DrumSamples.Count];
+            UnloadDrumSfx();
 
             string sfxFolder = Path.Combine(Application.streamingAssetsPath, "drumSfx");
 
@@ -470,7 +471,7 @@ namespace YARG.Audio.BASS
                     if (File.Exists(sfxPath))
                     {
                         var sfxSample = sample.Kind;
-                        var sfx = BassDrumSampleChannel.Create(sfxSample, sfxPath, 8,
+                        var sfx = BassDrumSampleChannel.Create(sfxSample, sfxPath, 8, _sfxMixer,
                             CreateOutputChannel(SettingsManager.Settings?.OutputChannelDrumSfx.Value ?? 0));
                         if (sfx != null)
                         {
@@ -482,6 +483,18 @@ namespace YARG.Audio.BASS
             }
 
             YargLogger.LogInfo("Finished loading Drum SFX");
+        }
+
+        private void UnloadDrumSfx()
+        {
+#nullable enable
+            foreach (BassDrumSampleChannel? sample in DrumSfxSamples)
+#nullable disable
+            {
+                sample?.Dispose();
+            }
+
+            DrumSfxSamples = new DrumSampleChannel[AudioHelpers.DrumSamples.Count];
         }
 
         private void LoadVox()
@@ -612,6 +625,7 @@ namespace YARG.Audio.BASS
 
         protected override void DisposeUnmanagedResources()
         {
+            _sfxMixer.Dispose();
             YargLogger.LogInfo("Unloading BASS plugins");
             Bass.PluginFree(0);
             Bass.Free();
