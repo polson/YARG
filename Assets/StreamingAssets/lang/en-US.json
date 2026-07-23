@@ -1557,6 +1557,10 @@
                 "Name": "Use Venue SFX",
                 "Description": "If enabled, venues will be allowed to play custom sound effects."
             },
+            "UseSingleMixer": {
+                "Name": "Use Single Mixer",
+                "Description": "Experimental. Routes song audio and sound effects through one output mixer. All audio shares the configured playback buffer, which may add noticeable sound-effect latency. Restart required."
+            },
             "UseWhammyFx": {
                 "Name": "Use Whammy SFX",
                 "Description": "If enabled, it will add pitch bending to guitar stems when the player presses the whammy bar.\nWARNING: This setting is known to cause audio desync issues on some machines."

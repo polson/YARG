@@ -257,6 +257,7 @@ namespace YARG.Settings
                 new HeaderMetadata("Accessibility"),
                 nameof(Settings.FontScaling),
                 new HeaderMetadata("OutputConfiguration"),
+                nameof(Settings.UseSingleMixer),
                 nameof(Settings.OutputDevice),
                 nameof(Settings.OutputChannelDefault),
                 nameof(Settings.OutputChannelDrumSfx),
