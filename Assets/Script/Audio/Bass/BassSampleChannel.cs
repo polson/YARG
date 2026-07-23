@@ -10,7 +10,7 @@ namespace YARG.Audio.BASS
     {
 #nullable enable
         internal static BassSampleChannel? Create(SfxSample sample, string path, int playbackCount,
-            BassSfxMixer mixer, OutputChannel? outputChannel, bool loop = false)
+            BassAudioOutput output, OutputChannel? outputChannel, bool loop = false)
 #nullable disable
         {
             int handle = Bass.SampleLoad(path, 0, 0, playbackCount, BassFlags.Default);
@@ -20,7 +20,7 @@ namespace YARG.Audio.BASS
                 return null;
             }
 
-            return new BassSampleChannel(handle, sample, path, playbackCount, mixer, outputChannel, loop);
+            return new BassSampleChannel(handle, sample, path, playbackCount, output, outputChannel, loop);
         }
 
         private readonly int _sfxHandle;
@@ -32,13 +32,13 @@ namespace YARG.Audio.BASS
 
 #nullable enable
         private BassSampleChannel(int handle, SfxSample sample, string path, int playbackCount,
-            BassSfxMixer mixer, OutputChannel? outputChannel, bool canLoop)
+            BassAudioOutput output, OutputChannel? outputChannel, bool canLoop)
             : base(sample, path, playbackCount)
 #nullable disable
         {
             _sfxHandle = handle;
             _canLoop = canLoop;
-            _samplePlayer = new BassSamplePlayer(mixer, handle, playbackCount, sample.ToString(), OnPlaybackEnded);
+            _samplePlayer = new BassSamplePlayer(output, handle, playbackCount, sample.ToString(), OnPlaybackEnded);
             SetOutputChannel_Internal(outputChannel);
             SetVolume_Internal(GlobalAudioHandler.GetTrueVolume(SongStem.Sfx));
         }

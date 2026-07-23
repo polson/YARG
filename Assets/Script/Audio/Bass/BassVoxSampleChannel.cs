@@ -22,7 +22,7 @@ namespace YARG.Audio.BASS
         private double _volumeSetting = 1;
         private bool _disposed;
 
-        internal static BassVoxSampleChannel? Create(VoxSample sample, string path, BassSfxMixer mixer,
+        internal static BassVoxSampleChannel? Create(VoxSample sample, string path, BassAudioOutput output,
             OutputChannel? outputChannel)
         {
             int handle = Bass.SampleLoad(path, 0, 0, 2, BassFlags.Default);
@@ -32,15 +32,15 @@ namespace YARG.Audio.BASS
                 return null;
             }
 
-            return new BassVoxSampleChannel(handle, sample, path, mixer, outputChannel);
+            return new BassVoxSampleChannel(handle, sample, path, output, outputChannel);
         }
 
-        private BassVoxSampleChannel(int handle, VoxSample sample, string path, BassSfxMixer mixer,
+        private BassVoxSampleChannel(int handle, VoxSample sample, string path, BassAudioOutput output,
             OutputChannel? outputChannel)
             : base(sample, path)
         {
             _sampleHandle = handle;
-            _samplePlayer = new BassSamplePlayer(mixer, handle, 1, sample.ToString(), OnPlaybackEnded);
+            _samplePlayer = new BassSamplePlayer(output, handle, 1, sample.ToString(), OnPlaybackEnded);
             SetOutputChannel_Internal(outputChannel);
             SetVolume_Internal(GlobalAudioHandler.GetTrueVolume(SongStem.VoxSample));
         }

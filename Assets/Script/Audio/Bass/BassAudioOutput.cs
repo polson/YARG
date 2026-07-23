@@ -10,9 +10,9 @@ using YARG.Core.Logging;
 namespace YARG.Audio.BASS
 {
     /// <summary>
-    /// Owns the device-facing mixer used by sample voices.
+    /// Owns sample routing for current audio output topology.
     /// </summary>
-    internal sealed class BassSfxMixer : IDisposable
+    internal sealed class BassAudioOutput : IDisposable
     {
         private const int IDLE_TIMEOUT_MILLISECONDS = 10_000;
 
@@ -24,12 +24,12 @@ namespace YARG.Audio.BASS
         private int _deviceId = -1;
         private bool _disposed;
 
-        public BassSfxMixer()
+        public BassAudioOutput()
         {
             _idleTimer = new System.Threading.Timer(OnIdleTimer, null, Timeout.Infinite, Timeout.Infinite);
         }
 
-        public bool Play(int sourceHandle, OutputChannel? outputChannel)
+        public bool PlaySample(int sourceHandle, OutputChannel? outputChannel)
         {
             lock (_lock)
             {
@@ -58,7 +58,7 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public void Remove(int sourceHandle)
+        public void RemoveSample(int sourceHandle)
         {
             lock (_lock)
             {
@@ -80,7 +80,7 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public void SetOutputChannel(int sourceHandle, OutputChannel? outputChannel)
+        public void SetSampleOutputChannel(int sourceHandle, OutputChannel? outputChannel)
         {
             lock (_lock)
             {
@@ -94,7 +94,7 @@ namespace YARG.Audio.BASS
         /// <summary>
         /// Releases resources belonging to the current output device while allowing later reuse.
         /// </summary>
-        public void Reset()
+        public void ResetForDeviceChange()
         {
             lock (_lock)
             {

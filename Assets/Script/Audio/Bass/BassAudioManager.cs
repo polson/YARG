@@ -96,7 +96,7 @@ namespace YARG.Audio.BASS
 
         private readonly int _opusHandle = 0;
         private BassOutputDevice _currentDevice;
-        private readonly BassSfxMixer _sfxMixer = new();
+        private readonly BassAudioOutput _audioOutput = new();
 
         public BassAudioManager()
         {
@@ -237,7 +237,7 @@ namespace YARG.Audio.BASS
                 UnloadDrumSfx();
                 UnloadVox();
                 UnloadVenueSamples();
-                _sfxMixer.Reset();
+                _audioOutput.ResetForDeviceChange();
             }
 
             _currentDevice?.Dispose();
@@ -450,7 +450,7 @@ namespace YARG.Audio.BASS
                     if (File.Exists(sfxPath))
                     {
                         var sfxSample = sample.Kind;
-                        var sfx = BassSampleChannel.Create(sfxSample, sfxPath, 8, _sfxMixer,
+                        var sfx = BassSampleChannel.Create(sfxSample, sfxPath, 8, _audioOutput,
                             CreateOutputChannel(SettingsManager.Settings?.OutputChannelSfx.Value ?? 0), sample.CanLoop);
                         if (sfx != null)
                         {
@@ -494,7 +494,7 @@ namespace YARG.Audio.BASS
                     if (File.Exists(sfxPath))
                     {
                         var sfxSample = sample.Kind;
-                        var sfx = BassDrumSampleChannel.Create(sfxSample, sfxPath, 8, _sfxMixer,
+                        var sfx = BassDrumSampleChannel.Create(sfxSample, sfxPath, 8, _audioOutput,
                             CreateOutputChannel(SettingsManager.Settings?.OutputChannelDrumSfx.Value ?? 0));
                         if (sfx != null)
                         {
@@ -537,7 +537,7 @@ namespace YARG.Audio.BASS
                     if (File.Exists(voxPath))
                     {
                         var voxSample = sample.Kind;
-                        var vox = BassVoxSampleChannel.Create(voxSample, voxPath, _sfxMixer,
+                        var vox = BassVoxSampleChannel.Create(voxSample, voxPath, _audioOutput,
                             CreateOutputChannel(SettingsManager.Settings?.OutputChannelVox.Value ?? 0));
 
                         if (vox != null)
@@ -625,7 +625,7 @@ namespace YARG.Audio.BASS
                 existing.Dispose();
             }
 
-            VenueSamples[name] = BassVenueSampleChannel.Create(name, sampleData, _sfxMixer, outputChannel);
+            VenueSamples[name] = BassVenueSampleChannel.Create(name, sampleData, _audioOutput, outputChannel);
         }
 
         public override void ClearVenueSamples()
@@ -663,7 +663,7 @@ namespace YARG.Audio.BASS
 
         protected override void DisposeUnmanagedResources()
         {
-            _sfxMixer.Dispose();
+            _audioOutput.Dispose();
             YargLogger.LogInfo("Unloading BASS plugins");
             Bass.PluginFree(0);
             Bass.Free();

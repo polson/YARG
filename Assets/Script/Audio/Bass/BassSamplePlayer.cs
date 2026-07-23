@@ -9,7 +9,7 @@ using YARG.Core.Logging;
 namespace YARG.Audio.BASS
 {
     /// <summary>
-    /// Reuses sample decode streams and routes active voices through the SFX mixer.
+    /// Reuses sample decode streams and routes active voices through configured audio output.
     /// </summary>
     internal sealed class BassSamplePlayer : IDisposable
     {
@@ -32,7 +32,7 @@ namespace YARG.Audio.BASS
         }
 
         private readonly object _lock = new();
-        private readonly BassSfxMixer _mixer;
+        private readonly BassAudioOutput _output;
         private readonly int _sampleHandle;
         private readonly int _maxVoices;
         private readonly string _name;
@@ -66,10 +66,10 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public BassSamplePlayer(BassSfxMixer mixer, int sampleHandle, int maxVoices, string name,
+        public BassSamplePlayer(BassAudioOutput output, int sampleHandle, int maxVoices, string name,
             Action? playbackEnded = null)
         {
-            _mixer = mixer;
+            _output = output;
             _sampleHandle = sampleHandle;
             _maxVoices = maxVoices;
             _name = name;
@@ -107,7 +107,7 @@ namespace YARG.Audio.BASS
                     YargLogger.LogFormatError("Failed to set {0} sample volume: {1}!", _name, Bass.LastError);
                 }
 
-                if (!_mixer.Play(voice.Channel, _outputChannel))
+                if (!_output.PlaySample(voice.Channel, _outputChannel))
                 {
                     return false;
                 }
@@ -206,7 +206,7 @@ namespace YARG.Audio.BASS
                 {
                     if (Bass.ChannelIsActive(voice.Channel) != PlaybackState.Stopped)
                     {
-                        _mixer.SetOutputChannel(voice.Channel, outputChannel);
+                        _output.SetSampleOutputChannel(voice.Channel, outputChannel);
                     }
                 }
             }
@@ -310,7 +310,7 @@ namespace YARG.Audio.BASS
                 }
                 else
                 {
-                    _mixer.Remove(channel);
+                    _output.RemoveSample(channel);
                 }
                 playbackEnded = !HasVoiceInState(PlaybackState.Playing, PlaybackState.Stalled, PlaybackState.Paused);
             }
@@ -323,7 +323,7 @@ namespace YARG.Audio.BASS
 
         private void StopVoice(Voice voice)
         {
-            _mixer.Remove(voice.Channel);
+            _output.RemoveSample(voice.Channel);
             Bass.ChannelSetPosition(voice.Channel, 0, PositionFlags.Bytes);
         }
 
@@ -351,7 +351,7 @@ namespace YARG.Audio.BASS
                 _disposed = true;
                 foreach (var voice in _voices)
                 {
-                    _mixer.Remove(voice.Channel);
+                    _output.RemoveSample(voice.Channel);
                     if (!Bass.StreamFree(voice.Channel))
                     {
                         YargLogger.LogFormatError("Failed to free {0} sample voice: {1}!", _name, Bass.LastError);

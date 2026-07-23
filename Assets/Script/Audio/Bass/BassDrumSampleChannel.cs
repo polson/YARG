@@ -1,4 +1,4 @@
-﻿using ManagedBass;
+using ManagedBass;
 using YARG.Core.Audio;
 using YARG.Core.Logging;
 
@@ -8,7 +8,7 @@ namespace YARG.Audio.BASS
     {
 #nullable enable
         internal static BassDrumSampleChannel? Create(DrumSfxSample sample, string path, int playbackCount,
-            BassSfxMixer mixer, OutputChannel? outputChannel)
+            BassAudioOutput output, OutputChannel? outputChannel)
 #nullable disable
         {
             int handle = Bass.SampleLoad(path, 0, 0, playbackCount, BassFlags.Default);
@@ -18,7 +18,7 @@ namespace YARG.Audio.BASS
                 return null;
             }
 
-            return new BassDrumSampleChannel(handle, sample, path, playbackCount, mixer, outputChannel);
+            return new BassDrumSampleChannel(handle, sample, path, playbackCount, output, outputChannel);
         }
 
         private readonly int _sfxHandle;
@@ -26,12 +26,12 @@ namespace YARG.Audio.BASS
 
 #nullable enable
         private BassDrumSampleChannel(int handle, DrumSfxSample sample, string path, int playbackCount,
-            BassSfxMixer mixer, OutputChannel? outputChannel)
+            BassAudioOutput output, OutputChannel? outputChannel)
             : base(sample, path, playbackCount)
 #nullable disable
         {
             _sfxHandle = handle;
-            _samplePlayer = new BassSamplePlayer(mixer, handle, playbackCount, sample.ToString());
+            _samplePlayer = new BassSamplePlayer(output, handle, playbackCount, sample.ToString());
             SetOutputChannel_Internal(outputChannel);
         }
 

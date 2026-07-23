@@ -15,7 +15,7 @@ namespace YARG.Audio.BASS
         internal byte[] SampleData { get; }
         internal OutputChannel? OutputChannel { get; private set; }
 
-        internal static BassVenueSampleChannel? Create(string name, byte[] sampleData, BassSfxMixer mixer,
+        internal static BassVenueSampleChannel? Create(string name, byte[] sampleData, BassAudioOutput output,
             OutputChannel? outputChannel)
         {
             int handle = Bass.SampleLoad(sampleData, 0, sampleData.Length, 1, BassFlags.Default);
@@ -25,16 +25,16 @@ namespace YARG.Audio.BASS
                 return null;
             }
 
-            return new BassVenueSampleChannel(handle, name, sampleData, mixer, outputChannel);
+            return new BassVenueSampleChannel(handle, name, sampleData, output, outputChannel);
         }
 
-        private BassVenueSampleChannel(int handle, string name, byte[] sampleData, BassSfxMixer mixer,
+        private BassVenueSampleChannel(int handle, string name, byte[] sampleData, BassAudioOutput output,
             OutputChannel? outputChannel)
             : base(name, sampleData)
         {
             _sampleHandle = handle;
             SampleData = sampleData;
-            _samplePlayer = new BassSamplePlayer(mixer, handle, 1, name, OnPlaybackEnded);
+            _samplePlayer = new BassSamplePlayer(output, handle, 1, name, OnPlaybackEnded);
             SetOutputChannel_Internal(outputChannel);
             SetVolume_Internal(GlobalAudioHandler.GetTrueVolume(SongStem.VenueSample));
         }
