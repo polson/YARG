@@ -224,6 +224,7 @@ namespace YARG.Audio.BASS
                 _currentDevice.Use();
                 UnloadSfx();
                 UnloadDrumSfx();
+                UnloadVox();
                 _sfxMixer.Reset();
             }
 
@@ -507,14 +508,7 @@ namespace YARG.Audio.BASS
         {
             YargLogger.LogInfo("Loading VOX");
 
-#nullable enable
-            foreach (BassVoxSampleChannel? sample in VoxSamples)
-#nullable disable
-            {
-                sample?.Dispose();
-            }
-
-            VoxSamples = new VoxSampleChannel[AudioHelpers.VoxSamples.Count];
+            UnloadVox();
 
             string voxFolder = Path.Combine(Application.streamingAssetsPath, "vox");
 
@@ -527,7 +521,7 @@ namespace YARG.Audio.BASS
                     if (File.Exists(voxPath))
                     {
                         var voxSample = sample.Kind;
-                        var vox = BassVoxSampleChannel.Create(voxSample, voxPath,
+                        var vox = BassVoxSampleChannel.Create(voxSample, voxPath, _sfxMixer,
                             CreateOutputChannel(SettingsManager.Settings?.OutputChannelVox.Value ?? 0));
 
                         if (vox != null)
@@ -541,6 +535,18 @@ namespace YARG.Audio.BASS
             }
 
             YargLogger.LogInfo("Finished loading VOX");
+        }
+
+        private void UnloadVox()
+        {
+#nullable enable
+            foreach (BassVoxSampleChannel? sample in VoxSamples)
+#nullable disable
+            {
+                sample?.Dispose();
+            }
+
+            VoxSamples = new VoxSampleChannel[AudioHelpers.VoxSamples.Count];
         }
 
         private void LoadMetronome()
