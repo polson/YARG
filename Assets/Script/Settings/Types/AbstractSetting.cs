@@ -46,6 +46,8 @@ namespace YARG.Settings.Types
 
         public void SetValueWithoutNotify(T value) => SetValue(value);
 
+        void ISettingType.SetValueWithoutNotify(object value) => SetValueWithoutNotify((T) value);
+
         public void ForceInvokeCallback()
         {
             OnChange?.Invoke(Value);

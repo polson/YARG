@@ -76,6 +76,8 @@ namespace YARG
 
             // TODO: Actually respect the PersistentDataPath arg
 
+            SettingsManager.LoadSettings();
+
             // Initialize important classes
 
             ReplayContainer.Init();
@@ -103,7 +105,7 @@ namespace YARG
 
         private void Start()
         {
-            SettingsManager.LoadSettings();
+            SettingsManager.ApplySettings();
             InputManager.Initialize();
 
             LoadScene(SceneIndex.Menu);
