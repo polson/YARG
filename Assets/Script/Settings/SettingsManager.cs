@@ -25,6 +25,15 @@ namespace YARG.Settings
             }
         };
 
+        private sealed class StartupSettingValues
+        {
+            public bool UseSingleMixer { get; set; }
+        }
+
+        private static string _serializedSettings;
+
+        public static bool UseSingleMixerAtStartup { get; private set; }
+
         public static SettingContainer Settings { get; private set; }
 
         public static readonly List<Tab> DisplayedSettingsTabs = new()
@@ -274,12 +283,27 @@ namespace YARG.Settings
 
         private static string SettingsFile => Path.Combine(PathHelper.PersistentDataPath, "settings.json");
 
+        public static void LoadStartupSettings()
+        {
+            try
+            {
+                _serializedSettings = File.ReadAllText(SettingsFile);
+                var startupSettings = JsonConvert.DeserializeObject<StartupSettingValues>(_serializedSettings);
+                UseSingleMixerAtStartup = startupSettings?.UseSingleMixer ?? false;
+            }
+            catch
+            {
+                // Full settings load reports file and JSON errors during normal startup.
+                UseSingleMixerAtStartup = false;
+            }
+        }
+
         public static void LoadSettings()
         {
             // Create settings container
             try
             {
-                string text = File.ReadAllText(SettingsFile);
+                string text = _serializedSettings ?? File.ReadAllText(SettingsFile);
                 Settings = JsonConvert.DeserializeObject<SettingContainer>(text, JsonSettings);
             }
             catch (Exception e)

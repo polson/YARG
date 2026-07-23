@@ -101,8 +101,7 @@ namespace YARG.Audio.BASS
         public BassAudioManager()
         {
             YargLogger.LogInfo("Initializing BASS...");
-            _audioOutput = new BassAudioOutput(
-                SettingsManager.Settings?.UseSingleMixer.Value ?? false);
+            _audioOutput = new BassAudioOutput(SettingsManager.UseSingleMixerAtStartup);
             string bassPath = GetBassDirectory();
             string opusLibDirectory = Path.Combine(bassPath, "bassopus");
 

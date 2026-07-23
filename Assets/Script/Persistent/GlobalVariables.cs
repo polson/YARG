@@ -92,6 +92,7 @@ namespace YARG
             int savedCount = PlayerContainer.SaveProfiles(false);
             YargLogger.LogFormatInfo("Saved {0} profiles", savedCount);
 
+            SettingsManager.LoadStartupSettings();
             GlobalAudioHandler.Initialize<BassAudioManager>();
 
             Players = new List<YargPlayer>();

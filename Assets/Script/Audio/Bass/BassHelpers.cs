@@ -57,8 +57,13 @@ namespace YARG.Audio.BASS
 
         public static int ClampPlaybackBufferLength(int length)
         {
+            if (length <= 0)
+            {
+                return length;
+            }
+
             int minimumLength = GlobalAudioHandler.MinimumBufferLength;
-            if (length > 0 && minimumLength > 0 && length < minimumLength)
+            if (minimumLength > 0 && length < minimumLength)
             {
                 return minimumLength;
             }
