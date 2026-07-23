@@ -80,6 +80,17 @@ namespace YARG.Audio.BASS
             }
         }
 
+        public void SetOutputChannel(int sourceHandle, OutputChannel? outputChannel)
+        {
+            lock (_lock)
+            {
+                BassFlags flags = outputChannel is BassOutputChannel bassOutputChannel
+                    ? bassOutputChannel.Flags
+                    : BassFlags.Default;
+                BassMix.ChannelFlags(sourceHandle, flags, BassFlags.SpeakerFront);
+            }
+        }
+
         /// <summary>
         /// Releases resources belonging to the current output device while allowing later reuse.
         /// </summary>

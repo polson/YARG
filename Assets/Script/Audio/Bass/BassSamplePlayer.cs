@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using ManagedBass;
+using ManagedBass.Mix;
 using YARG.Core.Audio;
 using YARG.Core.Logging;
 
@@ -18,10 +19,15 @@ namespace YARG.Audio.BASS
         private sealed class Voice
         {
             public readonly int Channel;
+            public readonly SyncProcedure EndSync;
+            public readonly SyncProcedure FadeSync;
+            public bool FadingOut;
 
-            public Voice(int channel)
+            public Voice(int channel, SyncProcedure endSync, SyncProcedure fadeSync)
             {
                 Channel = channel;
+                EndSync = endSync;
+                FadeSync = fadeSync;
             }
         }
 
@@ -30,6 +36,7 @@ namespace YARG.Audio.BASS
         private readonly int _sampleHandle;
         private readonly int _maxVoices;
         private readonly string _name;
+        private readonly Action? _playbackEnded;
         private readonly List<Voice> _voices = new();
 
         private OutputChannel? _outputChannel;
@@ -37,41 +44,140 @@ namespace YARG.Audio.BASS
         private int _nextVoiceIndex;
         private bool _disposed;
 
-        public BassSamplePlayer(BassSfxMixer mixer, int sampleHandle, int maxVoices, string name)
+        public bool IsPlaying
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return HasVoiceInState(PlaybackState.Playing, PlaybackState.Stalled);
+                }
+            }
+        }
+
+        public bool IsPaused
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return HasVoiceInState(PlaybackState.Paused);
+                }
+            }
+        }
+
+        public BassSamplePlayer(BassSfxMixer mixer, int sampleHandle, int maxVoices, string name,
+            Action? playbackEnded = null)
         {
             _mixer = mixer;
             _sampleHandle = sampleHandle;
             _maxVoices = maxVoices;
             _name = name;
+            _playbackEnded = playbackEnded;
         }
 
-        public void Play()
+        public bool Play(bool loop = false, int fadeInMilliseconds = 0)
         {
             lock (_lock)
             {
                 if (_disposed)
                 {
-                    return;
+                    return false;
                 }
 
                 Voice? voice = GetAvailableVoice();
                 if (voice == null)
                 {
-                    return;
+                    return false;
                 }
 
                 if (!Bass.ChannelSetPosition(voice.Channel, 0, PositionFlags.Bytes))
                 {
                     YargLogger.LogFormatError("Failed to reset {0} sample voice: {1}!", _name, Bass.LastError);
-                    return;
+                    return false;
                 }
 
-                if (!Bass.ChannelSetAttribute(voice.Channel, ChannelAttribute.Volume, _volume))
+                SetLooping(voice.Channel, loop);
+                voice.FadingOut = false;
+                BassMix.ChannelFlags(voice.Channel, 0, BassFlags.MixerChanPause);
+
+                double initialVolume = fadeInMilliseconds > 0 ? 0 : _volume;
+                if (!Bass.ChannelSetAttribute(voice.Channel, ChannelAttribute.Volume, initialVolume))
                 {
                     YargLogger.LogFormatError("Failed to set {0} sample volume: {1}!", _name, Bass.LastError);
                 }
 
-                _mixer.Play(voice.Channel, _outputChannel);
+                if (!_mixer.Play(voice.Channel, _outputChannel))
+                {
+                    return false;
+                }
+
+                if (fadeInMilliseconds > 0 &&
+                    !Bass.ChannelSlideAttribute(voice.Channel, ChannelAttribute.Volume, (float) _volume,
+                        fadeInMilliseconds))
+                {
+                    YargLogger.LogFormatError("Failed to fade in {0}: {1}!", _name, Bass.LastError);
+                }
+
+                return true;
+            }
+        }
+
+        public void Stop(int fadeOutMilliseconds = 0)
+        {
+            lock (_lock)
+            {
+                foreach (var voice in _voices)
+                {
+                    PlaybackState state = Bass.ChannelIsActive(voice.Channel);
+                    if (state is not (PlaybackState.Playing or PlaybackState.Stalled or PlaybackState.Paused))
+                    {
+                        continue;
+                    }
+
+                    if (fadeOutMilliseconds > 0 && state != PlaybackState.Paused)
+                    {
+                        SetLooping(voice.Channel, false);
+                        voice.FadingOut = true;
+                        if (Bass.ChannelSlideAttribute(voice.Channel, ChannelAttribute.Volume, 0,
+                                fadeOutMilliseconds))
+                        {
+                            continue;
+                        }
+
+                        YargLogger.LogFormatError("Failed to fade out {0}: {1}!", _name, Bass.LastError);
+                    }
+
+                    StopVoice(voice);
+                }
+            }
+        }
+
+        public void Pause()
+        {
+            lock (_lock)
+            {
+                foreach (var voice in _voices)
+                {
+                    if (Bass.ChannelIsActive(voice.Channel) is PlaybackState.Playing or PlaybackState.Stalled)
+                    {
+                        BassMix.ChannelFlags(voice.Channel, BassFlags.MixerChanPause, BassFlags.MixerChanPause);
+                    }
+                }
+            }
+        }
+
+        public void Resume()
+        {
+            lock (_lock)
+            {
+                foreach (var voice in _voices)
+                {
+                    if (Bass.ChannelIsActive(voice.Channel) == PlaybackState.Paused)
+                    {
+                        BassMix.ChannelFlags(voice.Channel, 0, BassFlags.MixerChanPause);
+                    }
+                }
             }
         }
 
@@ -82,7 +188,7 @@ namespace YARG.Audio.BASS
                 _volume = volume;
                 foreach (var voice in _voices)
                 {
-                    if (Bass.ChannelIsActive(voice.Channel) == PlaybackState.Playing &&
+                    if (Bass.ChannelIsActive(voice.Channel) != PlaybackState.Stopped &&
                         !Bass.ChannelSetAttribute(voice.Channel, ChannelAttribute.Volume, volume))
                     {
                         YargLogger.LogFormatError("Failed to set {0} sample volume: {1}!", _name, Bass.LastError);
@@ -96,7 +202,30 @@ namespace YARG.Audio.BASS
             lock (_lock)
             {
                 _outputChannel = outputChannel;
+                foreach (var voice in _voices)
+                {
+                    if (Bass.ChannelIsActive(voice.Channel) != PlaybackState.Stopped)
+                    {
+                        _mixer.SetOutputChannel(voice.Channel, outputChannel);
+                    }
+                }
             }
+        }
+
+        private bool HasVoiceInState(params PlaybackState[] states)
+        {
+            foreach (var voice in _voices)
+            {
+                PlaybackState state = Bass.ChannelIsActive(voice.Channel);
+                foreach (var expected in states)
+                {
+                    if (state == expected)
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
 
         private Voice? GetAvailableVoice()
@@ -123,17 +252,91 @@ namespace YARG.Audio.BASS
 
         private Voice? CreateVoice()
         {
-            int channel = Bass.SampleGetChannel(_sampleHandle,
-                BassFlags.Decode | SAMPLE_CHANNEL_STREAM);
+            int channel = Bass.SampleGetChannel(_sampleHandle, BassFlags.Decode | SAMPLE_CHANNEL_STREAM);
             if (channel == 0)
             {
                 YargLogger.LogFormatError("Failed to create {0} sample voice: {1}!", _name, Bass.LastError);
                 return null;
             }
 
-            var voice = new Voice(channel);
+            Voice? voice = null;
+            SyncProcedure endSync = (_, _, _, _) => QueueVoiceCleanup(channel, false);
+            SyncProcedure fadeSync = (_, _, _, _) =>
+            {
+                if (voice!.FadingOut)
+                {
+                    QueueVoiceCleanup(channel, true);
+                }
+            };
+            voice = new Voice(channel, endSync, fadeSync);
+
+            if (Bass.ChannelSetSync(channel, SyncFlags.End, 0, endSync) == 0)
+            {
+                YargLogger.LogFormatError("Failed to set {0} end sync: {1}!", _name, Bass.LastError);
+            }
+            if (Bass.ChannelSetSync(channel, SyncFlags.Slided, 0, fadeSync) == 0)
+            {
+                YargLogger.LogFormatError("Failed to set {0} fade sync: {1}!", _name, Bass.LastError);
+            }
+
             _voices.Add(voice);
             return voice;
+        }
+
+        private void QueueVoiceCleanup(int channel, bool stop)
+        {
+            UnityMainThreadCallback.QueueEvent(() => CleanupVoice(channel, stop));
+        }
+
+        private void CleanupVoice(int channel, bool stop)
+        {
+            bool playbackEnded = false;
+            lock (_lock)
+            {
+                if (_disposed || (!stop && Bass.ChannelIsActive(channel) != PlaybackState.Stopped))
+                {
+                    return;
+                }
+
+                if (stop)
+                {
+                    Voice? voice = _voices.Find(candidate => candidate.Channel == channel);
+                    if (voice == null || !voice.FadingOut)
+                    {
+                        return;
+                    }
+                    voice.FadingOut = false;
+                    StopVoice(voice);
+                }
+                else
+                {
+                    _mixer.Remove(channel);
+                }
+                playbackEnded = !HasVoiceInState(PlaybackState.Playing, PlaybackState.Stalled, PlaybackState.Paused);
+            }
+
+            if (playbackEnded)
+            {
+                _playbackEnded?.Invoke();
+            }
+        }
+
+        private void StopVoice(Voice voice)
+        {
+            _mixer.Remove(voice.Channel);
+            Bass.ChannelSetPosition(voice.Channel, 0, PositionFlags.Bytes);
+        }
+
+        private static void SetLooping(int channel, bool loop)
+        {
+            if (loop)
+            {
+                Bass.ChannelAddFlag(channel, BassFlags.Loop);
+            }
+            else
+            {
+                Bass.ChannelRemoveFlag(channel, BassFlags.Loop);
+            }
         }
 
         public void Dispose()

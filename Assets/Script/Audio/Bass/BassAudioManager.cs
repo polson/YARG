@@ -222,6 +222,7 @@ namespace YARG.Audio.BASS
             if (_currentDevice != null)
             {
                 _currentDevice.Use();
+                UnloadSfx();
                 UnloadDrumSfx();
                 _sfxMixer.Reset();
             }
@@ -418,14 +419,7 @@ namespace YARG.Audio.BASS
         {
             YargLogger.LogInfo("Loading SFX");
 
-#nullable enable
-            foreach (BassSampleChannel? sample in SfxSamples)
-#nullable disable
-            {
-                sample?.Dispose();
-            }
-
-            SfxSamples = new SampleChannel[AudioHelpers.SfxSamples.Count];
+            UnloadSfx();
 
             string sfxFolder = Path.Combine(Application.streamingAssetsPath, "sfx");
 
@@ -439,7 +433,7 @@ namespace YARG.Audio.BASS
                     if (File.Exists(sfxPath))
                     {
                         var sfxSample = sample.Kind;
-                        var sfx = BassSampleChannel.Create(sfxSample, sfxPath, 8,
+                        var sfx = BassSampleChannel.Create(sfxSample, sfxPath, 8, _sfxMixer,
                             CreateOutputChannel(SettingsManager.Settings?.OutputChannelSfx.Value ?? 0), sample.CanLoop);
                         if (sfx != null)
                         {
@@ -452,6 +446,18 @@ namespace YARG.Audio.BASS
             }
 
             YargLogger.LogInfo("Finished loading SFX");
+        }
+
+        private void UnloadSfx()
+        {
+#nullable enable
+            foreach (BassSampleChannel? sample in SfxSamples)
+#nullable disable
+            {
+                sample?.Dispose();
+            }
+
+            SfxSamples = new SampleChannel[AudioHelpers.SfxSamples.Count];
         }
 
         private void LoadDrumSfx()
