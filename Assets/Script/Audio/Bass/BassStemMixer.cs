@@ -43,7 +43,8 @@ namespace YARG.Audio.BASS
         private const    float MAX_PLAYBACK_SPEED            = 51f;
 
         private static bool IsWhammyEnabled => SettingsManager.Settings.UseWhammyFx.Value;
-        private        bool IsPlaying       => Bass.ChannelIsActive(_outputMixerHandle) == PlaybackState.Playing;
+        private        bool IsPlaying       => Bass.ChannelIsActive(_outputMixerHandle) is
+            PlaybackState.Playing or PlaybackState.Stalled;
 
         private readonly int                         _mixerHandle;
         private readonly List<int>                   _sourceHandles = new();
