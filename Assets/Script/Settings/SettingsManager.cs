@@ -290,10 +290,8 @@ namespace YARG.Settings
             // If null, recreate
             Settings ??= new SettingContainer();
             SettingContainer.IsInitialized = true;
-        }
 
-        public static void ApplySettings()
-        {
+            // Now that we're done loading, call all of the callbacks
             var fields = typeof(SettingContainer).GetProperties();
             foreach (var field in fields)
             {

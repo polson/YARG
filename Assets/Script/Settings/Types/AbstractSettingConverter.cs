@@ -20,7 +20,7 @@ namespace YARG.Settings.Types
             try
             {
                 var value = serializer.Deserialize(reader, existingValue.ValueType);
-                existingValue.SetValueWithoutNotify(value);
+                existingValue.ValueAsObject = value;
             }
             catch (Exception e)
             {

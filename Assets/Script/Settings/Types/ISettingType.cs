@@ -9,7 +9,6 @@ namespace YARG.Settings.Types
 
         public string AddressableName { get; }
 
-        public void SetValueWithoutNotify(object value);
         public void ForceInvokeCallback();
         public bool ValueEquals(object obj);
     }
