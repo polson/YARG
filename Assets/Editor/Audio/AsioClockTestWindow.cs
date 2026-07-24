@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Text;
 using System.Threading;
 using ManagedBass.Asio;
 using UnityEditor;
@@ -52,6 +53,29 @@ namespace YARG.Editor
         private double _meanCallbackInterval;
         private double _callbackIntervalVariance;
         private double _maximumIntervalDeviation;
+        private double _minimumCallbackInterval;
+        private double _maximumCallbackInterval;
+        private double _expectedIntervalTotal;
+        private double _intervalErrorTotal;
+        private double _intervalErrorSquaredTotal;
+        private double _minimumIntervalError;
+        private double _maximumIntervalError;
+        private double _previousIntervalError;
+        private double _lagPreviousTotal;
+        private double _lagCurrentTotal;
+        private double _lagPreviousSquaredTotal;
+        private double _lagCurrentSquaredTotal;
+        private double _lagProductTotal;
+        private double _pendingPairError;
+        private double _pairErrorSquaredTotal;
+        private long _lagSampleCount;
+        private long _pairSampleCount;
+        private long _veryShortIntervalCount;
+        private long _shortIntervalCount;
+        private long _expectedIntervalCount;
+        private long _longIntervalCount;
+        private long _veryLongIntervalCount;
+        private long _extremeIntervalCount;
         private double _asioCpuUsage;
         private double _maximumAsioCpuUsage;
         private double _lastGraphMeasurementTime = -1;
@@ -182,6 +206,19 @@ namespace YARG.Editor
                 : 0;
             double maximumIntervalDeviationMilliseconds =
                 measurement.MaximumIntervalDeviation * 1000;
+            double expectedIntervalMilliseconds = measurement.IntervalCount > 0
+                ? measurement.ExpectedIntervalTotal / measurement.IntervalCount * 1000
+                : 0;
+            double schedulingErrorJitterMilliseconds = StandardDeviation(
+                measurement.IntervalErrorTotal, measurement.IntervalErrorSquaredTotal,
+                measurement.IntervalCount) * 1000;
+            double pairErrorRmsMilliseconds = measurement.PairSampleCount > 0
+                ? Math.Sqrt(measurement.PairErrorSquaredTotal / measurement.PairSampleCount) * 1000
+                : 0;
+            double adjacentErrorCorrelation = Correlation(
+                measurement.LagPreviousTotal, measurement.LagCurrentTotal,
+                measurement.LagPreviousSquaredTotal, measurement.LagCurrentSquaredTotal,
+                measurement.LagProductTotal, measurement.LagSampleCount);
 
             EditorGUILayout.LabelField("Status", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(_status, _status.StartsWith("Error:")
@@ -203,12 +240,39 @@ namespace YARG.Editor
                 EditorGUILayout.DoubleField("Expected drift (ms/min)", driftPpm * 0.06);
                 EditorGUILayout.DoubleField("Endpoint drift (ms)", endpointDriftMilliseconds);
                 EditorGUILayout.DoubleField("Mean callback interval (ms)", intervalMilliseconds);
+                EditorGUILayout.DoubleField("Expected callback interval (ms)",
+                    expectedIntervalMilliseconds);
                 EditorGUILayout.DoubleField("Callback interval jitter (ms)",
                     intervalJitterMilliseconds);
+                EditorGUILayout.DoubleField("Scheduling error jitter (ms)",
+                    schedulingErrorJitterMilliseconds);
+                EditorGUILayout.TextField("Callback interval range (ms)",
+                    $"{measurement.MinimumCallbackInterval * 1000:F3} - " +
+                    $"{measurement.MaximumCallbackInterval * 1000:F3}");
+                EditorGUILayout.TextField("Scheduling error range (ms)",
+                    $"{measurement.MinimumIntervalError * 1000:F3} - " +
+                    $"{measurement.MaximumIntervalError * 1000:F3}");
+                EditorGUILayout.DoubleField("Adjacent error correlation",
+                    adjacentErrorCorrelation);
+                EditorGUILayout.DoubleField("Two-callback error RMS (ms)",
+                    pairErrorRmsMilliseconds);
+                EditorGUILayout.TextField("Interval distribution",
+                    $"<0.25x {measurement.VeryShortIntervalCount}, " +
+                    $"0.25-0.75x {measurement.ShortIntervalCount}, " +
+                    $"0.75-1.25x {measurement.ExpectedIntervalCount}, " +
+                    $"1.25-1.75x {measurement.LongIntervalCount}, " +
+                    $"1.75-2.5x {measurement.VeryLongIntervalCount}, " +
+                    $">=2.5x {measurement.ExtremeIntervalCount}");
                 EditorGUILayout.DoubleField("Maximum interval deviation (ms)",
                     maximumIntervalDeviationMilliseconds);
                 EditorGUILayout.DoubleField("ASIO CPU usage (%)", _asioCpuUsage);
                 EditorGUILayout.DoubleField("Maximum ASIO CPU usage (%)", _maximumAsioCpuUsage);
+            }
+
+            if (GUILayout.Button("Copy Results"))
+            {
+                EditorGUIUtility.systemCopyBuffer = FormatResults(measurement);
+                ShowNotification(new GUIContent("ASIO clock results copied."));
             }
 
             DrawDriftGraph();
@@ -216,8 +280,79 @@ namespace YARG.Editor
             EditorGUILayout.HelpBox(
                 "Run for at least 1-5 minutes. Similar ppm at multiple buffer sizes indicates real " +
                 "ASIO hardware/QPC clock mismatch. Buffer-dependent ppm indicates callback timing or " +
-                "frame-counting error. Interval jitter measures callback scheduling noise, not clock drift.",
+                "frame-counting error. Scheduling error removes expected changes caused by varying callback " +
+                "frame counts. Correlation near -1 with low two-callback error indicates delayed callbacks " +
+                "are followed by catch-up callbacks (batching).",
                 MessageType.Info);
+        }
+
+        private string FormatResults(MeasurementSnapshot measurement)
+        {
+            double effectiveRate = measurement.TimeVariance > 0
+                ? measurement.TimeFrameCovariance / measurement.TimeVariance
+                : 0;
+            double driftPpm = effectiveRate > 0
+                ? (effectiveRate / _sampleRate - 1) * 1_000_000
+                : 0;
+            double endpointDriftMilliseconds = measurement.Started
+                ? ((measurement.LatestFrame / (double) _sampleRate) - measurement.LatestTime) * 1000
+                : 0;
+            double intervalJitterMilliseconds = measurement.IntervalCount > 1
+                ? Math.Sqrt(measurement.CallbackIntervalVariance /
+                    (measurement.IntervalCount - 1)) * 1000
+                : 0;
+            double expectedIntervalMilliseconds = measurement.IntervalCount > 0
+                ? measurement.ExpectedIntervalTotal / measurement.IntervalCount * 1000
+                : 0;
+            double schedulingErrorJitterMilliseconds = StandardDeviation(
+                measurement.IntervalErrorTotal, measurement.IntervalErrorSquaredTotal,
+                measurement.IntervalCount) * 1000;
+            double pairErrorRmsMilliseconds = measurement.PairSampleCount > 0
+                ? Math.Sqrt(measurement.PairErrorSquaredTotal / measurement.PairSampleCount) * 1000
+                : 0;
+            double adjacentErrorCorrelation = Correlation(
+                measurement.LagPreviousTotal, measurement.LagCurrentTotal,
+                measurement.LagPreviousSquaredTotal, measurement.LagCurrentSquaredTotal,
+                measurement.LagProductTotal, measurement.LagSampleCount);
+            string deviceName = _device >= 0 && _device < _deviceNames.Length
+                ? _deviceNames[_device]
+                : "Unknown";
+
+            var results = new StringBuilder();
+            results.AppendLine("ASIO Clock Test Results");
+            results.AppendLine($"Device: {deviceName}");
+            results.AppendLine($"Dedicated driver host thread: {_useDedicatedDriverThread}");
+            results.AppendLine($"Requested buffer samples: {_bufferLength}");
+            results.AppendLine($"Measurement time (s): {measurement.LatestTime:F6}");
+            results.AppendLine($"Callbacks: {measurement.CallbackCount}");
+            results.AppendLine($"Measured callbacks: {measurement.MeasurementCount}");
+            results.AppendLine($"Total frames: {measurement.TotalFrames}");
+            results.AppendLine($"Latest callback frames: {measurement.LastFrameCount}");
+            results.AppendLine($"Callback frame range: {measurement.MinimumFrameCount} - {measurement.MaximumFrameCount}");
+            results.AppendLine($"Configured rate (Hz): {_sampleRate}");
+            results.AppendLine($"Measured rate (Hz): {effectiveRate:F6}");
+            results.AppendLine($"Rate difference (ppm): {driftPpm:F6}");
+            results.AppendLine($"Expected drift (ms/min): {driftPpm * 0.06:F6}");
+            results.AppendLine($"Endpoint drift (ms): {endpointDriftMilliseconds:F6}");
+            results.AppendLine($"Mean callback interval (ms): {measurement.MeanCallbackInterval * 1000:F6}");
+            results.AppendLine($"Expected callback interval (ms): {expectedIntervalMilliseconds:F6}");
+            results.AppendLine($"Callback interval jitter (ms): {intervalJitterMilliseconds:F6}");
+            results.AppendLine($"Scheduling error jitter (ms): {schedulingErrorJitterMilliseconds:F6}");
+            results.AppendLine($"Callback interval range (ms): {measurement.MinimumCallbackInterval * 1000:F6} - {measurement.MaximumCallbackInterval * 1000:F6}");
+            results.AppendLine($"Scheduling error range (ms): {measurement.MinimumIntervalError * 1000:F6} - {measurement.MaximumIntervalError * 1000:F6}");
+            results.AppendLine($"Adjacent error correlation: {adjacentErrorCorrelation:F6}");
+            results.AppendLine($"Two-callback error RMS (ms): {pairErrorRmsMilliseconds:F6}");
+            results.AppendLine("Interval distribution: " +
+                $"<0.25x {measurement.VeryShortIntervalCount}, " +
+                $"0.25-0.75x {measurement.ShortIntervalCount}, " +
+                $"0.75-1.25x {measurement.ExpectedIntervalCount}, " +
+                $"1.25-1.75x {measurement.LongIntervalCount}, " +
+                $"1.75-2.5x {measurement.VeryLongIntervalCount}, " +
+                $">=2.5x {measurement.ExtremeIntervalCount}");
+            results.AppendLine($"Maximum interval deviation (ms): {measurement.MaximumIntervalDeviation * 1000:F6}");
+            results.AppendLine($"ASIO CPU usage (%): {_asioCpuUsage:F6}");
+            results.AppendLine($"Maximum ASIO CPU usage (%): {_maximumAsioCpuUsage:F6}");
+            return results.ToString();
         }
 
         private void DrawDriftGraph()
@@ -427,6 +562,7 @@ namespace YARG.Editor
                     _runStartedTimestamp = timestamp;
                 }
 
+                long previousFrameCount = _lastFrameCount;
                 long blockStartFrame = _totalFrames;
                 _totalFrames += frameCount;
                 _callbackCount++;
@@ -457,7 +593,8 @@ namespace YARG.Editor
                 {
                     double interval = (double) (timestamp - _lastCallbackTimestamp) /
                         Stopwatch.Frequency;
-                    AddIntervalSample(interval);
+                    double expectedInterval = previousFrameCount / (double) _sampleRate;
+                    AddIntervalSample(interval, expectedInterval);
                 }
 
                 _lastCallbackTimestamp = timestamp;
@@ -484,7 +621,7 @@ namespace YARG.Editor
             _timeFrameCovariance += timeDelta * (frame - _meanFrame);
         }
 
-        private void AddIntervalSample(double interval)
+        private void AddIntervalSample(double interval, double expectedInterval)
         {
             _intervalCount++;
             double delta = interval - _meanCallbackInterval;
@@ -492,6 +629,75 @@ namespace YARG.Editor
             _callbackIntervalVariance += delta * (interval - _meanCallbackInterval);
             _maximumIntervalDeviation = Math.Max(_maximumIntervalDeviation,
                 Math.Abs(interval - _meanCallbackInterval));
+
+            _minimumCallbackInterval = Math.Min(_minimumCallbackInterval, interval);
+            _maximumCallbackInterval = Math.Max(_maximumCallbackInterval, interval);
+            _expectedIntervalTotal += expectedInterval;
+
+            double error = interval - expectedInterval;
+            _intervalErrorTotal += error;
+            _intervalErrorSquaredTotal += error * error;
+            _minimumIntervalError = Math.Min(_minimumIntervalError, error);
+            _maximumIntervalError = Math.Max(_maximumIntervalError, error);
+
+            if (_intervalCount > 1)
+            {
+                _lagSampleCount++;
+                _lagPreviousTotal += _previousIntervalError;
+                _lagCurrentTotal += error;
+                _lagPreviousSquaredTotal += _previousIntervalError * _previousIntervalError;
+                _lagCurrentSquaredTotal += error * error;
+                _lagProductTotal += _previousIntervalError * error;
+            }
+            _previousIntervalError = error;
+
+            if ((_intervalCount & 1) != 0)
+            {
+                _pendingPairError = error;
+            }
+            else
+            {
+                double pairError = _pendingPairError + error;
+                _pairErrorSquaredTotal += pairError * pairError;
+                _pairSampleCount++;
+            }
+
+            double intervalRatio = expectedInterval > 0 ? interval / expectedInterval : 1;
+            if (intervalRatio < 0.25)
+                _veryShortIntervalCount++;
+            else if (intervalRatio < 0.75)
+                _shortIntervalCount++;
+            else if (intervalRatio < 1.25)
+                _expectedIntervalCount++;
+            else if (intervalRatio < 1.75)
+                _longIntervalCount++;
+            else if (intervalRatio < 2.5)
+                _veryLongIntervalCount++;
+            else
+                _extremeIntervalCount++;
+        }
+
+        private static double StandardDeviation(double total, double squaredTotal, long count)
+        {
+            if (count < 2)
+                return 0;
+
+            double variance = (squaredTotal - total * total / count) / (count - 1);
+            return Math.Sqrt(Math.Max(0, variance));
+        }
+
+        private static double Correlation(double xTotal, double yTotal, double xSquaredTotal,
+            double ySquaredTotal, double productTotal, long count)
+        {
+            if (count < 2)
+                return 0;
+
+            double xVariance = xSquaredTotal - xTotal * xTotal / count;
+            double yVariance = ySquaredTotal - yTotal * yTotal / count;
+            double denominator = Math.Sqrt(Math.Max(0, xVariance * yVariance));
+            return denominator > 0
+                ? (productTotal - xTotal * yTotal / count) / denominator
+                : 0;
         }
 
         private void ResetMeasurement()
@@ -534,6 +740,29 @@ namespace YARG.Editor
             _meanCallbackInterval = 0;
             _callbackIntervalVariance = 0;
             _maximumIntervalDeviation = 0;
+            _minimumCallbackInterval = double.MaxValue;
+            _maximumCallbackInterval = 0;
+            _expectedIntervalTotal = 0;
+            _intervalErrorTotal = 0;
+            _intervalErrorSquaredTotal = 0;
+            _minimumIntervalError = double.MaxValue;
+            _maximumIntervalError = double.MinValue;
+            _previousIntervalError = 0;
+            _lagPreviousTotal = 0;
+            _lagCurrentTotal = 0;
+            _lagPreviousSquaredTotal = 0;
+            _lagCurrentSquaredTotal = 0;
+            _lagProductTotal = 0;
+            _pendingPairError = 0;
+            _pairErrorSquaredTotal = 0;
+            _lagSampleCount = 0;
+            _pairSampleCount = 0;
+            _veryShortIntervalCount = 0;
+            _shortIntervalCount = 0;
+            _expectedIntervalCount = 0;
+            _longIntervalCount = 0;
+            _veryLongIntervalCount = 0;
+            _extremeIntervalCount = 0;
         }
 
         private void StopTest()
@@ -620,7 +849,28 @@ namespace YARG.Editor
                     _intervalCount,
                     _meanCallbackInterval,
                     _callbackIntervalVariance,
-                    _maximumIntervalDeviation);
+                    _maximumIntervalDeviation,
+                    _minimumCallbackInterval == double.MaxValue ? 0 : _minimumCallbackInterval,
+                    _maximumCallbackInterval,
+                    _expectedIntervalTotal,
+                    _intervalErrorTotal,
+                    _intervalErrorSquaredTotal,
+                    _minimumIntervalError == double.MaxValue ? 0 : _minimumIntervalError,
+                    _maximumIntervalError == double.MinValue ? 0 : _maximumIntervalError,
+                    _lagPreviousTotal,
+                    _lagCurrentTotal,
+                    _lagPreviousSquaredTotal,
+                    _lagCurrentSquaredTotal,
+                    _lagProductTotal,
+                    _pairErrorSquaredTotal,
+                    _lagSampleCount,
+                    _pairSampleCount,
+                    _veryShortIntervalCount,
+                    _shortIntervalCount,
+                    _expectedIntervalCount,
+                    _longIntervalCount,
+                    _veryLongIntervalCount,
+                    _extremeIntervalCount);
 
                 if (versionBefore == Volatile.Read(ref _measurementVersion))
                 {
@@ -648,12 +898,42 @@ namespace YARG.Editor
             public readonly double MeanCallbackInterval;
             public readonly double CallbackIntervalVariance;
             public readonly double MaximumIntervalDeviation;
+            public readonly double MinimumCallbackInterval;
+            public readonly double MaximumCallbackInterval;
+            public readonly double ExpectedIntervalTotal;
+            public readonly double IntervalErrorTotal;
+            public readonly double IntervalErrorSquaredTotal;
+            public readonly double MinimumIntervalError;
+            public readonly double MaximumIntervalError;
+            public readonly double LagPreviousTotal;
+            public readonly double LagCurrentTotal;
+            public readonly double LagPreviousSquaredTotal;
+            public readonly double LagCurrentSquaredTotal;
+            public readonly double LagProductTotal;
+            public readonly double PairErrorSquaredTotal;
+            public readonly long LagSampleCount;
+            public readonly long PairSampleCount;
+            public readonly long VeryShortIntervalCount;
+            public readonly long ShortIntervalCount;
+            public readonly long ExpectedIntervalCount;
+            public readonly long LongIntervalCount;
+            public readonly long VeryLongIntervalCount;
+            public readonly long ExtremeIntervalCount;
 
             public MeasurementSnapshot(bool started, double latestTime, long latestFrame,
                 long callbackCount, long measurementCount, long totalFrames, long lastFrameCount,
                 long minimumFrameCount, long maximumFrameCount, double timeVariance,
                 double timeFrameCovariance, long intervalCount, double meanCallbackInterval,
-                double callbackIntervalVariance, double maximumIntervalDeviation)
+                double callbackIntervalVariance, double maximumIntervalDeviation,
+                double minimumCallbackInterval, double maximumCallbackInterval,
+                double expectedIntervalTotal, double intervalErrorTotal,
+                double intervalErrorSquaredTotal, double minimumIntervalError,
+                double maximumIntervalError, double lagPreviousTotal, double lagCurrentTotal,
+                double lagPreviousSquaredTotal, double lagCurrentSquaredTotal,
+                double lagProductTotal, double pairErrorSquaredTotal, long lagSampleCount,
+                long pairSampleCount, long veryShortIntervalCount, long shortIntervalCount,
+                long expectedIntervalCount, long longIntervalCount, long veryLongIntervalCount,
+                long extremeIntervalCount)
             {
                 Started = started;
                 LatestTime = latestTime;
@@ -670,6 +950,27 @@ namespace YARG.Editor
                 MeanCallbackInterval = meanCallbackInterval;
                 CallbackIntervalVariance = callbackIntervalVariance;
                 MaximumIntervalDeviation = maximumIntervalDeviation;
+                MinimumCallbackInterval = minimumCallbackInterval;
+                MaximumCallbackInterval = maximumCallbackInterval;
+                ExpectedIntervalTotal = expectedIntervalTotal;
+                IntervalErrorTotal = intervalErrorTotal;
+                IntervalErrorSquaredTotal = intervalErrorSquaredTotal;
+                MinimumIntervalError = minimumIntervalError;
+                MaximumIntervalError = maximumIntervalError;
+                LagPreviousTotal = lagPreviousTotal;
+                LagCurrentTotal = lagCurrentTotal;
+                LagPreviousSquaredTotal = lagPreviousSquaredTotal;
+                LagCurrentSquaredTotal = lagCurrentSquaredTotal;
+                LagProductTotal = lagProductTotal;
+                PairErrorSquaredTotal = pairErrorSquaredTotal;
+                LagSampleCount = lagSampleCount;
+                PairSampleCount = pairSampleCount;
+                VeryShortIntervalCount = veryShortIntervalCount;
+                ShortIntervalCount = shortIntervalCount;
+                ExpectedIntervalCount = expectedIntervalCount;
+                LongIntervalCount = longIntervalCount;
+                VeryLongIntervalCount = veryLongIntervalCount;
+                ExtremeIntervalCount = extremeIntervalCount;
             }
         }
 
