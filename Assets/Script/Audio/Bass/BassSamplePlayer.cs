@@ -92,6 +92,9 @@ namespace YARG.Audio.BASS
                     return false;
                 }
 
+                // A stopped voice may still be registered as a mixer source until its queued
+                // end cleanup runs. Detach it before rewinding so mixer decoding cannot race the seek.
+                _output.RemoveSample(voice.Channel);
                 if (!Bass.ChannelSetPosition(voice.Channel, 0, PositionFlags.Bytes))
                 {
                     YargLogger.LogFormatError("Failed to reset {0} sample voice: {1}!", _name, Bass.LastError);
@@ -101,7 +104,6 @@ namespace YARG.Audio.BASS
                 SetLooping(voice.Channel, loop);
                 voice.FadingOut = false;
                 voice.Paused = false;
-                BassMix.ChannelFlags(voice.Channel, 0, BassFlags.MixerChanPause);
 
                 double initialVolume = fadeInMilliseconds > 0 ? 0 : _volume;
                 if (!Bass.ChannelSetAttribute(voice.Channel, ChannelAttribute.Volume, initialVolume))

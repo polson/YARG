@@ -17,11 +17,13 @@ namespace YARG.Audio.BASS
         private const double CLOCK_SMOOTHING_SECONDS = 1.0;
 
         private readonly int _bufferLength;
+        // Never call BASS while holding this lock. Its native mutex is also used by the ASIO thread.
         private readonly object _positionLock = new();
         private readonly PositionDiagnostics _positionDiagnostics = new();
         private readonly AsioProcedure _outputCallback;
         private readonly HashSet<int> _songs = new();
-        private readonly Dictionary<int, AsioSongPosition> _songPositions = new();
+        private readonly Dictionary<int, TrackedSong> _songPositions = new();
+        private TrackedSong[] _callbackSongs = Array.Empty<TrackedSong>();
         private readonly HashSet<int> _samples = new();
         private int _masterMixerHandle;
         private int _bytesPerFrame;
@@ -83,7 +85,8 @@ namespace YARG.Audio.BASS
             lock (_positionLock)
             {
                 _songPositions.Add(tempoStreamHandle,
-                    new AsioSongPosition(position >= 0 ? position : 0));
+                    new TrackedSong(tempoStreamHandle, position >= 0 ? position : 0));
+                PublishCallbackSongs();
             }
             return true;
         }
@@ -93,6 +96,7 @@ namespace YARG.Audio.BASS
             lock (_positionLock)
             {
                 _songPositions.Remove(tempoStreamHandle);
+                PublishCallbackSongs();
             }
             if (_songs.Remove(tempoStreamHandle) && !BassMix.MixerRemoveChannel(tempoStreamHandle) &&
                 Bass.LastError != Errors.Handle)
@@ -173,14 +177,14 @@ namespace YARG.Audio.BASS
                 long lockAcquired = Stopwatch.GetTimestamp();
                 _positionDiagnostics.RecordLockWait(waitStarted, lockAcquired, contended);
 
-                if (!_songPositions.TryGetValue(tempoStreamHandle, out var position))
+                if (!_songPositions.TryGetValue(tempoStreamHandle, out var song))
                 {
                     return -1;
                 }
 
                 double heardFrame = GetHeardFrame();
                 report = _positionDiagnostics.GetReport(lockAcquired);
-                return position.GetPosition(heardFrame);
+                return song.Position.GetPosition(heardFrame);
             }
             finally
             {
@@ -326,15 +330,30 @@ namespace YARG.Audio.BASS
                 bytesRead = 0;
             }
 
+            TrackedSong[] songs = Volatile.Read(ref _callbackSongs);
+            for (int i = 0; i < songs.Length; i++)
+            {
+                songs[i].GeneratedPosition = BassMix.ChannelGetPosition(
+                    songs[i].Handle, PositionFlags.Bytes);
+            }
+
             lock (_positionLock)
             {
                 _submittedFrames += frameCount;
 
-                foreach (var pair in _songPositions)
+                for (int i = 0; i < songs.Length; i++)
                 {
-                    long position = BassMix.ChannelGetPosition(pair.Key, PositionFlags.Bytes);
-                    pair.Value.AddBlock(blockStart, _submittedFrames,
-                        position >= 0 ? position : pair.Value.LastGeneratedPosition);
+                    TrackedSong song = songs[i];
+                    if (!_songPositions.TryGetValue(song.Handle, out var current) ||
+                        !ReferenceEquals(current, song))
+                    {
+                        continue;
+                    }
+
+                    long position = song.GeneratedPosition >= 0
+                        ? song.GeneratedPosition
+                        : song.Position.LastGeneratedPosition;
+                    song.Position.AddBlock(blockStart, _submittedFrames, position);
                 }
             }
 
@@ -408,12 +427,34 @@ namespace YARG.Audio.BASS
             lock (_positionLock)
             {
                 _songPositions.Clear();
+                PublishCallbackSongs();
             }
             _samples.Clear();
             if (_masterMixerHandle != 0)
             {
                 Bass.StreamFree(_masterMixerHandle);
                 _masterMixerHandle = 0;
+            }
+        }
+
+        private void PublishCallbackSongs()
+        {
+            var songs = new TrackedSong[_songPositions.Count];
+            _songPositions.Values.CopyTo(songs, 0);
+            Volatile.Write(ref _callbackSongs, songs);
+        }
+
+        private sealed class TrackedSong
+        {
+            public readonly int Handle;
+            public readonly AsioSongPosition Position;
+            public long GeneratedPosition;
+
+            public TrackedSong(int handle, long initialPosition)
+            {
+                Handle = handle;
+                Position = new AsioSongPosition(initialPosition);
+                GeneratedPosition = initialPosition;
             }
         }
 
