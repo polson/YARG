@@ -98,12 +98,18 @@ namespace YARG.Settings.Metadata
                     }
                     case FieldMetadata field:
                     {
+                        if (field.VisibleWhen != null && !field.VisibleWhen())
+                        {
+                            break;
+                        }
+
                         var setting = SettingsManager.GetSettingByName(field.FieldName);
 
                         var visual = SpawnSettingVisual(setting, container);
                         visual.AssignSetting(field.FieldName, field.HasDescription);
                         visual.AssignIndex(settingIndex);
                         visual.ShowAdvancedMarker(field.IsAdvanced);
+                        visual.SetEditable(setting.IsEditable);
 
                         _settingVisuals.Add(field.FieldName, visual);
                         navGroup.AddNavigatable(visual.gameObject);

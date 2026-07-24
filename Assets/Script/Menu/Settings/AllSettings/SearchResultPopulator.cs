@@ -52,6 +52,11 @@ namespace YARG.Menu.Settings.AllSettings
                 int navIndexBasic = 0;
                 foreach (var metadata in metadataTab.Settings)
                 {
+                    if (metadata is FieldMetadata field &&
+                        field.VisibleWhen != null && !field.VisibleWhen())
+                    {
+                        continue;
+                    }
                     var unlocalizedSearch = metadata.UnlocalizedSearchNames;
                     if (unlocalizedSearch is null)
                     {

@@ -28,6 +28,7 @@ namespace YARG.Menu.Settings.Visuals
 
         public bool IsPresetSetting { get; private set; }
         public bool HasDescription { get; private set; }
+        public bool IsEditable { get; private set; } = true;
         public string UnlocalizedName { get; private set; }
 
         public void AssignSetting(string settingName, bool hasDescription)
@@ -66,6 +67,24 @@ namespace YARG.Menu.Settings.Visuals
             if (_advancedMarker != null)
             {
                 _advancedMarker.SetActive(show);
+            }
+        }
+
+        public void SetEditable(bool editable)
+        {
+            IsEditable = editable;
+            var canvasGroup = gameObject.GetComponent<CanvasGroup>();
+            if (canvasGroup == null)
+            {
+                canvasGroup = gameObject.AddComponent<CanvasGroup>();
+            }
+            canvasGroup.alpha = editable ? 1f : 0.5f;
+            canvasGroup.interactable = editable;
+            canvasGroup.blocksRaycasts = true;
+
+            foreach (var selectable in GetComponentsInChildren<Selectable>(true))
+            {
+                selectable.interactable = editable;
             }
         }
 

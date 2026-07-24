@@ -1,3 +1,5 @@
+using System;
+
 namespace YARG.Settings.Metadata
 {
     public sealed class FieldMetadata : AbstractMetadata
@@ -6,13 +8,16 @@ namespace YARG.Settings.Metadata
 
         public string FieldName { get; }
         public bool HasDescription { get; } = true;
+        public Func<bool> VisibleWhen { get; }
 
-        public FieldMetadata(string fieldName, bool hasDescription = true, bool isAdvanced = false)
+        public FieldMetadata(string fieldName, bool hasDescription = true, bool isAdvanced = false,
+            Func<bool> visibleWhen = null)
             : base(isAdvanced)
         {
             UnlocalizedSearchNames = new[] { $"Setting.{fieldName}.Name" };
             FieldName = fieldName;
             HasDescription = hasDescription;
+            VisibleWhen = visibleWhen;
         }
     }
 }

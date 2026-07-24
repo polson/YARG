@@ -27,12 +27,12 @@ namespace YARG.Settings
 
         private sealed class StartupSettingValues
         {
-            public bool UseSingleMixer { get; set; }
+            public string OutputDevice { get; set; }
         }
 
         private static string _serializedSettings;
 
-        public static bool UseSingleMixerAtStartup { get; private set; }
+        public static string OutputDeviceAtStartup { get; private set; } = "Default";
 
         public static SettingContainer Settings { get; private set; }
 
@@ -266,8 +266,8 @@ namespace YARG.Settings
                 new HeaderMetadata("Accessibility"),
                 nameof(Settings.FontScaling),
                 new HeaderMetadata("OutputConfiguration"),
-                nameof(Settings.UseSingleMixer),
                 nameof(Settings.OutputDevice),
+                new FieldMetadata(nameof(Settings.LowLatencyMode), visibleWhen: IsWindows),
                 nameof(Settings.OutputChannelDefault),
                 nameof(Settings.OutputChannelDrumSfx),
                 nameof(Settings.OutputChannelMetronome),
@@ -289,13 +289,19 @@ namespace YARG.Settings
             {
                 _serializedSettings = File.ReadAllText(SettingsFile);
                 var startupSettings = JsonConvert.DeserializeObject<StartupSettingValues>(_serializedSettings);
-                UseSingleMixerAtStartup = startupSettings?.UseSingleMixer ?? false;
+                OutputDeviceAtStartup = startupSettings?.OutputDevice ?? "Default";
             }
             catch
             {
                 // Full settings load reports file and JSON errors during normal startup.
-                UseSingleMixerAtStartup = false;
+                OutputDeviceAtStartup = "Default";
             }
+        }
+
+        private static bool IsWindows()
+        {
+            return Application.platform == RuntimePlatform.WindowsPlayer ||
+                Application.platform == RuntimePlatform.WindowsEditor;
         }
 
         public static void LoadSettings()

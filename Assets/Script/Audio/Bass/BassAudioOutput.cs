@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using ManagedBass;
+using ManagedBass.Asio;
 using ManagedBass.Mix;
 using YARG.Core.Audio;
 using YARG.Core.Logging;
@@ -17,71 +18,46 @@ namespace YARG.Audio.BASS
         private const int IDLE_TIMEOUT_MILLISECONDS = 10_000;
 
         private bool _useSingleMixer;
+        private bool _ownsAsio;
         private readonly object _lock = new();
         private readonly HashSet<int> _activeSources = new();
         private readonly System.Threading.Timer _idleTimer;
 
         private int _mixerHandle;
         private int _deviceId = -1;
+        private int _asioLatencyMilliseconds;
+        private double _volume = 1;
         private bool _disposed;
 
-        public BassAudioOutput(bool useSingleMixer)
+        public BassAudioOutput()
         {
-            _useSingleMixer = useSingleMixer;
             _idleTimer = new System.Threading.Timer(OnIdleTimer, null, Timeout.Infinite, Timeout.Infinite);
         }
 
-        public bool UsesSingleMixer
-        {
-            get
-            {
-                lock (_lock)
-                {
-                    return _useSingleMixer;
-                }
-            }
-        }
+        public int AsioLatencyMilliseconds => _asioLatencyMilliseconds;
 
-        public bool SetSingleMixer(bool enabled)
+        public bool InitializeForDevice(BassOutputDevice device)
         {
             lock (_lock)
             {
-                if (_disposed || _useSingleMixer == enabled)
+                if (_disposed)
                 {
-                    return !_disposed;
-                }
-
-                if (_activeSources.Count != 0)
-                {
-                    YargLogger.LogError("Cannot change audio topology while samples are loaded");
                     return false;
                 }
 
-                _idleTimer.Change(Timeout.Infinite, Timeout.Infinite);
-                FreeMixer();
-                bool previousMode = _useSingleMixer;
-                _useSingleMixer = enabled;
-
-                if (enabled && !EnsureMixer())
+                _useSingleMixer = device.IsAsio;
+                if (!_useSingleMixer)
                 {
-                    _useSingleMixer = previousMode;
-                    return false;
+                    if (!Bass.Start())
+                    {
+                        YargLogger.LogFormatError("Failed to start BASS output device: {0}", Bass.LastError);
+                        return false;
+                    }
+
+                    return true;
                 }
 
-                return true;
-            }
-        }
-
-        public void InitializeForDevice()
-        {
-            if (!_useSingleMixer)
-            {
-                return;
-            }
-
-            lock (_lock)
-            {
-                EnsureMixer();
+                return EnsureMixer() && StartAsio(device.AsioDeviceId);
             }
         }
 
@@ -171,41 +147,20 @@ namespace YARG.Audio.BASS
 
         public void SetBufferLength(int length)
         {
-            if (!_useSingleMixer)
-            {
-                return;
-            }
-
-            lock (_lock)
-            {
-                if (_mixerHandle != 0)
-                {
-                    SetMixerBufferLength(length);
-                }
-            }
+            // Decoding outputs are buffered by their endpoint. Standard song mixers
+            // receive this setting directly from BassSongPlayback.
         }
 
-        public void SetOutputDevice(BassOutputDevice device)
+        public void SetVolume(double volume)
         {
-            if (!_useSingleMixer)
-            {
-                return;
-            }
-
             lock (_lock)
             {
-                if (_mixerHandle == 0 || _deviceId == device.DeviceId)
+                _volume = volume;
+                if (_useSingleMixer && _mixerHandle != 0 &&
+                    !Bass.ChannelSetAttribute(_mixerHandle, ChannelAttribute.Volume, volume))
                 {
-                    return;
+                    YargLogger.LogFormatError("Failed to set master mixer volume: {0}", Bass.LastError);
                 }
-
-                if (!Bass.ChannelSetDevice(_mixerHandle, device.DeviceId))
-                {
-                    YargLogger.LogFormatError("Failed to change master mixer device: {0}", Bass.LastError);
-                    return;
-                }
-
-                _deviceId = device.DeviceId;
             }
         }
 
@@ -218,10 +173,10 @@ namespace YARG.Audio.BASS
             {
                 _activeSources.Clear();
                 _idleTimer.Change(Timeout.Infinite, Timeout.Infinite);
-                if (!_useSingleMixer)
-                {
-                    FreeMixer();
-                }
+                StopAsio();
+                FreeMixer();
+                _useSingleMixer = false;
+                _asioLatencyMilliseconds = 0;
             }
         }
 
@@ -236,30 +191,122 @@ namespace YARG.Audio.BASS
             int frequency = info.SampleRate > 0 ? info.SampleRate : 44100;
             int channels = info.SpeakerCount > 0 ? info.SpeakerCount : 2;
 
-            int mixerHandle = BassMix.CreateMixerStream(frequency, channels,
-                BassFlags.Float | BassFlags.MixerNonStop);
+            var flags = BassFlags.Float | BassFlags.MixerNonStop;
+            if (_useSingleMixer)
+            {
+                flags |= BassFlags.Decode;
+                channels = 2;
+            }
+
+            int mixerHandle = BassMix.CreateMixerStream(frequency, channels, flags);
             if (mixerHandle == 0)
             {
                 YargLogger.LogFormatError("Failed to create SFX mixer: {0}!", Bass.LastError);
                 return false;
             }
 
-            SetMixerBufferLength(mixerHandle,
-                _useSingleMixer ? BassHelpers.ConfiguredPlaybackBufferLength : 0);
-
-            if (!Bass.ChannelPlay(mixerHandle))
+            if (!_useSingleMixer)
             {
-                YargLogger.LogFormatError("Failed to start SFX mixer: {0}!", Bass.LastError);
-                Bass.StreamFree(mixerHandle);
-                return false;
+                SetMixerBufferLength(mixerHandle, 0);
+                if (!Bass.ChannelPlay(mixerHandle))
+                {
+                    YargLogger.LogFormatError("Failed to start SFX mixer: {0}!", Bass.LastError);
+                    Bass.StreamFree(mixerHandle);
+                    return false;
+                }
             }
 
             _mixerHandle = mixerHandle;
             _deviceId = Bass.CurrentDevice;
+            if (_useSingleMixer &&
+                !Bass.ChannelSetAttribute(mixerHandle, ChannelAttribute.Volume, _volume))
+            {
+                YargLogger.LogFormatError("Failed to initialize master mixer volume: {0}", Bass.LastError);
+            }
             string mixerName = _useSingleMixer ? "master" : "SFX";
             YargLogger.LogFormatInfo("Created BASS {0} mixer: handle {1}, {2}Hz, {3} channels",
                 mixerName, mixerHandle, frequency, channels);
             return true;
+        }
+
+        private bool StartAsio(int deviceId)
+        {
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            try
+            {
+                return StartAsioInternal(deviceId);
+            }
+            catch (Exception exception)
+            {
+                YargLogger.LogException(exception, "Failed to start ASIO output");
+                return false;
+            }
+#else
+            YargLogger.LogError("ASIO output is only available on Windows");
+            return false;
+#endif
+        }
+
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+        private bool StartAsioInternal(int deviceId)
+        {
+            if (!BassAsio.Init(deviceId, AsioInitFlags.Thread))
+            {
+                YargLogger.LogFormatError("Failed to initialize ASIO device: {0}", BassAsio.LastError);
+                return false;
+            }
+            _ownsAsio = true;
+
+            var mixerInfo = Bass.ChannelGetInfo(_mixerHandle);
+            if (!BassAsio.CheckRate(mixerInfo.Frequency))
+            {
+                YargLogger.LogFormatError("ASIO device does not support {0}Hz: {1}",
+                    mixerInfo.Frequency, BassAsio.LastError);
+                return false;
+            }
+
+            BassAsio.Rate = mixerInfo.Frequency;
+            if (!BassAsio.ChannelEnableBass(false, 0, _mixerHandle, true))
+            {
+                YargLogger.LogFormatError("Failed to route master mixer to ASIO: {0}", BassAsio.LastError);
+                return false;
+            }
+
+            // Zero keeps the buffer size selected by the driver.
+            if (!BassAsio.Start(0, 0))
+            {
+                YargLogger.LogFormatError("Failed to start ASIO output: {0}", BassAsio.LastError);
+                return false;
+            }
+
+            var info = BassAsio.Info;
+            int latency = BassAsio.GetLatency(false);
+            _asioLatencyMilliseconds = latency >= 0
+                ? (int) Math.Round(latency * 1000.0 / mixerInfo.Frequency)
+                : 0;
+            YargLogger.LogFormatInfo(
+                "Started ASIO '{0}': {1}Hz, preferred buffer {2} samples, output latency {3} samples",
+                info.Name, mixerInfo.Frequency, info.PreferredBufferLength, latency);
+            return true;
+        }
+#endif
+
+        private void StopAsio()
+        {
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            if (!_ownsAsio)
+            {
+                return;
+            }
+
+            BassAsio.Stop();
+            if (!BassAsio.Free())
+            {
+                YargLogger.LogFormatError("Failed to free ASIO device: {0}", BassAsio.LastError);
+            }
+            _ownsAsio = false;
+            _asioLatencyMilliseconds = 0;
+#endif
         }
 
         private void SetMixerBufferLength(int length)
@@ -342,6 +389,7 @@ namespace YARG.Audio.BASS
                 _disposed = true;
                 _activeSources.Clear();
                 _idleTimer.Change(Timeout.Infinite, Timeout.Infinite);
+                StopAsio();
                 FreeMixer();
             }
 

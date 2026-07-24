@@ -31,6 +31,8 @@ namespace YARG.Settings.Types
         Type ISettingType.ValueType => typeof(T);
 
         public abstract string AddressableName { get; }
+        public Func<bool> EditableWhen { get; set; }
+        public bool IsEditable => EditableWhen?.Invoke() ?? true;
 
         public Action<T> OnChange;
 

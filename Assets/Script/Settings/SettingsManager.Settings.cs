@@ -338,7 +338,10 @@ namespace YARG.Settings
 
             public IntSetting PlaybackBufferLength { get; }
                 = new(75, 0, GlobalAudioHandler.MaximumBufferLength,
-                    GlobalAudioHandler.SetBufferLength);
+                    GlobalAudioHandler.SetBufferLength)
+                {
+                    EditableWhen = () => !IsAsioOutput()
+                };
 
             public SliderSetting MicrophoneSensitivity { get; } = new(2f, -50f, 50f);
 
@@ -697,8 +700,12 @@ namespace YARG.Settings
             public ToggleSetting SaveScoresWithBots { get; } = new(false);
             public SliderSetting FontScaling { get; } = new(0f, 0f, 100f, FontScalingCallback);
 
-            public ToggleSetting UseSingleMixer { get; } = new(false, UseSingleMixerCallback);
             public OutputDeviceSetting OutputDevice { get; } = new("Default", OutputDeviceCallback);
+            public ToggleSetting LowLatencyMode { get; } = new(false)
+            {
+                // WASAPI is not implemented yet. ASIO forces this value on instead.
+                EditableWhen = () => false
+            };
             public OutputChannelDefaultSetting OutputChannelDefault { get; } = new(1, OutputChannelDefaultCallback);
             public OutputChannelSetting OutputChannelDrumSfx { get; } = new(-1, OutputChannelDrumSfxCallback);
             public OutputChannelSetting OutputChannelSfx { get; } = new(-1, OutputChannelSfxCallback);
@@ -967,6 +974,7 @@ namespace YARG.Settings
                     return;
                 }
 
+                Settings.LowLatencyMode.SetValueWithoutNotify(IsAsioOutput(name));
                 GlobalAudioHandler.SetOutputDevice(name);
 
                 ResetChannelSetting(Settings.OutputChannelDefault, SongStem.Master, 1);
@@ -976,14 +984,14 @@ namespace YARG.Settings
                 ResetChannelSetting(Settings.OutputChannelMetronome, SongStem.Metronome);
             }
 
-            private static void UseSingleMixerCallback(bool enabled)
+            private static bool IsAsioOutput()
             {
-                if (!IsInitialized)
-                {
-                    return;
-                }
+                return IsAsioOutput(Settings?.OutputDevice.Value);
+            }
 
-                GlobalAudioHandler.SetSingleMixer(enabled);
+            private static bool IsAsioOutput(string name)
+            {
+                return name?.StartsWith("ASIO: ", StringComparison.Ordinal) == true;
             }
 
             private static void OutputChannelDefaultCallback(int channelId)

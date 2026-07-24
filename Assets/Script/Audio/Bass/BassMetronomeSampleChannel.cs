@@ -9,8 +9,8 @@ namespace YARG.Audio.BASS
     public sealed class BassMetronomeSampleChannel : MetronomeSampleChannel
     {
 #nullable enable
-        public static BassMetronomeSampleChannel? Create(MetronomeSample sample, string hiPath, string loPath,
-             OutputChannel? outputChannel)
+        internal static BassMetronomeSampleChannel? Create(MetronomeSample sample, string hiPath, string loPath,
+             BassAudioOutput output, OutputChannel? outputChannel)
 #nullable disable
         {
             int hiHandle = Bass.SampleLoad(hiPath, 0, 0, 1, BassFlags.Decode);
@@ -20,54 +20,40 @@ namespace YARG.Audio.BASS
                 return null;
             }
 
-            int hiChannel = Bass.SampleGetChannel(hiHandle);
-            if (hiChannel == 0)
-            {
-                Bass.SampleFree(hiHandle);
-                YargLogger.LogFormatError("Failed to create {0} hi channel: {1}!", sample, Bass.LastError);
-                return null;
-            }
-
             int loHandle = Bass.SampleLoad(loPath, 0, 0, 1, BassFlags.Decode);
             if (loHandle == 0)
             {
+                Bass.SampleFree(hiHandle);
                 YargLogger.LogFormatError("Failed to load {0} lo {1}: {2}!", sample, loPath, Bass.LastError);
                 return null;
             }
 
-            int loChannel = Bass.SampleGetChannel(loHandle);
-            if (loChannel == 0)
-            {
-                Bass.SampleFree(loHandle);
-                YargLogger.LogFormatError("Failed to create {0} lo channel: {1}!", sample, Bass.LastError);
-                return null;
-            }
-
-            return new BassMetronomeSampleChannel(sample, hiHandle, hiChannel, hiPath, loHandle, loChannel, loPath, outputChannel);
+            return new BassMetronomeSampleChannel(sample, hiHandle, hiPath, loHandle, loPath, output,
+                outputChannel);
         }
 
         private readonly int _hiHandle;
-        private readonly int _hiChannel;
         private readonly int _loHandle;
-        private readonly int _loChannel;
+        private readonly BassSamplePlayer _hiPlayer;
+        private readonly BassSamplePlayer _loPlayer;
 
 #nullable enable
-        private BassMetronomeSampleChannel(MetronomeSample sample, int hiHandle, int hiChannel, string hiPath, int loHandle, int loChannel, string loPath,
-            OutputChannel? outputChannel)
+        private BassMetronomeSampleChannel(MetronomeSample sample, int hiHandle, string hiPath,
+            int loHandle, string loPath, BassAudioOutput output, OutputChannel? outputChannel)
             : base(sample, hiPath, loPath)
 #nullable disable
         {
             _hiHandle = hiHandle;
-            _hiChannel = hiChannel;
             _loHandle = loHandle;
-            _loChannel = loChannel;
+            _hiPlayer = new BassSamplePlayer(output, hiHandle, 1, $"{sample} hi");
+            _loPlayer = new BassSamplePlayer(output, loHandle, 1, $"{sample} lo");
             SetOutputChannel_Internal(outputChannel);
             SetVolume_Internal(GlobalAudioHandler.GetTrueVolume(SongStem.Metronome));
         }
 
         protected override void PlayHi_Internal()
         {
-            if (!Bass.ChannelPlay(_hiChannel, true))
+            if (!_hiPlayer.Play())
             {
                 YargLogger.LogFormatError("Failed to play {0} hi channel: {1}!", Sample, Bass.LastError);
             }
@@ -75,7 +61,7 @@ namespace YARG.Audio.BASS
 
         protected override void PlayLo_Internal()
         {
-            if (!Bass.ChannelPlay(_loChannel, true))
+            if (!_loPlayer.Play())
             {
                 YargLogger.LogFormatError("Failed to play {0} lo channel: {1}!", Sample, Bass.LastError);
             }
@@ -101,23 +87,22 @@ namespace YARG.Audio.BASS
         {
             volume *= AudioHelpers.MetronomeSamples[(int) Sample].Volume;
 
-            if (!Bass.ChannelSetAttribute(_hiChannel, ChannelAttribute.Volume, volume))
-            {
-                YargLogger.LogFormatError("Failed to set {0} hi volume: {1}!", Sample, Bass.LastError);
-            }
-
-            if (!Bass.ChannelSetAttribute(_loChannel, ChannelAttribute.Volume, volume))
-            {
-                YargLogger.LogFormatError("Failed to set {0} lo volume: {1}!", Sample, Bass.LastError);
-            }
+            _hiPlayer.SetVolume(volume);
+            _loPlayer.SetVolume(volume);
         }
 
 #nullable enable
         protected override void SetOutputChannel_Internal(OutputChannel? channel)
 #nullable disable
         {
-            BassHelpers.UpdateOutputChannels(_hiChannel, channel);
-            BassHelpers.UpdateOutputChannels(_loChannel, channel);
+            _hiPlayer.SetOutputChannel(channel);
+            _loPlayer.SetOutputChannel(channel);
+        }
+
+        protected override void DisposeManagedResources()
+        {
+            _hiPlayer.Dispose();
+            _loPlayer.Dispose();
         }
 
         protected override void DisposeUnmanagedResources()

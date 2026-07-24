@@ -1557,9 +1557,9 @@
                 "Name": "Use Venue SFX",
                 "Description": "If enabled, venues will be allowed to play custom sound effects."
             },
-            "UseSingleMixer": {
-                "Name": "Use Single Mixer",
-                "Description": "Experimental. Routes song audio and sound effects through one output mixer. All audio shares the configured playback buffer, which may add noticeable sound-effect latency. Restart required."
+            "LowLatencyMode": {
+                "Name": "Low Latency Mode",
+                "Description": "ASIO devices always use low-latency output. Support for standard Windows devices is planned."
             },
             "UseWhammyFx": {
                 "Name": "Use Whammy SFX",
@@ -1727,7 +1727,7 @@
             },
             "PlaybackBufferLength": {
                 "Name": "Playback Buffer Length",
-                "Description": "The size of the playback buffer, in milliseconds. Set to 0 to disable. Larger buffers provide more stability, but increase the latency of sound effects."
+                "Description": "The size of the standard output playback buffer, in milliseconds. Set to 0 to disable. Larger buffers provide more stability, but increase latency. ASIO drivers manage their own buffer size."
             },
             "ShowTime": {
                 "Name": "Show Time",

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using ManagedBass;
+using ManagedBass.Asio;
 using ManagedBass.Fx;
 using ManagedBass.Mix;
 using UnityEngine;
@@ -97,12 +98,12 @@ namespace YARG.Audio.BASS
         private readonly int _opusHandle = 0;
         private BassOutputDevice _currentDevice;
         private readonly BassAudioOutput _audioOutput;
-        private bool? _pendingSingleMixer;
+        private string _pendingOutputDevice;
 
         public BassAudioManager()
         {
             YargLogger.LogInfo("Initializing BASS...");
-            _audioOutput = new BassAudioOutput(SettingsManager.UseSingleMixerAtStartup);
+            _audioOutput = new BassAudioOutput();
             string bassPath = GetBassDirectory();
             string opusLibDirectory = Path.Combine(bassPath, "bassopus");
 
@@ -170,7 +171,15 @@ namespace YARG.Audio.BASS
             }
 #endif
 
-            var result = SetOutputDevice("Default");
+            string startupDevice = SettingsManager.OutputDeviceAtStartup;
+            var result = SetOutputDevice(startupDevice);
+
+            if (!result && startupDevice != "Default")
+            {
+                YargLogger.LogFormatWarning("Failed to initialize saved output '{0}', falling back to Default",
+                    startupDevice);
+                result = SetOutputDevice("Default");
+            }
 
             if (!result)
             {
@@ -198,18 +207,65 @@ namespace YARG.Audio.BASS
             YargLogger.LogFormatInfo("Update Period: {0}ms. Device Buffer Length: {1}ms. Playback Buffer Length: {2}ms. Device Playback Latency: {3}ms",
                 Bass.UpdatePeriod, Bass.DeviceBufferLength, Bass.PlaybackBufferLength, PlaybackLatency);
 
-            YargLogger.LogFormatInfo("Current Device: {0}", Bass.GetDeviceInfo(Bass.CurrentDevice).Name);
+            YargLogger.LogFormatInfo("Current Device: {0}", _currentDevice.DisplayName);
         }
 
         private void UpdatePlaybackLatency()
         {
+            if (_currentDevice?.IsAsio == true)
+            {
+                PlaybackLatency = _audioOutput.AsioLatencyMilliseconds;
+                return;
+            }
+
             double playbackLatency = BassLatencyProvider.GetPlaybackStreamLatency();
             PlaybackLatency = (int) Math.Round(playbackLatency * 1000.0);
         }
 
         protected override bool SetOutputDevice(string name)
         {
-            int currentDevice = Bass.CurrentDevice;
+            if (_currentDevice?.DisplayName == name)
+            {
+                _pendingOutputDevice = null;
+                return true;
+            }
+
+            if (HasActiveMixers)
+            {
+                _pendingOutputDevice = name;
+                YargLogger.LogInfo("Output device change deferred until current audio closes");
+                return true;
+            }
+
+            if (ApplyOutputDevice(name))
+            {
+                return true;
+            }
+
+            return RestoreDefaultOutput(name);
+        }
+
+        private bool RestoreDefaultOutput(string failedOutput)
+        {
+            if (failedOutput == "Default")
+            {
+                return false;
+            }
+
+            YargLogger.LogFormatError("Failed to initialize audio output '{0}', falling back to Default",
+                failedOutput);
+            bool restored = ApplyOutputDevice("Default");
+            if (restored && SettingsManager.SettingContainer.IsInitialized)
+            {
+                SettingsManager.Settings.OutputDevice.SetValueWithoutNotify("Default");
+                SettingsManager.Settings.LowLatencyMode.SetValueWithoutNotify(false);
+                ToastManager.ToastError($"Failed to initialize {failedOutput}. Using Default audio output.");
+            }
+            return restored;
+        }
+
+        private bool ApplyOutputDevice(string name)
+        {
 
 #nullable enable
             var venueSamples = new List<(string Name, byte[] Data, OutputChannel? OutputChannel)>();
@@ -222,17 +278,6 @@ namespace YARG.Audio.BASS
                 }
             }
 
-            var device = GetOutputDevice(name);
-            if (device is not BassOutputDevice bassDevice || bassDevice.DeviceId == currentDevice)
-            {
-                return false;
-            }
-
-            YargLogger.LogFormatInfo("Changing BASS Device to: {0}", bassDevice.DisplayName);
-
-            base.SetOutputDevice(bassDevice.DisplayName);
-            _audioOutput.SetOutputDevice(bassDevice);
-
             if (_currentDevice != null)
             {
                 _currentDevice.Use();
@@ -240,15 +285,34 @@ namespace YARG.Audio.BASS
                 UnloadDrumSfx();
                 UnloadVox();
                 UnloadVenueSamples();
+                UnloadMetronome();
                 _audioOutput.ResetForDeviceChange();
+                _currentDevice.Dispose();
+                _currentDevice = null;
             }
 
-            _currentDevice?.Dispose();
+            // Initialize the new BASS device only after freeing the previous one. BASS_Init can
+            // otherwise report Already and leave the candidate sharing the old device lifetime.
+            var device = GetOutputDevice(name);
+            if (device is not BassOutputDevice bassDevice)
+            {
+                return false;
+            }
+
+            YargLogger.LogFormatInfo("Changing audio output to: {0}", bassDevice.DisplayName);
+
             _currentDevice = bassDevice.Use();
-            _audioOutput.InitializeForDevice();
+            if (!_audioOutput.InitializeForDevice(bassDevice))
+            {
+                _audioOutput.ResetForDeviceChange();
+                _currentDevice.Dispose();
+                _currentDevice = null;
+                return false;
+            }
+
             UpdatePlaybackLatency();
 
-            YargLogger.LogFormatInfo("Current BASS Device: {0}", Bass.GetDeviceInfo(Bass.CurrentDevice).Name);
+            YargLogger.LogFormatInfo("Current audio output: {0}", bassDevice.DisplayName);
 
             // Load/reload samples
             LoadSfx();
@@ -266,7 +330,7 @@ namespace YARG.Audio.BASS
 #nullable enable
         protected override StemMixer? CreateMixer(string name, float speed, double mixerVolume, bool clampStemVolume, bool normalize)
         {
-            ApplyPendingSingleMixer();
+            ApplyPendingOutputDevice();
 
             if (GlobalAudioHandler.LogMixerStatus)
             {
@@ -405,6 +469,21 @@ namespace YARG.Audio.BASS
                 devices.Add((deviceIndex, info.Name));
             }
 
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            try
+            {
+                for (int deviceIndex = 0; deviceIndex < BassAsio.DeviceCount; deviceIndex++)
+                {
+                    var info = BassAsio.GetDeviceInfo(deviceIndex);
+                    devices.Add((deviceIndex, BassOutputDevice.ASIO_PREFIX + info.Name));
+                }
+            }
+            catch (Exception exception)
+            {
+                YargLogger.LogException(exception, "Failed to enumerate ASIO devices");
+            }
+#endif
+
             return devices;
         }
 
@@ -417,6 +496,30 @@ namespace YARG.Audio.BASS
         protected override OutputDevice? GetOutputDevice(string name)
 #nullable disable
         {
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            if (name.StartsWith(BassOutputDevice.ASIO_PREFIX, StringComparison.Ordinal))
+            {
+                string driverName = name.Substring(BassOutputDevice.ASIO_PREFIX.Length);
+                try
+                {
+                    for (int deviceIndex = 0; deviceIndex < BassAsio.DeviceCount; deviceIndex++)
+                    {
+                        var info = BassAsio.GetDeviceInfo(deviceIndex);
+                        if (info.Name == driverName)
+                        {
+                            return BassOutputDevice.CreateAsio(deviceIndex, driverName);
+                        }
+                    }
+                }
+                catch (Exception exception)
+                {
+                    YargLogger.LogException(exception, "Failed to find ASIO device");
+                }
+
+                return null;
+            }
+#endif
+
             for (int deviceIndex = 0; Bass.GetDeviceInfo(deviceIndex, out var info); deviceIndex++)
             {
                 // Ignore disabled devices
@@ -580,14 +683,7 @@ namespace YARG.Audio.BASS
         {
             YargLogger.LogInfo("Loading Metronome");
 
-#nullable enable
-            foreach (BassMetronomeSampleChannel? sample in MetronomeSamples)
-#nullable disable
-            {
-                sample?.Dispose();
-            }
-
-            MetronomeSamples = new MetronomeSampleChannel[AudioHelpers.MetronomeSamples.Count];
+            UnloadMetronome();
 
             string metronomeFolder = Path.Combine(Application.streamingAssetsPath, "metronome");
 
@@ -615,7 +711,8 @@ namespace YARG.Audio.BASS
                 if (!String.IsNullOrEmpty(metronomeHiPath) && !String.IsNullOrEmpty(metronomeLoPath))
                 {
                     var metronomeSample = sample.Kind;
-                    var metronome = BassMetronomeSampleChannel.Create(metronomeSample, metronomeHiPath, metronomeLoPath,
+                    var metronome = BassMetronomeSampleChannel.Create(metronomeSample, metronomeHiPath,
+                        metronomeLoPath, _audioOutput,
                         CreateOutputChannel(SettingsManager.Settings?.OutputChannelDefault.Value ?? 0));
                     if (metronome != null)
                     {
@@ -625,6 +722,19 @@ namespace YARG.Audio.BASS
             }
 
             YargLogger.LogInfo("Finished loading Metronome");
+        }
+
+        private void UnloadMetronome()
+        {
+
+#nullable enable
+            foreach (BassMetronomeSampleChannel? sample in MetronomeSamples)
+#nullable disable
+            {
+                sample?.Dispose();
+            }
+
+            MetronomeSamples = new MetronomeSampleChannel[AudioHelpers.MetronomeSamples.Count];
         }
 
 #nullable enable
@@ -664,6 +774,7 @@ namespace YARG.Audio.BASS
 #endif
             Bass.GlobalStreamVolume = (int) (10_000 * volume);
             Bass.GlobalSampleVolume = (int) (10_000 * volume);
+            _audioOutput.SetVolume(volume);
         }
 
 
@@ -671,78 +782,25 @@ namespace YARG.Audio.BASS
         {
             length = BassHelpers.ClampPlaybackBufferLength(length);
             Bass.PlaybackBufferLength = length;
-            _audioOutput.SetBufferLength(length);
-        }
-
-        protected override void SetSingleMixer(bool enabled)
-        {
-            if (_audioOutput.UsesSingleMixer == enabled)
-            {
-                _pendingSingleMixer = null;
-                return;
-            }
-
-            if (HasActiveMixers)
-            {
-                _pendingSingleMixer = enabled;
-                YargLogger.LogInfo("Single mixer change deferred until current audio closes");
-                return;
-            }
-
-            ApplySingleMixer(enabled);
         }
 
         protected override void OnMixersIdle()
         {
-            UnityMainThreadCallback.QueueEvent(ApplyPendingSingleMixer);
+            UnityMainThreadCallback.QueueEvent(ApplyPendingOutputDevice);
         }
 
-        private void ApplyPendingSingleMixer()
+        private void ApplyPendingOutputDevice()
         {
-            if (_pendingSingleMixer is not bool enabled)
+            if (_pendingOutputDevice == null || HasActiveMixers)
             {
                 return;
             }
 
-            if (HasActiveMixers)
+            string name = _pendingOutputDevice;
+            _pendingOutputDevice = null;
+            if (!ApplyOutputDevice(name))
             {
-                return;
-            }
-
-            _pendingSingleMixer = null;
-            ApplySingleMixer(enabled);
-        }
-
-        private void ApplySingleMixer(bool enabled)
-        {
-            var venueSamples = new List<(string Name, byte[] Data, OutputChannel OutputChannel)>();
-            foreach (var sample in VenueSamples.Values)
-            {
-                if (sample is BassVenueSampleChannel bassSample)
-                {
-                    venueSamples.Add((bassSample.SampleName, bassSample.SampleData, bassSample.OutputChannel));
-                }
-            }
-
-            UnloadSfx();
-            UnloadDrumSfx();
-            UnloadVox();
-            UnloadVenueSamples();
-
-            bool changed = _audioOutput.SetSingleMixer(enabled);
-
-            LoadSfx();
-            LoadDrumSfx();
-            LoadVox();
-            foreach (var sample in venueSamples)
-            {
-                LoadVenueSample(sample.Name, sample.Data, sample.OutputChannel);
-            }
-
-            if (changed)
-            {
-                YargLogger.LogFormatInfo("BASS audio topology changed to {0}",
-                    enabled ? "single mixer" : "legacy mixers");
+                RestoreDefaultOutput(name);
             }
         }
 
