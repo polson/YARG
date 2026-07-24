@@ -11,6 +11,7 @@ namespace YARG.Audio.BASS
 {
     internal sealed class BassAsioOutputBackend : IBassOutputBackend
     {
+        private readonly int _bufferLength;
         private readonly HashSet<int> _songs = new();
         private readonly HashSet<int> _samples = new();
         private int _masterMixerHandle;
@@ -20,6 +21,11 @@ namespace YARG.Audio.BASS
         public int HeardLatencyMilliseconds { get; private set; }
         public bool SongMixerRunsContinuously => true;
         public double PlaybackStartDelay => 0;
+
+        public BassAsioOutputBackend(int bufferLength)
+        {
+            _bufferLength = bufferLength;
+        }
 
         public bool Initialize(BassOutputDevice device)
         {
@@ -212,7 +218,7 @@ namespace YARG.Audio.BASS
             }
             BassAsio.Rate = mixerInfo.Frequency;
             if (!BassAsio.ChannelEnableBass(false, 0, _masterMixerHandle, true) ||
-                !BassAsio.Start(0, 0))
+                !BassAsio.Start(_bufferLength, 0))
             {
                 YargLogger.LogFormatError("Failed to start ASIO output: {0}", BassAsio.LastError);
                 return false;

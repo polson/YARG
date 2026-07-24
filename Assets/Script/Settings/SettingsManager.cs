@@ -28,11 +28,13 @@ namespace YARG.Settings
         private sealed class StartupSettingValues
         {
             public string OutputDevice { get; set; }
+            public Dictionary<string, int> AsioBufferLengths { get; set; }
         }
 
         private static string _serializedSettings;
 
         public static string OutputDeviceAtStartup { get; private set; } = "Default";
+        internal static Dictionary<string, int> AsioBufferLengthsAtStartup { get; private set; } = new();
 
         public static SettingContainer Settings { get; private set; }
 
@@ -266,8 +268,10 @@ namespace YARG.Settings
                 new HeaderMetadata("Accessibility"),
                 nameof(Settings.FontScaling),
                 new HeaderMetadata("OutputConfiguration"),
+                new FieldMetadata(nameof(Settings.OutputBackend), visibleWhen: IsWindows),
                 nameof(Settings.OutputDevice),
-                new FieldMetadata(nameof(Settings.LowLatencyMode), visibleWhen: IsWindows),
+                new FieldMetadata(nameof(Settings.AsioBufferSize),
+                    visibleWhen: () => IsWindows() && Settings?.OutputBackend.Value == AudioOutputBackend.Asio),
                 nameof(Settings.OutputChannelDefault),
                 nameof(Settings.OutputChannelDrumSfx),
                 nameof(Settings.OutputChannelMetronome),
@@ -290,11 +294,13 @@ namespace YARG.Settings
                 _serializedSettings = File.ReadAllText(SettingsFile);
                 var startupSettings = JsonConvert.DeserializeObject<StartupSettingValues>(_serializedSettings);
                 OutputDeviceAtStartup = startupSettings?.OutputDevice ?? "Default";
+                AsioBufferLengthsAtStartup = startupSettings?.AsioBufferLengths ?? new();
             }
             catch
             {
                 // Full settings load reports file and JSON errors during normal startup.
                 OutputDeviceAtStartup = "Default";
+                AsioBufferLengthsAtStartup = new();
             }
         }
 
@@ -319,6 +325,24 @@ namespace YARG.Settings
 
             // If null, recreate
             Settings ??= new SettingContainer();
+            Settings.AsioBufferLengths ??= new();
+
+            AudioOutputBackend outputBackend = OutputDeviceSetting.BackendFor(Settings.OutputDevice.Value);
+            Settings.OutputBackend.SetValueWithoutNotify(outputBackend);
+            if (outputBackend == AudioOutputBackend.Asio)
+            {
+                Settings.LastAsioDevice = Settings.OutputDevice.Value;
+            }
+            else
+            {
+                Settings.LastWindowsAudioDevice = Settings.OutputDevice.Value;
+            }
+            Settings.OutputDevice.UpdateValues(outputBackend);
+            Settings.AsioBufferSize.UpdateValues();
+            int bufferLength = GetAsioBufferLength(Settings.OutputDevice.Value);
+            Settings.AsioBufferSize.SetValueWithoutNotify(
+                Settings.AsioBufferSize.Supports(bufferLength) ? bufferLength : 0);
+
             SettingContainer.IsInitialized = true;
 
             // Now that we're done loading, call all of the callbacks

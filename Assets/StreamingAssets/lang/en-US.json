@@ -1434,6 +1434,22 @@
                 "Mono": "{0}",
                 "Stereo": "{0} & {1}"
             },
+            "OutputBackend": {
+                "Name": "Output Backend",
+                "Description": "Select standard system audio or an ASIO driver.",
+                "Dropdown": {
+                    "WindowsAudio": "Windows Audio",
+                    "Asio": "ASIO"
+                }
+            },
+            "AsioBufferSize": {
+                "Name": "ASIO Buffer Size",
+                "Description": "Smaller buffers reduce output latency but require more reliable audio processing.",
+                "DriverDefault": "Driver Default",
+                "DriverDefaultWithSize": "Driver Default ({0} samples)",
+                "Samples": "{0} samples",
+                "SamplesWithDuration": "{0} samples (~{1} ms)"
+            },
             "OutputDevice": {
                 "Name": "Output Device",
                 "Description": "The interface to use when playing sounds."
@@ -1556,10 +1572,6 @@
             "UseVenueSfx": {
                 "Name": "Use Venue SFX",
                 "Description": "If enabled, venues will be allowed to play custom sound effects."
-            },
-            "LowLatencyMode": {
-                "Name": "Low Latency Mode",
-                "Description": "ASIO devices always use low-latency output. Support for standard Windows devices is planned."
             },
             "UseWhammyFx": {
                 "Name": "Use Whammy SFX",

@@ -98,6 +98,7 @@ namespace YARG.Audio.BASS
         private readonly int _opusHandle = 0;
         private BassOutputDevice _currentDevice;
         private readonly BassAudioOutput _audioOutput;
+        private int _asioBufferLength;
 
         public BassAudioManager()
         {
@@ -216,15 +217,20 @@ namespace YARG.Audio.BASS
 
         protected override bool SetOutputDevice(string name)
         {
-            if (_currentDevice?.DisplayName == name)
+            int bufferLength = SettingsManager.GetAsioBufferLength(name);
+            if (_currentDevice?.DisplayName == name && _asioBufferLength == bufferLength)
             {
                 return true;
             }
 
-            if (ApplyOutputDevice(name))
+            int previousBufferLength = _asioBufferLength;
+            _asioBufferLength = bufferLength;
+            if (ApplyOutputDevice(name, previousBufferLength))
             {
                 return true;
             }
+
+            _asioBufferLength = previousBufferLength;
 
             return RestoreDefaultOutput(name);
         }
@@ -238,17 +244,17 @@ namespace YARG.Audio.BASS
 
             YargLogger.LogFormatError("Failed to initialize audio output '{0}', falling back to Default",
                 failedOutput);
-            bool restored = ApplyOutputDevice("Default");
+            _asioBufferLength = 0;
+            bool restored = ApplyOutputDevice("Default", 0);
             if (restored && SettingsManager.SettingContainer.IsInitialized)
             {
                 SettingsManager.Settings.OutputDevice.SetValueWithoutNotify("Default");
-                SettingsManager.Settings.LowLatencyMode.SetValueWithoutNotify(false);
                 ToastManager.ToastError($"Failed to initialize {failedOutput}. Using Default audio output.");
             }
             return restored;
         }
 
-        private bool ApplyOutputDevice(string name)
+        private bool ApplyOutputDevice(string name, int restoreAsioBufferLength)
         {
 
 #nullable enable
@@ -281,7 +287,7 @@ namespace YARG.Audio.BASS
 
                 bassDevice.Use();
                 MoveActiveMixersTo(bassDevice);
-                if (!_audioOutput.Resume(bassDevice))
+                if (!_audioOutput.Resume(bassDevice, _asioBufferLength))
                 {
                     YargLogger.LogError(
                         $"Failed to start audio output '{bassDevice.DisplayName}', " +
@@ -290,7 +296,8 @@ namespace YARG.Audio.BASS
                     MoveActiveMixersTo(previousDevice);
                     bassDevice.Dispose();
                     previousDevice.Use();
-                    if (!_audioOutput.Resume(previousDevice))
+                    _asioBufferLength = restoreAsioBufferLength;
+                    if (!_audioOutput.Resume(previousDevice, _asioBufferLength))
                     {
                         YargLogger.LogFormatError("Failed to restore audio output '{0}'",
                             previousDevice.DisplayName);
@@ -308,7 +315,7 @@ namespace YARG.Audio.BASS
             else
             {
                 _currentDevice = bassDevice.Use();
-                if (!_audioOutput.InitializeForDevice(bassDevice))
+                if (!_audioOutput.InitializeForDevice(bassDevice, _asioBufferLength))
                 {
                     _audioOutput.ResetForDeviceChange();
                     _currentDevice.Dispose();
@@ -324,6 +331,93 @@ namespace YARG.Audio.BASS
             ReloadSamples(venueSamples);
             return true;
         }
+
+        protected override OutputBufferInfo? GetOutputBufferInfo()
+        {
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            if (_currentDevice?.IsAsio != true)
+            {
+                return null;
+            }
+
+            try
+            {
+                BassAsio.CurrentDevice = _currentDevice.AsioDeviceId;
+                var info = BassAsio.Info;
+                var lengths = GetBufferLengths(info);
+                int sampleRate = (int) Math.Round(BassAsio.Rate);
+                return new OutputBufferInfo(lengths, info.PreferredBufferLength, sampleRate);
+            }
+            catch (Exception exception)
+            {
+                YargLogger.LogException(exception, "Failed to read ASIO buffer sizes");
+            }
+#endif
+            return null;
+        }
+
+        protected override bool ReinitializeOutput(int bufferLength)
+        {
+            if (_currentDevice?.IsAsio != true || bufferLength < 0 || bufferLength == _asioBufferLength)
+            {
+                return bufferLength == _asioBufferLength;
+            }
+
+            int previousBufferLength = _asioBufferLength;
+            _asioBufferLength = bufferLength;
+            if (ApplyOutputDevice(_currentDevice.DisplayName, previousBufferLength))
+            {
+                return true;
+            }
+
+            _asioBufferLength = previousBufferLength;
+            return false;
+        }
+
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+        private static int[] GetBufferLengths(AsioInfo info)
+        {
+            var lengths = new List<int>();
+            int minimum = info.MinBufferLength;
+            int maximum = info.MaxBufferLength;
+
+            if (minimum <= 0 || maximum < minimum)
+            {
+                return Array.Empty<int>();
+            }
+
+            if (info.BufferLengthGranularity == -1)
+            {
+                for (long length = minimum; length <= maximum; length *= 2)
+                {
+                    lengths.Add((int) length);
+                    if (length > int.MaxValue / 2)
+                    {
+                        break;
+                    }
+                }
+            }
+            else if (info.BufferLengthGranularity > 0)
+            {
+                for (long length = minimum; length <= maximum; length += info.BufferLengthGranularity)
+                {
+                    lengths.Add((int) length);
+                }
+            }
+            else
+            {
+                lengths.Add(minimum);
+            }
+
+            if (info.PreferredBufferLength >= minimum && info.PreferredBufferLength <= maximum &&
+                !lengths.Contains(info.PreferredBufferLength))
+            {
+                lengths.Add(info.PreferredBufferLength);
+                lengths.Sort();
+            }
+            return lengths.ToArray();
+        }
+#endif
 
 #nullable enable
         private void ReloadSamples(List<(string Name, byte[] Data, OutputChannel? OutputChannel)> venueSamples)

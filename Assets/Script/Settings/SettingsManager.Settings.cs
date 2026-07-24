@@ -32,6 +32,12 @@ using Object = UnityEngine.Object;
 
 namespace YARG.Settings
 {
+    public enum AudioOutputBackend
+    {
+        WindowsAudio,
+        Asio
+    }
+
     public enum QualityMode
     {
         NativeAA = 0,
@@ -94,6 +100,19 @@ namespace YARG.Settings
 
     public static partial class SettingsManager
     {
+        public static int GetAsioBufferLength(string outputDevice)
+        {
+            if (OutputDeviceSetting.BackendFor(outputDevice) != AudioOutputBackend.Asio)
+            {
+                return 0;
+            }
+
+            var bufferLengths = Settings?.AsioBufferLengths ?? AsioBufferLengthsAtStartup;
+            return bufferLengths != null && bufferLengths.TryGetValue(outputDevice, out int length)
+                ? length
+                : 0;
+        }
+
         public class SettingContainer
         {
             /// <summary>
@@ -108,6 +127,10 @@ namespace YARG.Settings
             public bool ShowAntiPiracyDialog = true;
             public bool ShowEngineInconsistencyDialog = true;
             public bool ShowExperimentalWarningDialog = true;
+
+            public string LastWindowsAudioDevice = "Default";
+            public string LastAsioDevice = string.Empty;
+            public Dictionary<string, int> AsioBufferLengths = new();
 
             public SortAttribute LibrarySort = SortAttribute.Name;
             public SortAttribute PreviousLibrarySort = SortAttribute.Name;
@@ -700,12 +723,14 @@ namespace YARG.Settings
             public ToggleSetting SaveScoresWithBots { get; } = new(false);
             public SliderSetting FontScaling { get; } = new(0f, 0f, 100f, FontScalingCallback);
 
-            public OutputDeviceSetting OutputDevice { get; } = new("Default", OutputDeviceCallback);
-            public ToggleSetting LowLatencyMode { get; } = new(false)
+            public DropdownSetting<AudioOutputBackend> OutputBackend { get; } = new(AudioOutputBackend.WindowsAudio,
+                OutputBackendCallback)
             {
-                // WASAPI is not implemented yet. ASIO forces this value on instead.
-                EditableWhen = () => false
+                AudioOutputBackend.WindowsAudio,
+                AudioOutputBackend.Asio
             };
+            public OutputDeviceSetting OutputDevice { get; } = new("Default", OutputDeviceCallback);
+            public OutputBufferSizeSetting AsioBufferSize { get; } = new(0, AsioBufferSizeCallback);
             public OutputChannelDefaultSetting OutputChannelDefault { get; } = new(1, OutputChannelDefaultCallback);
             public OutputChannelSetting OutputChannelDrumSfx { get; } = new(-1, OutputChannelDrumSfxCallback);
             public OutputChannelSetting OutputChannelSfx { get; } = new(-1, OutputChannelSfxCallback);
@@ -728,7 +753,6 @@ namespace YARG.Settings
                     SetOutputChannel(channelSetting, stem);
                 }
 
-                SettingsMenu.Instance.RefreshAndKeepPosition();
             }
 
             private static void SetOutputChannel(OutputChannelSetting channelSetting, SongStem stem)
@@ -974,14 +998,111 @@ namespace YARG.Settings
                     return;
                 }
 
-                Settings.LowLatencyMode.SetValueWithoutNotify(IsAsioOutput(name));
                 GlobalAudioHandler.SetOutputDevice(name);
+
+                string activeDevice = Settings.OutputDevice.Value;
+                AudioOutputBackend backend = OutputDeviceSetting.BackendFor(activeDevice);
+                Settings.OutputBackend.SetValueWithoutNotify(backend);
+                RememberOutputDevice(backend, activeDevice);
+
+                Settings.AsioBufferSize.UpdateValues();
+                int bufferLength = GetAsioBufferLength(activeDevice);
+                if (!Settings.AsioBufferSize.Supports(bufferLength))
+                {
+                    bufferLength = 0;
+                    Settings.AsioBufferLengths[activeDevice] = 0;
+                }
+                Settings.AsioBufferSize.SetValueWithoutNotify(bufferLength);
 
                 ResetChannelSetting(Settings.OutputChannelDefault, SongStem.Master, 1);
                 ResetChannelSetting(Settings.OutputChannelDrumSfx, SongStem.DrumSfx);
                 ResetChannelSetting(Settings.OutputChannelSfx, SongStem.Sfx);
                 ResetChannelSetting(Settings.OutputChannelVox, SongStem.VoxSample);
                 ResetChannelSetting(Settings.OutputChannelMetronome, SongStem.Metronome);
+                SettingsMenu.Instance.RefreshAndKeepPosition();
+            }
+
+            private static void OutputBackendCallback(AudioOutputBackend backend)
+            {
+                if (!IsInitialized)
+                {
+                    return;
+                }
+
+                string currentDevice = Settings.OutputDevice.Value;
+                AudioOutputBackend currentBackend = OutputDeviceSetting.BackendFor(currentDevice);
+                RememberOutputDevice(currentBackend, currentDevice);
+                Settings.OutputDevice.UpdateValues(backend);
+
+                if (currentBackend == backend && Settings.OutputDevice.Contains(currentDevice))
+                {
+                    SettingsMenu.Instance.RefreshAndKeepPosition();
+                    return;
+                }
+
+                string target = backend == AudioOutputBackend.Asio
+                    ? Settings.LastAsioDevice
+                    : Settings.LastWindowsAudioDevice;
+                if (!Settings.OutputDevice.Contains(target))
+                {
+                    target = Settings.OutputDevice.FirstOrDefault();
+                }
+
+                if (string.IsNullOrEmpty(target))
+                {
+                    Settings.OutputBackend.SetValueWithoutNotify(currentBackend);
+                    Settings.OutputDevice.UpdateValues(currentBackend);
+                    ToastManager.ToastError("No ASIO output devices were found.");
+                    SettingsMenu.Instance.RefreshAndKeepPosition();
+                    return;
+                }
+
+                Settings.OutputDevice.Value = target;
+            }
+
+            private static void AsioBufferSizeCallback(int bufferLength)
+            {
+                if (!IsInitialized || !IsAsioOutput())
+                {
+                    return;
+                }
+
+                string device = Settings.OutputDevice.Value;
+                bool hadPrevious = Settings.AsioBufferLengths.TryGetValue(device, out int previousLength);
+                if (hadPrevious && previousLength == bufferLength)
+                {
+                    return;
+                }
+
+                Settings.AsioBufferLengths[device] = bufferLength;
+                if (!GlobalAudioHandler.ReinitializeOutput(bufferLength))
+                {
+                    if (hadPrevious)
+                    {
+                        Settings.AsioBufferLengths[device] = previousLength;
+                    }
+                    else
+                    {
+                        Settings.AsioBufferLengths.Remove(device);
+                    }
+                    Settings.AsioBufferSize.SetValueWithoutNotify(previousLength);
+                    ToastManager.ToastError("Failed to apply ASIO buffer size. Previous setting restored.");
+                }
+
+                Settings.AsioBufferSize.UpdateValues();
+                SettingsMenu.Instance.RefreshAndKeepPosition();
+            }
+
+            private static void RememberOutputDevice(AudioOutputBackend backend, string name)
+            {
+                if (backend == AudioOutputBackend.Asio)
+                {
+                    Settings.LastAsioDevice = name;
+                }
+                else
+                {
+                    Settings.LastWindowsAudioDevice = name;
+                }
             }
 
             private static bool IsAsioOutput()
@@ -991,7 +1112,7 @@ namespace YARG.Settings
 
             private static bool IsAsioOutput(string name)
             {
-                return name?.StartsWith("ASIO: ", StringComparison.Ordinal) == true;
+                return OutputDeviceSetting.BackendFor(name) == AudioOutputBackend.Asio;
             }
 
             private static void OutputChannelDefaultCallback(int channelId)

@@ -17,7 +17,7 @@ namespace YARG.Audio.BASS
 
         public int HeardLatencyMilliseconds => _backend?.HeardLatencyMilliseconds ?? 0;
 
-        public bool InitializeForDevice(BassOutputDevice device)
+        public bool InitializeForDevice(BassOutputDevice device, int asioBufferLength)
         {
             if (_disposed)
             {
@@ -25,7 +25,7 @@ namespace YARG.Audio.BASS
             }
 
             IBassOutputBackend backend = device.IsAsio
-                ? new BassAsioOutputBackend()
+                ? new BassAsioOutputBackend(asioBufferLength)
                 : new BassDeviceOutputBackend();
             if (!backend.Initialize(device))
             {
@@ -54,9 +54,9 @@ namespace YARG.Audio.BASS
             _backend = null;
         }
 
-        public bool Resume(BassOutputDevice device)
+        public bool Resume(BassOutputDevice device, int asioBufferLength)
         {
-            if (!InitializeForDevice(device))
+            if (!InitializeForDevice(device, asioBufferLength))
             {
                 return false;
             }
