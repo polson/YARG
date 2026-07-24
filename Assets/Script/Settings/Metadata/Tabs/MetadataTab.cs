@@ -64,6 +64,11 @@ namespace YARG.Settings.Metadata
                     }
                     case ButtonRowMetadata buttonRow:
                     {
+                        if (buttonRow.VisibleWhen != null && !buttonRow.VisibleWhen())
+                        {
+                            break;
+                        }
+
                         if (_buttonPrefab == null)
                         {
                             _buttonPrefab = Addressables

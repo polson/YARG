@@ -346,7 +346,9 @@ namespace YARG.Audio.BASS
                 var info = BassAsio.Info;
                 var lengths = GetBufferLengths(info);
                 int sampleRate = (int) Math.Round(BassAsio.Rate);
-                return new OutputBufferInfo(lengths, info.PreferredBufferLength, sampleRate);
+                bool isDriverControlled = info.BufferLengthGranularity == 0 &&
+                    info.MinBufferLength == info.MaxBufferLength;
+                return new OutputBufferInfo(lengths, info.PreferredBufferLength, sampleRate, isDriverControlled);
             }
             catch (Exception exception)
             {
@@ -354,6 +356,25 @@ namespace YARG.Audio.BASS
             }
 #endif
             return null;
+        }
+
+        protected override bool OpenOutputControlPanel()
+        {
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            if (_currentDevice?.IsAsio != true)
+            {
+                return false;
+            }
+
+            BassAsio.CurrentDevice = _currentDevice.AsioDeviceId;
+            if (BassAsio.ControlPanel())
+            {
+                return true;
+            }
+
+            YargLogger.LogFormatError("Failed to open ASIO control panel: {0}", BassAsio.LastError);
+#endif
+            return false;
         }
 
         protected override bool ReinitializeOutput(int bufferLength)

@@ -1093,6 +1093,41 @@ namespace YARG.Settings
                 SettingsMenu.Instance.RefreshAndKeepPosition();
             }
 
+            public void OpenAsioControlPanel()
+            {
+                if (!IsInitialized || !IsAsioOutput())
+                {
+                    return;
+                }
+
+                if (!GlobalAudioHandler.OpenOutputControlPanel())
+                {
+                    ToastManager.ToastError("Failed to open ASIO control panel.");
+                    return;
+                }
+
+                string device = Settings.OutputDevice.Value;
+                bool hadPrevious = Settings.AsioBufferLengths.TryGetValue(device, out int previousLength);
+                Settings.AsioBufferLengths[device] = 0;
+                if (!GlobalAudioHandler.ReinitializeOutput(0))
+                {
+                    if (hadPrevious)
+                    {
+                        Settings.AsioBufferLengths[device] = previousLength;
+                    }
+                    else
+                    {
+                        Settings.AsioBufferLengths.Remove(device);
+                    }
+                    ToastManager.ToastError("Failed to reinitialize audio after closing ASIO control panel.");
+                    return;
+                }
+
+                Settings.AsioBufferSize.UpdateValues();
+                Settings.AsioBufferSize.SetValueWithoutNotify(0);
+                SettingsMenu.Instance.RefreshAndKeepPosition();
+            }
+
             private static void RememberOutputDevice(AudioOutputBackend backend, string name)
             {
                 if (backend == AudioOutputBackend.Asio)

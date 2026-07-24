@@ -1056,7 +1056,8 @@
             "RefreshCache": "Scan Songs",
             "OpenExecutablePath": "Open Executable Path",
             "OpenPersistentDataPath": "Open Persistent Data Path",
-            "RemoveRemoteContent": "Remove Cached Content"
+            "RemoveRemoteContent": "Remove Cached Content",
+            "OpenAsioControlPanel": "Open ASIO Control Panel"
         },
         "Setting": {
             "AllowDuplicateSongs": {
@@ -1447,6 +1448,7 @@
                 "Description": "Smaller buffers reduce output latency but require more reliable audio processing.",
                 "DriverDefault": "Driver Default",
                 "DriverDefaultWithSize": "Driver Default ({0} samples)",
+                "DriverControlledWithSize": "Driver controlled ({0} samples)",
                 "Samples": "{0} samples",
                 "SamplesWithDuration": "{0} samples (~{1} ms)"
             },

@@ -8,6 +8,7 @@ namespace YARG.Settings.Types
     {
         private int _preferredLength;
         private int _sampleRate;
+        private bool _isDriverControlled;
 
         public OutputBufferSizeSetting(int value, Action<int> onChange = null)
             : base(value, onChange, localizable: false)
@@ -36,7 +37,11 @@ namespace YARG.Settings.Types
 
             _preferredLength = info.Value.PreferredLength;
             _sampleRate = info.Value.SampleRate;
-            _possibleValues.AddRange(info.Value.SupportedLengths);
+            _isDriverControlled = info.Value.IsDriverControlled;
+            if (!_isDriverControlled)
+            {
+                _possibleValues.AddRange(info.Value.SupportedLengths);
+            }
         }
 
         public bool Supports(int length) => _possibleValues.Contains(length);
@@ -45,6 +50,12 @@ namespace YARG.Settings.Types
         {
             if (value == 0)
             {
+                if (_isDriverControlled)
+                {
+                    return Localize.KeyFormat("Settings.Setting.AsioBufferSize.DriverControlledWithSize",
+                        _preferredLength);
+                }
+
                 return _preferredLength > 0
                     ? Localize.KeyFormat("Settings.Setting.AsioBufferSize.DriverDefaultWithSize", _preferredLength)
                     : Localize.Key("Settings.Setting.AsioBufferSize.DriverDefault");

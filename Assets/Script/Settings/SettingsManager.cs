@@ -272,6 +272,8 @@ namespace YARG.Settings
                 nameof(Settings.OutputDevice),
                 new FieldMetadata(nameof(Settings.AsioBufferSize),
                     visibleWhen: () => IsWindows() && Settings?.OutputBackend.Value == AudioOutputBackend.Asio),
+                new ButtonRowMetadata(nameof(Settings.OpenAsioControlPanel),
+                    () => IsWindows() && Settings?.OutputBackend.Value == AudioOutputBackend.Asio),
                 nameof(Settings.OutputChannelDefault),
                 nameof(Settings.OutputChannelDrumSfx),
                 nameof(Settings.OutputChannelMetronome),
