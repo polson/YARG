@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using ManagedBass;
+using ManagedBass.Asio;
 using ManagedBass.Fx;
 using ManagedBass.Mix;
 using UnityEditor;
@@ -26,6 +27,9 @@ namespace YARG.Editor
 
         private string _audioPath = string.Empty;
         private string _status = "Select an audio file, then create the test graph.";
+        private string[] _asioDeviceNames = Array.Empty<string>();
+        private bool _useAsio;
+        private int _asioDevice;
         private int _bufferLength = 75;
         private float _tempo = 100;
         private double _seekPosition;
@@ -58,6 +62,7 @@ namespace YARG.Editor
         private int _tempoHandle;
         private int _masterHandle;
         private bool _ownsBass;
+        private bool _ownsAsio;
         private double _nextStatusUpdate;
         private Vector2 _scrollPosition;
 
@@ -73,6 +78,7 @@ namespace YARG.Editor
         private void OnEnable()
         {
             minSize = DefaultWindowSize;
+            RefreshAsioDevices();
             EditorApplication.update += OnEditorUpdate;
         }
 
@@ -92,6 +98,8 @@ namespace YARG.Editor
                 MessageType.Info);
 
             DrawAudioFilePicker();
+
+            DrawOutputSettings();
 
             using (new EditorGUI.DisabledScope(_masterHandle != 0))
             {
@@ -123,6 +131,76 @@ namespace YARG.Editor
             DrawResults();
 
             EditorGUILayout.EndScrollView();
+        }
+
+        private void DrawOutputSettings()
+        {
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Output", EditorStyles.boldLabel);
+
+#if UNITY_EDITOR_WIN
+            using (new EditorGUI.DisabledScope(_masterHandle != 0 || _asioDeviceNames.Length == 0))
+            {
+                _useAsio = EditorGUILayout.Toggle("Use ASIO", _useAsio);
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                using (new EditorGUI.DisabledScope(_masterHandle != 0 || !_useAsio))
+                {
+                    _asioDevice = EditorGUILayout.Popup("ASIO device", _asioDevice, _asioDeviceNames);
+                }
+
+                using (new EditorGUI.DisabledScope(_masterHandle != 0))
+                {
+                    if (GUILayout.Button("Refresh", GUILayout.Width(70)))
+                    {
+                        RefreshAsioDevices();
+                    }
+                }
+            }
+
+            if (_asioDeviceNames.Length == 0)
+            {
+                EditorGUILayout.HelpBox("No ASIO drivers found.", MessageType.Warning);
+            }
+            else if (_useAsio)
+            {
+                EditorGUILayout.HelpBox(
+                    "ASIO pulls decoded audio directly from master mixer. Playback buffer setting " +
+                    "below only applies to standard BASS output; ASIO driver controls its buffer.",
+                    MessageType.Info);
+            }
+#else
+            EditorGUILayout.HelpBox("ASIO output is only available in Windows editor.", MessageType.Info);
+#endif
+        }
+
+        private void RefreshAsioDevices()
+        {
+#if UNITY_EDITOR_WIN
+            try
+            {
+                int deviceCount = BassAsio.DeviceCount;
+                _asioDeviceNames = new string[deviceCount];
+                for (int i = 0; i < deviceCount; i++)
+                {
+                    _asioDeviceNames[i] = BassAsio.GetDeviceInfo(i).Name;
+                }
+
+                _asioDevice = Mathf.Clamp(_asioDevice, 0, Math.Max(0, deviceCount - 1));
+                if (deviceCount == 0)
+                {
+                    _useAsio = false;
+                }
+            }
+            catch (Exception exception)
+            {
+                _asioDeviceNames = Array.Empty<string>();
+                _useAsio = false;
+                SetError($"Failed to enumerate ASIO devices: {exception.Message}");
+            }
+#endif
         }
 
         private void DrawAudioFilePicker()
@@ -256,7 +334,9 @@ namespace YARG.Editor
             }
 
             Bass.PlaybackBufferLength = _bufferLength;
-            if (!Bass.Init(-1, 44100, DeviceInitFlags.Latency, IntPtr.Zero))
+            int bassDevice = _useAsio ? 0 : -1;
+            var initFlags = _useAsio ? DeviceInitFlags.Default : DeviceInitFlags.Latency;
+            if (!Bass.Init(bassDevice, 44100, initFlags, IntPtr.Zero))
             {
                 SetBassError("Failed to initialize BASS");
                 return;
@@ -283,8 +363,13 @@ namespace YARG.Editor
             _sourceHandle = 0; // Tempo stream now owns the source stream.
 
             var tempoInfo = Bass.ChannelGetInfo(_tempoHandle);
+            var masterFlags = BassFlags.Float | BassFlags.MixerNonStop;
+            if (_useAsio)
+            {
+                masterFlags |= BassFlags.Decode;
+            }
             _masterHandle = BassMix.CreateMixerStream(tempoInfo.Frequency, tempoInfo.Channels,
-                BassFlags.Float | BassFlags.MixerNonStop);
+                masterFlags);
             if (_masterHandle == 0)
             {
                 SetBassError("Failed to create master mixer");
@@ -302,7 +387,7 @@ namespace YARG.Editor
                 return;
             }
 
-            if (!Bass.ChannelSetAttribute(_masterHandle, ChannelAttribute.Buffer,
+            if (!_useAsio && !Bass.ChannelSetAttribute(_masterHandle, ChannelAttribute.Buffer,
                     _bufferLength / 1000f))
             {
                 SetBassError("Failed to set master playback buffer");
@@ -314,17 +399,55 @@ namespace YARG.Editor
             _length = GetLengthSeconds(_tempoHandle);
             _seekPosition = 0;
 
-            if (!Bass.ChannelPlay(_masterHandle))
+            if (_useAsio ? !StartAsio(tempoInfo.Frequency) : !Bass.ChannelPlay(_masterHandle))
             {
-                SetBassError("Failed to start master mixer");
+                if (!_status.StartsWith("Error:"))
+                {
+                    SetBassError("Failed to start master mixer");
+                }
                 DisposeGraph();
                 return;
             }
 
             ResetSourcePositionOrigin();
 
-            _status = "Graph running. Master outputs silence until Play source is pressed.";
+            string output = _useAsio ? $"ASIO device '{_asioDeviceNames[_asioDevice]}'" : "BASS output";
+            _status = $"Graph running through {output}. Master outputs silence until Play source is pressed.";
             UpdateStatus();
+        }
+
+        private bool StartAsio(int sampleRate)
+        {
+#if UNITY_EDITOR_WIN
+            if (!BassAsio.Init(_asioDevice, AsioInitFlags.Thread))
+            {
+                SetAsioError("Failed to initialize ASIO device");
+                return false;
+            }
+            _ownsAsio = true;
+
+            if (BassAsio.CheckRate(sampleRate))
+            {
+                BassAsio.Rate = sampleRate;
+            }
+
+            if (!BassAsio.ChannelEnableBass(false, 0, _masterHandle, true))
+            {
+                SetAsioError("Failed to route master mixer to ASIO");
+                return false;
+            }
+
+            if (!BassAsio.Start(0, 0))
+            {
+                SetAsioError("Failed to start ASIO output");
+                return false;
+            }
+
+            return true;
+#else
+            SetError("ASIO output is only available on Windows.");
+            return false;
+#endif
         }
 
         private void SetSourcePaused(bool paused)
@@ -546,6 +669,13 @@ namespace YARG.Editor
 
         private void DisposeGraph()
         {
+            if (_ownsAsio)
+            {
+                BassAsio.Stop();
+                BassAsio.Free();
+                _ownsAsio = false;
+            }
+
             if (_masterHandle != 0)
             {
                 Bass.StreamFree(_masterHandle);
@@ -602,6 +732,11 @@ namespace YARG.Editor
         private void SetBassError(string message)
         {
             SetError($"{message}: {Bass.LastError}");
+        }
+
+        private void SetAsioError(string message)
+        {
+            SetError($"{message}: {BassAsio.LastError}");
         }
 
         private void SetError(string message)
