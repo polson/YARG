@@ -98,7 +98,6 @@ namespace YARG.Audio.BASS
         private readonly int _opusHandle = 0;
         private BassOutputDevice _currentDevice;
         private readonly BassAudioOutput _audioOutput;
-        private string _pendingOutputDevice;
 
         public BassAudioManager()
         {
@@ -219,14 +218,6 @@ namespace YARG.Audio.BASS
         {
             if (_currentDevice?.DisplayName == name)
             {
-                _pendingOutputDevice = null;
-                return true;
-            }
-
-            if (HasActiveMixers)
-            {
-                _pendingOutputDevice = name;
-                YargLogger.LogInfo("Output device change deferred until current audio closes");
                 return true;
             }
 
@@ -271,43 +262,65 @@ namespace YARG.Audio.BASS
                 }
             }
 
-            if (_currentDevice != null)
-            {
-                _currentDevice.Use();
-                UnloadSfx();
-                UnloadDrumSfx();
-                UnloadVox();
-                UnloadVenueSamples();
-                UnloadMetronome();
-                _audioOutput.ResetForDeviceChange();
-                _currentDevice.Dispose();
-                _currentDevice = null;
-            }
-
-            // Initialize the new BASS device only after freeing the previous one. BASS_Init can
-            // otherwise report Already and leave the candidate sharing the old device lifetime.
             var device = GetOutputDevice(name);
             if (device is not BassOutputDevice bassDevice)
             {
                 return false;
             }
 
-            YargLogger.LogFormatInfo("Changing audio output to: {0}", bassDevice.DisplayName);
-
-            _currentDevice = bassDevice.Use();
-            if (!_audioOutput.InitializeForDevice(bassDevice))
+            if (_currentDevice != null)
             {
-                _audioOutput.ResetForDeviceChange();
-                _currentDevice.Dispose();
-                _currentDevice = null;
-                return false;
+                BassOutputDevice previousDevice = _currentDevice;
+                previousDevice.Use();
+                UnloadSfx();
+                UnloadDrumSfx();
+                UnloadVox();
+                UnloadVenueSamples();
+                UnloadMetronome();
+                _audioOutput.Suspend();
+
+                bassDevice.Use();
+                MoveActiveMixersTo(bassDevice);
+                if (!_audioOutput.Resume(bassDevice))
+                {
+                    previousDevice.Use();
+                    MoveActiveMixersTo(previousDevice);
+                    bassDevice.Dispose();
+                    previousDevice.Use();
+                    _audioOutput.Resume(previousDevice);
+                    ReloadSamples(venueSamples);
+                    return false;
+                }
+
+                _currentDevice = bassDevice;
+                previousDevice.TransferOwnershipTo(bassDevice);
+                previousDevice.Dispose();
+                bassDevice.Use();
+            }
+            else
+            {
+                _currentDevice = bassDevice.Use();
+                if (!_audioOutput.InitializeForDevice(bassDevice))
+                {
+                    _audioOutput.ResetForDeviceChange();
+                    _currentDevice.Dispose();
+                    _currentDevice = null;
+                    return false;
+                }
             }
 
             UpdatePlaybackLatency();
 
             YargLogger.LogFormatInfo("Current audio output: {0}", bassDevice.DisplayName);
 
-            // Load/reload samples
+            ReloadSamples(venueSamples);
+            return true;
+        }
+
+#nullable enable
+        private void ReloadSamples(List<(string Name, byte[] Data, OutputChannel? OutputChannel)> venueSamples)
+#nullable disable
+        {
             LoadSfx();
             LoadDrumSfx(); // TODO: move drum sfx loading/disposal to song start/end respectively IF there are any drum players
             LoadVox();
@@ -316,15 +329,11 @@ namespace YARG.Audio.BASS
             {
                 LoadVenueSample(sample.Name, sample.Data, sample.OutputChannel);
             }
-
-            return true;
         }
 
 #nullable enable
         protected override StemMixer? CreateMixer(string name, float speed, double mixerVolume, bool clampStemVolume, bool normalize)
         {
-            ApplyPendingOutputDevice();
-
             if (GlobalAudioHandler.LogMixerStatus)
             {
                 YargLogger.LogDebug("Loading song");
@@ -775,26 +784,6 @@ namespace YARG.Audio.BASS
         {
             length = BassHelpers.ClampPlaybackBufferLength(length);
             Bass.PlaybackBufferLength = length;
-        }
-
-        protected override void OnMixersIdle()
-        {
-            UnityMainThreadCallback.QueueEvent(ApplyPendingOutputDevice);
-        }
-
-        private void ApplyPendingOutputDevice()
-        {
-            if (_pendingOutputDevice == null || HasActiveMixers)
-            {
-                return;
-            }
-
-            string name = _pendingOutputDevice;
-            _pendingOutputDevice = null;
-            if (!ApplyOutputDevice(name))
-            {
-                RestoreDefaultOutput(name);
-            }
         }
 
         protected override void DisposeUnmanagedResources()

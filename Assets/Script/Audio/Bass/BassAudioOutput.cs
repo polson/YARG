@@ -38,6 +38,49 @@ namespace YARG.Audio.BASS
             return true;
         }
 
+        public void Suspend()
+        {
+            if (_backend == null)
+            {
+                return;
+            }
+
+            foreach (var playback in _playbacks)
+            {
+                playback.PrepareForOutputChange();
+                _backend.DetachSong(playback.TempoStreamHandle);
+            }
+            _backend.Dispose();
+            _backend = null;
+        }
+
+        public bool Resume(BassOutputDevice device)
+        {
+            if (!InitializeForDevice(device))
+            {
+                return false;
+            }
+
+            foreach (var playback in _playbacks)
+            {
+                if (!_backend!.AttachSong(playback.TempoStreamHandle))
+                {
+                    foreach (var attachedPlayback in _playbacks)
+                    {
+                        _backend.DetachSong(attachedPlayback.TempoStreamHandle);
+                    }
+                    _backend.Dispose();
+                    _backend = null;
+                    return false;
+                }
+            }
+            foreach (var playback in _playbacks)
+            {
+                playback.RestoreAfterOutputChange();
+            }
+            return true;
+        }
+
         public BassSongPlayback CreateSongPlayback(int tempoStreamHandle)
         {
             var playback = new BassSongPlayback(tempoStreamHandle, this);
@@ -102,8 +145,7 @@ namespace YARG.Audio.BASS
 
         public void ResetForDeviceChange()
         {
-            _backend?.Dispose();
-            _backend = null;
+            Suspend();
             foreach (var playback in _playbacks)
             {
                 playback.Invalidate();

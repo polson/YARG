@@ -186,6 +186,15 @@ namespace YARG.Audio.BASS
             _preparedControlPosition = requestedPosition;
         }
 
+        public void ResetAfterOutputChange(double observedPosition)
+        {
+            double now = GetCurrentTime();
+            float rate = _isPlaying ? CurrentRate : 0f;
+            _commandedRateHistory.Reset(now, observedPosition, rate);
+            _bufferedRateHistory.Reset(now, observedPosition, rate);
+            _preparedControlPosition = null;
+        }
+
         private float CurrentRate => _songSpeed + _syncAdjustment;
 
         private static double GetCurrentTime()

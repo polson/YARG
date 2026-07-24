@@ -453,7 +453,7 @@ namespace YARG.Audio.BASS
                 YargLogger.LogFormatError("Failed to change device for tempo stream handle: {0}", Bass.LastError);
             }
 
-            _playback.SetOutputDevice(bassDevice);
+            _playbackTimeline.ResetAfterOutputChange(_songPositionTracker.GetSongPosition());
         }
 
         private void RemoveChannelsFromMixer()

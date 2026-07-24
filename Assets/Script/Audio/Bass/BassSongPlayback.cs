@@ -15,6 +15,12 @@ namespace YARG.Audio.BASS
         private readonly BassAudioOutput _audioOutput;
         private readonly HashSet<BassOneShotChannel> _oneShotChannels = new();
         private bool _isValid;
+        private bool _resumeAfterOutputChange;
+        private double _volume = 1;
+        private int _bufferLength;
+#nullable enable
+        private OutputChannel? _outputChannel;
+#nullable disable
 
         internal int TempoStreamHandle { get; }
         public bool IsValid => _isValid;
@@ -28,6 +34,33 @@ namespace YARG.Audio.BASS
 
         internal void MarkValid() => _isValid = true;
         internal void Invalidate() => _isValid = false;
+
+        internal void PrepareForOutputChange()
+        {
+            _resumeAfterOutputChange = IsPlaying;
+            foreach (var channel in _oneShotChannels)
+            {
+                channel.DetachOutput();
+            }
+        }
+
+        internal void RestoreAfterOutputChange()
+        {
+            _isValid = true;
+            _audioOutput.SetSongVolume(TempoStreamHandle, _volume);
+            _audioOutput.SetSongBufferLength(TempoStreamHandle, _bufferLength);
+            _audioOutput.SetSongOutputChannel(TempoStreamHandle, _outputChannel);
+            foreach (var channel in _oneShotChannels)
+            {
+                channel.AttachOutput(
+                    _audioOutput.GetSongMixerHandle(TempoStreamHandle),
+                    _audioOutput.OneShotStartsPaused(TempoStreamHandle));
+            }
+            if (_resumeAfterOutputChange)
+            {
+                Play(restart: false);
+            }
+        }
 
         public int Play(bool restart)
         {
@@ -110,7 +143,8 @@ namespace YARG.Audio.BASS
 
         public void SetVolume(double volume)
         {
-            _audioOutput.SetSongVolume(TempoStreamHandle, BassAudioManager.ExponentialVolume(volume));
+            _volume = BassAudioManager.ExponentialVolume(volume);
+            _audioOutput.SetSongVolume(TempoStreamHandle, _volume);
         }
 
         public int GetFFTData(float[] buffer, int fftSize, bool complex)
@@ -149,12 +183,18 @@ namespace YARG.Audio.BASS
         public int GetLevel(float[] level) => _audioOutput.GetSongLevel(TempoStreamHandle, level);
         public double GetLatency() => _audioOutput.GetTempoCommandDelay(TempoStreamHandle);
         public double GetPlaybackStartDelay() => _audioOutput.GetPlaybackStartDelay();
-        public void SetBufferLength(int length) =>
+        public void SetBufferLength(int length)
+        {
+            _bufferLength = length;
             _audioOutput.SetSongBufferLength(TempoStreamHandle, length);
+        }
 
 #nullable enable
-        public void SetOutputChannel(OutputChannel? channel) =>
+        public void SetOutputChannel(OutputChannel? channel)
+        {
+            _outputChannel = channel;
             _audioOutput.SetSongOutputChannel(TempoStreamHandle, channel);
+        }
 #nullable disable
 
         public void SetOutputDevice(BassOutputDevice device) { }
