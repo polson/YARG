@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading;
 using ManagedBass;
 using ManagedBass.Asio;
 using ManagedBass.Mix;
@@ -13,9 +14,11 @@ namespace YARG.Audio.BASS
     internal sealed class BassAsioOutputBackend : IBassOutputBackend
     {
         private const int POSITION_HISTORY_CAPACITY = 1024;
+        private const double CLOCK_SMOOTHING_SECONDS = 1.0;
 
         private readonly int _bufferLength;
         private readonly object _positionLock = new();
+        private readonly PositionDiagnostics _positionDiagnostics = new();
         private readonly AsioProcedure _outputCallback;
         private readonly HashSet<int> _songs = new();
         private readonly Dictionary<int, AsioSongPosition> _songPositions = new();
@@ -24,15 +27,18 @@ namespace YARG.Audio.BASS
         private int _bytesPerFrame;
         private int _sampleRate;
         private int _latencyFrames;
+        private int _callbackFrames;
         private bool _ownsAsio;
         private double _volume = 1;
         private long _submittedFrames;
-        private long _callbackStartFrame;
-        private long _callbackTimestamp;
+        private long _lastClockTimestamp;
+        private double _clockOffset;
+        private double _lastReportedFrame;
+        private bool _clockInitialized;
 
         public int HeardLatencyMilliseconds { get; private set; }
         public bool SongMixerRunsContinuously => true;
-        public double PlaybackStartDelay => 0;
+        public double PlaybackStartDelay => GetCommandDelay();
 
         public BassAsioOutputBackend(int bufferLength)
         {
@@ -154,29 +160,39 @@ namespace YARG.Audio.BASS
 
         public long GetSongPosition(int tempoStreamHandle)
         {
-            lock (_positionLock)
+            long waitStarted = Stopwatch.GetTimestamp();
+            bool contended = !Monitor.TryEnter(_positionLock);
+            if (contended)
             {
+                Monitor.Enter(_positionLock);
+            }
+
+            PositionDiagnosticReport? report = null;
+            try
+            {
+                long lockAcquired = Stopwatch.GetTimestamp();
+                _positionDiagnostics.RecordLockWait(waitStarted, lockAcquired, contended);
+
                 if (!_songPositions.TryGetValue(tempoStreamHandle, out var position))
                 {
                     return -1;
                 }
 
-                double heardFrame = 0;
-                if (_callbackTimestamp != 0 && _sampleRate > 0)
-                {
-                    double elapsed = (double) (Stopwatch.GetTimestamp() - _callbackTimestamp) /
-                        Stopwatch.Frequency;
-                    heardFrame = _callbackStartFrame + Math.Max(0, elapsed) * _sampleRate -
-                        _latencyFrames;
-                }
-
-                heardFrame = Math.Clamp(heardFrame, 0, _submittedFrames);
+                double heardFrame = GetHeardFrame();
+                report = _positionDiagnostics.GetReport(lockAcquired);
                 return position.GetPosition(heardFrame);
+            }
+            finally
+            {
+                Monitor.Exit(_positionLock);
+                if (report.HasValue)
+                {
+                    report.Value.Log();
+                }
             }
         }
 
-        // Tempo decoding is pulled directly by ASIO. No BASS playback queue exists here.
-        public double GetTempoCommandDelay(int tempoStreamHandle) => 0;
+        public double GetTempoCommandDelay(int tempoStreamHandle) => GetCommandDelay();
 
         public void SetSongBufferLength(int tempoStreamHandle, int length) { }
 
@@ -266,6 +282,9 @@ namespace YARG.Audio.BASS
                 return false;
             }
             BassAsio.Rate = mixerInfo.Frequency;
+            _callbackFrames = _bufferLength > 0
+                ? _bufferLength
+                : Math.Max(0, BassAsio.Info.PreferredBufferLength);
             if (!BassAsio.ChannelEnable(false, 0, _outputCallback, IntPtr.Zero) ||
                 !BassAsio.ChannelJoin(false, 1, 0) ||
                 !BassAsio.ChannelSetFormat(false, 0, AsioSampleFormat.Float) ||
@@ -293,18 +312,22 @@ namespace YARG.Audio.BASS
 
             long timestamp = Stopwatch.GetTimestamp();
             long frameCount = length / _bytesPerFrame;
+            long blockStart;
             lock (_positionLock)
             {
-                long blockStart = _submittedFrames;
-                _callbackStartFrame = blockStart;
-                _callbackTimestamp = timestamp;
+                _callbackFrames = (int) frameCount;
+                blockStart = _submittedFrames;
+                UpdateOutputClock(blockStart, timestamp);
+            }
 
-                int bytesRead = Bass.ChannelGetData(_masterMixerHandle, buffer, length);
-                if (bytesRead < 0)
-                {
-                    bytesRead = 0;
-                }
+            int bytesRead = Bass.ChannelGetData(_masterMixerHandle, buffer, length);
+            if (bytesRead < 0)
+            {
+                bytesRead = 0;
+            }
 
+            lock (_positionLock)
+            {
                 _submittedFrames += frameCount;
 
                 foreach (var pair in _songPositions)
@@ -313,8 +336,61 @@ namespace YARG.Audio.BASS
                     pair.Value.AddBlock(blockStart, _submittedFrames,
                         position >= 0 ? position : pair.Value.LastGeneratedPosition);
                 }
+            }
 
-                return bytesRead;
+            return bytesRead;
+        }
+
+        private void UpdateOutputClock(long blockStartFrame, long timestamp)
+        {
+            double callbackTime = (double) timestamp / Stopwatch.Frequency;
+            double observedOffset = (blockStartFrame / (double) _sampleRate) - callbackTime;
+
+            if (!_clockInitialized)
+            {
+                _clockOffset = observedOffset;
+                _clockInitialized = true;
+            }
+            else
+            {
+                // Callback entry time contains scheduling jitter. Smooth its frame-clock offset so
+                // position stays stable while still following slow hardware clock drift.
+                double elapsed = (double) (timestamp - _lastClockTimestamp) /
+                    Stopwatch.Frequency;
+                double blend = 1 - Math.Exp(-elapsed / CLOCK_SMOOTHING_SECONDS);
+                _clockOffset += blend * (observedOffset - _clockOffset);
+            }
+
+            _lastClockTimestamp = timestamp;
+        }
+
+        private double GetHeardFrame()
+        {
+            if (!_clockInitialized || _sampleRate <= 0)
+            {
+                return 0;
+            }
+
+            double currentTime = (double) Stopwatch.GetTimestamp() / Stopwatch.Frequency;
+            double heardFrame = ((currentTime + _clockOffset) * _sampleRate) - _latencyFrames;
+            _positionDiagnostics.RecordUpperClamp(heardFrame, _submittedFrames, _sampleRate);
+            heardFrame = Math.Clamp(heardFrame, _lastReportedFrame, _submittedFrames);
+            _lastReportedFrame = heardFrame;
+            return heardFrame;
+        }
+
+        private double GetCommandDelay()
+        {
+            lock (_positionLock)
+            {
+                if (_sampleRate <= 0)
+                {
+                    return 0;
+                }
+
+                // A command waits 0-1 callback periods before BASS generates data with the new
+                // state. Use the midpoint, then include frames already queued in the ASIO driver.
+                return (_latencyFrames + (_callbackFrames * 0.5)) / _sampleRate;
             }
         }
 
@@ -434,6 +510,134 @@ namespace YARG.Audio.BASS
                 OutputEnd = outputEnd;
                 PositionStart = positionStart;
                 PositionEnd = positionEnd;
+            }
+        }
+
+        private sealed class PositionDiagnostics
+        {
+            private const double REPORT_INTERVAL_SECONDS = 1.0;
+
+            private long _reportStarted;
+            private long _positionReads;
+            private long _contendedReads;
+            private long _totalLockWaitTicks;
+            private long _maximumLockWaitTicks;
+            private long _upperClampReads;
+            private long _upperClampPeriods;
+            private double _maximumUpperClampMilliseconds;
+            private bool _upperClampActive;
+
+            public void RecordLockWait(long waitStarted, long lockAcquired, bool contended)
+            {
+                _positionReads++;
+                if (!contended)
+                {
+                    return;
+                }
+
+                long waitTicks = lockAcquired - waitStarted;
+                _contendedReads++;
+                _totalLockWaitTicks += waitTicks;
+                _maximumLockWaitTicks = Math.Max(_maximumLockWaitTicks, waitTicks);
+            }
+
+            public void RecordUpperClamp(double heardFrame, long submittedFrames, int sampleRate)
+            {
+                if (heardFrame <= submittedFrames)
+                {
+                    _upperClampActive = false;
+                    return;
+                }
+
+                _upperClampReads++;
+                if (!_upperClampActive)
+                {
+                    _upperClampPeriods++;
+                    _upperClampActive = true;
+                }
+
+                double overrunMilliseconds = (heardFrame - submittedFrames) * 1000 / sampleRate;
+                _maximumUpperClampMilliseconds = Math.Max(
+                    _maximumUpperClampMilliseconds, overrunMilliseconds);
+            }
+
+            public PositionDiagnosticReport? GetReport(long timestamp)
+            {
+                if (_reportStarted == 0)
+                {
+                    _reportStarted = timestamp;
+                    return null;
+                }
+
+                double elapsed = (double) (timestamp - _reportStarted) / Stopwatch.Frequency;
+                if (elapsed < REPORT_INTERVAL_SECONDS)
+                {
+                    return null;
+                }
+
+                var report = new PositionDiagnosticReport(
+                    elapsed,
+                    _positionReads,
+                    _contendedReads,
+                    TicksToMilliseconds(_totalLockWaitTicks),
+                    TicksToMilliseconds(_maximumLockWaitTicks),
+                    _upperClampReads,
+                    _upperClampPeriods,
+                    _maximumUpperClampMilliseconds);
+
+                _reportStarted = timestamp;
+                _positionReads = 0;
+                _contendedReads = 0;
+                _totalLockWaitTicks = 0;
+                _maximumLockWaitTicks = 0;
+                _upperClampReads = 0;
+                _upperClampPeriods = 0;
+                _maximumUpperClampMilliseconds = 0;
+                return report;
+            }
+
+            private static double TicksToMilliseconds(long ticks) =>
+                ticks * 1000.0 / Stopwatch.Frequency;
+        }
+
+        private readonly struct PositionDiagnosticReport
+        {
+            private readonly double _elapsedSeconds;
+            private readonly long _positionReads;
+            private readonly long _contendedReads;
+            private readonly double _totalLockWaitMilliseconds;
+            private readonly double _maximumLockWaitMilliseconds;
+            private readonly long _upperClampReads;
+            private readonly long _upperClampPeriods;
+            private readonly double _maximumUpperClampMilliseconds;
+
+            public PositionDiagnosticReport(double elapsedSeconds, long positionReads,
+                long contendedReads, double totalLockWaitMilliseconds,
+                double maximumLockWaitMilliseconds, long upperClampReads,
+                long upperClampPeriods, double maximumUpperClampMilliseconds)
+            {
+                _elapsedSeconds = elapsedSeconds;
+                _positionReads = positionReads;
+                _contendedReads = contendedReads;
+                _totalLockWaitMilliseconds = totalLockWaitMilliseconds;
+                _maximumLockWaitMilliseconds = maximumLockWaitMilliseconds;
+                _upperClampReads = upperClampReads;
+                _upperClampPeriods = upperClampPeriods;
+                _maximumUpperClampMilliseconds = maximumUpperClampMilliseconds;
+            }
+
+            public void Log()
+            {
+                double averageContendedWait = _contendedReads > 0
+                    ? _totalLockWaitMilliseconds / _contendedReads
+                    : 0;
+                YargLogger.LogFormatDebug(
+                    "ASIO position diagnostics ({0:F2}s): reads={1}, lock contention={2}, " +
+                    "contended wait avg/max={3:F3}/{4:F3}ms, upper clamp reads/periods={5}/{6}, " +
+                    "maximum clock lead={7:F3}ms",
+                    _elapsedSeconds, _positionReads, _contendedReads,
+                    averageContendedWait, _maximumLockWaitMilliseconds,
+                    _upperClampReads, _upperClampPeriods, _maximumUpperClampMilliseconds);
             }
         }
     }
