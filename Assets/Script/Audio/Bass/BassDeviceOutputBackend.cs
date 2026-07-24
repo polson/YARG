@@ -142,6 +142,9 @@ namespace YARG.Audio.BASS
             return BassLatencyProvider.GetTempoStreamLatency(SongMixerHandle(tempoStreamHandle));
         }
 
+        public long GetSongPosition(int tempoStreamHandle) =>
+            BassMix.ChannelGetPosition(tempoStreamHandle, PositionFlags.Bytes);
+
         public void SetSongBufferLength(int tempoStreamHandle, int length)
         {
             length = BassHelpers.ClampPlaybackBufferLength(length);

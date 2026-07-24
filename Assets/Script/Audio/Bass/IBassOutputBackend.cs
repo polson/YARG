@@ -23,6 +23,7 @@ namespace YARG.Audio.BASS
         void SetSongVolume(int tempoStreamHandle, double volume);
         int GetSongData(int tempoStreamHandle, float[] buffer, int flags);
         int GetSongLevel(int tempoStreamHandle, float[] level);
+        long GetSongPosition(int tempoStreamHandle);
         double GetTempoCommandDelay(int tempoStreamHandle);
         void SetSongBufferLength(int tempoStreamHandle, int length);
         void SetSongOutputChannel(int tempoStreamHandle, OutputChannel? channel);

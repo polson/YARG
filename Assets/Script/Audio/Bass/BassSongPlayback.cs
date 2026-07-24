@@ -184,6 +184,7 @@ namespace YARG.Audio.BASS
         }
 
         public int GetLevel(float[] level) => _audioOutput.GetSongLevel(TempoStreamHandle, level);
+        public long GetPosition() => _audioOutput.GetSongPosition(TempoStreamHandle);
         public double GetLatency() => _audioOutput.GetTempoCommandDelay(TempoStreamHandle);
         public double GetPlaybackStartDelay() => _audioOutput.GetPlaybackStartDelay();
         public void SetBufferLength(int length)

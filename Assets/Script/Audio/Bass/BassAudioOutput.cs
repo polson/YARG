@@ -117,6 +117,8 @@ namespace YARG.Audio.BASS
             _backend?.GetSongData(tempoStreamHandle, buffer, flags) ?? -1;
         internal int GetSongLevel(int tempoStreamHandle, float[] level) =>
             _backend?.GetSongLevel(tempoStreamHandle, level) ?? -1;
+        internal long GetSongPosition(int tempoStreamHandle) =>
+            _backend?.GetSongPosition(tempoStreamHandle) ?? -1;
         internal double GetTempoCommandDelay(int tempoStreamHandle) =>
             _backend?.GetTempoCommandDelay(tempoStreamHandle) ?? 0;
         internal double GetPlaybackStartDelay() => _backend?.PlaybackStartDelay ?? 0;

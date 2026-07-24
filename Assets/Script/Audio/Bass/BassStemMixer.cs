@@ -108,7 +108,7 @@ namespace YARG.Audio.BASS
                 return;
             }
 
-            _songPositionTracker = new SongPositionTracker(_tempoStreamHandle);
+            _songPositionTracker = new SongPositionTracker(_tempoStreamHandle, _playback);
             _playbackTimeline = new BufferedPlaybackTimeline(speed);
             _playback.OutputChanged += OnOutputChanged;
             _shouldNormalize = normalize && SettingsManager.Settings.EnableNormalization.Value;
@@ -724,6 +724,7 @@ namespace YARG.Audio.BASS
         private sealed class SongPositionTracker
         {
             private readonly int    _tempoStreamHandle;
+            private readonly BassSongPlayback _playback;
             private          double _songStart;
             private          double _playbackDelay;
             private          long   _positionBeforeSeek;
@@ -733,9 +734,10 @@ namespace YARG.Audio.BASS
 
             private double TotalDelay     => AlignmentDelay + _playbackDelay;
 
-            public SongPositionTracker(int tempoStreamHandle)
+            public SongPositionTracker(int tempoStreamHandle, BassSongPlayback playback)
             {
                 _tempoStreamHandle = tempoStreamHandle;
+                _playback = playback;
             }
 
             /// <summary>
@@ -763,7 +765,7 @@ namespace YARG.Audio.BASS
             /// </summary>
             public void Reset(double songStart, double alignmentDelay, double playbackDelay)
             {
-                _positionBeforeSeek = BassMix.ChannelGetPosition(_tempoStreamHandle, PositionFlags.Bytes);
+                _positionBeforeSeek = _playback.GetPosition();
                 if (_positionBeforeSeek < 0)
                 {
                     YargLogger.LogFormatError("Failed to capture position before seek: {0}!",
@@ -783,7 +785,7 @@ namespace YARG.Audio.BASS
 
             private double GetTempoStreamPosition()
             {
-                long positionBytes = BassMix.ChannelGetPosition(_tempoStreamHandle, PositionFlags.Bytes);
+                long positionBytes = _playback.GetPosition();
                 if (positionBytes < 0)
                 {
                     YargLogger.LogFormatError("Failed to get byte position: {0}!", Bass.LastError);
