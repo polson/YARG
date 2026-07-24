@@ -212,14 +212,7 @@ namespace YARG.Audio.BASS
 
         private void UpdatePlaybackLatency()
         {
-            if (_currentDevice?.IsAsio == true)
-            {
-                PlaybackLatency = _audioOutput.AsioLatencyMilliseconds;
-                return;
-            }
-
-            double playbackLatency = BassLatencyProvider.GetPlaybackStreamLatency();
-            PlaybackLatency = (int) Math.Round(playbackLatency * 1000.0);
+            PlaybackLatency = _audioOutput.HeardLatencyMilliseconds;
         }
 
         protected override bool SetOutputDevice(string name)
