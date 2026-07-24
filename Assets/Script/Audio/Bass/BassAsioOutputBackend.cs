@@ -19,6 +19,7 @@ namespace YARG.Audio.BASS
 
         public int HeardLatencyMilliseconds { get; private set; }
         public bool SongMixerRunsContinuously => true;
+        public double PlaybackStartDelay => 0;
 
         public bool Initialize(BassOutputDevice device)
         {

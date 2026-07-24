@@ -128,7 +128,7 @@ namespace YARG.Audio.BASS
         /// <summary>
         /// Starts commanded and buffered position advancement.
         /// </summary>
-        public void Play(double bassPosition)
+        public void Play(double bassPosition, double startupDelay)
         {
             if (_isPlaying)
             {
@@ -146,13 +146,13 @@ namespace YARG.Audio.BASS
                 double requestedPosition = _preparedControlPosition.Value;
                 _commandedRateHistory.Reset(now, requestedPosition, rate);
                 _bufferedRateHistory.Reset(now, bassPosition, 0f);
-                _bufferedRateHistory.SetRate(now + BassLatencyProvider.StartupLatency, rate);
+                _bufferedRateHistory.SetRate(now + Math.Max(0, startupDelay), rate);
                 _preparedControlPosition = null;
                 return;
             }
 
             _commandedRateHistory.SetRate(now, rate);
-            _bufferedRateHistory.SetRate(now + BassLatencyProvider.StartupLatency, rate);
+            _bufferedRateHistory.SetRate(now + Math.Max(0, startupDelay), rate);
         }
 
         /// <summary>

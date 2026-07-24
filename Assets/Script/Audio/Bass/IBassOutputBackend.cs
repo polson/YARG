@@ -8,6 +8,7 @@ namespace YARG.Audio.BASS
     {
         int HeardLatencyMilliseconds { get; }
         bool SongMixerRunsContinuously { get; }
+        double PlaybackStartDelay { get; }
         int SongMixerHandle(int tempoStreamHandle);
 
         bool Initialize(BassOutputDevice device);

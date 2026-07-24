@@ -76,6 +76,7 @@ namespace YARG.Audio.BASS
             _backend?.GetSongLevel(tempoStreamHandle, level) ?? -1;
         internal double GetTempoCommandDelay(int tempoStreamHandle) =>
             _backend?.GetTempoCommandDelay(tempoStreamHandle) ?? 0;
+        internal double GetPlaybackStartDelay() => _backend?.PlaybackStartDelay ?? 0;
         internal void SetSongBufferLength(int tempoStreamHandle, int length) =>
             _backend?.SetSongBufferLength(tempoStreamHandle, length);
         internal void SetSongOutputChannel(int tempoStreamHandle, OutputChannel? channel) =>

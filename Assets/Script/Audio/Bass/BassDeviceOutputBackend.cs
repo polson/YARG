@@ -23,6 +23,7 @@ namespace YARG.Audio.BASS
 
         public int HeardLatencyMilliseconds => Math.Max(0, Bass.Info.Latency);
         public bool SongMixerRunsContinuously => false;
+        public double PlaybackStartDelay => BassLatencyProvider.StartupLatency;
 
         public BassDeviceOutputBackend()
         {

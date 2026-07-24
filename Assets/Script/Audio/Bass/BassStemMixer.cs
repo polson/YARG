@@ -153,7 +153,10 @@ namespace YARG.Audio.BASS
 
                 // Start control-rate tracking after ChannelPlay returns so mixer startup work is not
                 // counted as song progress.
-                _playbackTimeline.Play(_songPositionTracker.GetSongPosition());
+                _playbackTimeline.Play(
+                    _songPositionTracker.GetSongPosition(),
+                    _playback.GetPlaybackStartDelay()
+                );
                 _didSeek = false;
                 foreach (var channel in _oneShotChannels)
                 {
