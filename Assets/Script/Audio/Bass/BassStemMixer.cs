@@ -110,6 +110,7 @@ namespace YARG.Audio.BASS
 
             _songPositionTracker = new SongPositionTracker(_tempoStreamHandle);
             _playbackTimeline = new BufferedPlaybackTimeline(speed);
+            _playback.OutputChanged += OnOutputChanged;
             _shouldNormalize = normalize && SettingsManager.Settings.EnableNormalization.Value;
             if (_shouldNormalize)
             {
@@ -453,7 +454,14 @@ namespace YARG.Audio.BASS
                 YargLogger.LogFormatError("Failed to change device for tempo stream handle: {0}", Bass.LastError);
             }
 
-            _playbackTimeline.ResetAfterOutputChange(_songPositionTracker.GetSongPosition());
+        }
+
+        private void OnOutputChanged()
+        {
+            _playbackTimeline.ResetAfterOutputChange(
+                _songPositionTracker.GetSongPosition(),
+                _playback.GetPlaybackStartDelay()
+            );
         }
 
         private void RemoveChannelsFromMixer()
@@ -646,6 +654,10 @@ namespace YARG.Audio.BASS
 
         protected override void DisposeUnmanagedResources()
         {
+            if (_playback != null)
+            {
+                _playback.OutputChanged -= OnOutputChanged;
+            }
             _playback?.Dispose();
 
             // Tempo stream owns and frees its source mixer via BassFlags.FxFreeSource.

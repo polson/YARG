@@ -135,8 +135,6 @@ namespace YARG.Audio.BASS
         public void SetSampleOutputChannel(int sourceHandle, OutputChannel? outputChannel) =>
             _backend?.SetSampleOutputChannel(sourceHandle, outputChannel);
 
-        public void SetBufferLength(int length) { }
-
         public void SetVolume(double volume)
         {
             _volume = volume;

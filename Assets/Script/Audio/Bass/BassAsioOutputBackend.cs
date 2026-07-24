@@ -206,6 +206,8 @@ namespace YARG.Audio.BASS
             var mixerInfo = Bass.ChannelGetInfo(_masterMixerHandle);
             if (!BassAsio.CheckRate(mixerInfo.Frequency))
             {
+                YargLogger.LogFormatError("ASIO device does not support {0}Hz: {1}",
+                    mixerInfo.Frequency, BassAsio.LastError);
                 return false;
             }
             BassAsio.Rate = mixerInfo.Frequency;

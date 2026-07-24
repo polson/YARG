@@ -22,6 +22,8 @@ namespace YARG.Audio.BASS
         private OutputChannel? _outputChannel;
 #nullable disable
 
+        internal event Action OutputChanged;
+
         internal int TempoStreamHandle { get; }
         public bool IsValid => _isValid;
         public bool IsPlaying => _isValid && _audioOutput.IsSongPlaying(TempoStreamHandle);
@@ -60,6 +62,7 @@ namespace YARG.Audio.BASS
             {
                 Play(restart: false);
             }
+            OutputChanged?.Invoke();
         }
 
         public int Play(bool restart)
@@ -197,8 +200,6 @@ namespace YARG.Audio.BASS
         }
 #nullable disable
 
-        public void SetOutputDevice(BassOutputDevice device) { }
-
         public OneShotChannel CreateOneShotChannel(int sampleStream,
             IReadOnlyList<double> scheduledPlays, Func<long, double> getSongPosition,
             Func<float> getSpeed, double outputLeadTime)
@@ -227,6 +228,7 @@ namespace YARG.Audio.BASS
             }
             _oneShotChannels.Clear();
             _audioOutput.Remove(this);
+            OutputChanged = null;
             _isValid = false;
         }
     }

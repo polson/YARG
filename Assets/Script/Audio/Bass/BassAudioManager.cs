@@ -283,11 +283,19 @@ namespace YARG.Audio.BASS
                 MoveActiveMixersTo(bassDevice);
                 if (!_audioOutput.Resume(bassDevice))
                 {
+                    YargLogger.LogError(
+                        $"Failed to start audio output '{bassDevice.DisplayName}', " +
+                        $"restoring '{previousDevice.DisplayName}'");
                     previousDevice.Use();
                     MoveActiveMixersTo(previousDevice);
                     bassDevice.Dispose();
                     previousDevice.Use();
-                    _audioOutput.Resume(previousDevice);
+                    if (!_audioOutput.Resume(previousDevice))
+                    {
+                        YargLogger.LogFormatError("Failed to restore audio output '{0}'",
+                            previousDevice.DisplayName);
+                    }
+                    UpdatePlaybackLatency();
                     ReloadSamples(venueSamples);
                     return false;
                 }

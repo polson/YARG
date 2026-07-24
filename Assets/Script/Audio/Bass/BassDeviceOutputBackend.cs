@@ -18,7 +18,6 @@ namespace YARG.Audio.BASS
         private readonly HashSet<int> _activeSamples = new();
         private readonly Timer _idleTimer;
         private int _sampleMixerHandle;
-        private int _deviceId = -1;
         private bool _disposed;
 
         public int HeardLatencyMilliseconds => Math.Max(0, Bass.Info.Latency);
@@ -32,7 +31,6 @@ namespace YARG.Audio.BASS
 
         public bool Initialize(BassOutputDevice device)
         {
-            _deviceId = device.DeviceId;
             if (Bass.Start())
             {
                 return true;
