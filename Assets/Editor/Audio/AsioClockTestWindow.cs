@@ -12,15 +12,15 @@ namespace YARG.Editor
     /// <summary>
     /// Measures the ASIO device clock against QPC without involving BASS playback or mixing.
     /// </summary>
-    public sealed class AsioClockTestWindow : EditorWindow
+    internal sealed class AsioClockTestTab
     {
         private const double STATUS_UPDATE_INTERVAL = 0.1;
         private const int MAXIMUM_GRAPH_SAMPLES = 18_000;
         private const int GRAPH_SAMPLES_TO_TRIM = 2_000;
         private const int SMOOTHING_SAMPLE_COUNT = 10;
-        private static readonly Vector2 DefaultWindowSize = new(620, 800);
-
         private readonly AsioProcedure _outputCallback;
+        private readonly Action _repaint;
+        private readonly Action<string> _showNotification;
         private readonly List<Vector2> _driftHistory = new();
 
         private string[] _deviceNames = Array.Empty<string>();
@@ -83,34 +83,26 @@ namespace YARG.Editor
         private int _measurementVersion;
         private int _resetRequested;
 
-        public AsioClockTestWindow()
+        public AsioClockTestTab(Action repaint, Action<string> showNotification)
         {
+            _repaint = repaint;
+            _showNotification = showNotification;
             _outputCallback = FillSilence;
         }
 
-        [MenuItem("YARG/Audio/ASIO Clock Test")]
-        private static void Open()
+        public void Enable()
         {
-            var window = GetWindow<AsioClockTestWindow>("ASIO Clock Test");
-            window.minSize = DefaultWindowSize;
-            window.position = new Rect(window.position.position, DefaultWindowSize);
-            window.Show();
-        }
-
-        private void OnEnable()
-        {
-            minSize = DefaultWindowSize;
             RefreshDevices();
             EditorApplication.update += OnEditorUpdate;
         }
 
-        private void OnDisable()
+        public void Disable()
         {
             EditorApplication.update -= OnEditorUpdate;
             StopTest();
         }
 
-        private void OnGUI()
+        public void Draw()
         {
             EditorGUILayout.HelpBox(
                 "Measures ASIO callback sample rate against Stopwatch/QPC while outputting silence. " +
@@ -272,7 +264,7 @@ namespace YARG.Editor
             if (GUILayout.Button("Copy Results"))
             {
                 EditorGUIUtility.systemCopyBuffer = FormatResults(measurement);
-                ShowNotification(new GUIContent("ASIO clock results copied."));
+                _showNotification("ASIO clock results copied.");
             }
 
             DrawDriftGraph();
@@ -792,7 +784,7 @@ namespace YARG.Editor
             _asioCpuUsage = BassAsio.CPUUsage;
             _maximumAsioCpuUsage = Math.Max(_maximumAsioCpuUsage, _asioCpuUsage);
             RecordDriftGraphSample();
-            Repaint();
+            _repaint();
         }
 
         private void RecordDriftGraphSample()

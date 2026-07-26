@@ -14,7 +14,7 @@ namespace YARG.Editor
     /// Exercises the BASS operations needed by the experimental single-mixer output path.
     /// This intentionally owns a standalone BASS device and cannot run alongside play mode.
     /// </summary>
-    public sealed class MasterMixerTestWindow : EditorWindow
+    internal sealed class MasterMixerTestTab
     {
         private const double STATUS_UPDATE_INTERVAL = 0.1;
         private const double TRANSITION_UPDATE_INTERVAL = 0.02;
@@ -22,8 +22,6 @@ namespace YARG.Editor
         private const int TEMPO_LATENCY_TRIAL_COUNT = 10;
         private const double TEMPO_TRIAL_SETTLE_SECONDS = 0.25;
         private const double TEMPO_TRIAL_TIMEOUT_SECONDS = 5;
-        private static readonly Vector2 DefaultWindowSize = new(700, 800);
-
         private readonly float[] _fftData = new float[1024];
         private readonly float[] _previousFftData = new float[1024];
         private readonly float[] _levelData = new float[1];
@@ -31,6 +29,7 @@ namespace YARG.Editor
         private readonly object _asioCallbackLock = new();
         private readonly AsioProcedure _asioCallback;
         private readonly AsioTimingMeasurements _asioTiming = new();
+        private readonly Action _repaint;
 
         private string _audioPath = string.Empty;
         private string _status = "Select an audio file, then create the test graph.";
@@ -95,34 +94,25 @@ namespace YARG.Editor
         private double _nextStatusUpdate;
         private Vector2 _scrollPosition;
 
-        public MasterMixerTestWindow()
+        public MasterMixerTestTab(Action repaint)
         {
+            _repaint = repaint;
             _asioCallback = FillAsioBuffer;
         }
 
-        [MenuItem("YARG/Audio/Master Mixer Test")]
-        private static void Open()
+        public void Enable()
         {
-            var window = GetWindow<MasterMixerTestWindow>("Master Mixer Test");
-            window.minSize = DefaultWindowSize;
-            window.position = new Rect(window.position.position, DefaultWindowSize);
-            window.Show();
-        }
-
-        private void OnEnable()
-        {
-            minSize = DefaultWindowSize;
             RefreshAsioDevices();
             EditorApplication.update += OnEditorUpdate;
         }
 
-        private void OnDisable()
+        public void Disable()
         {
             EditorApplication.update -= OnEditorUpdate;
             DisposeGraph();
         }
 
-        private void OnGUI()
+        public void Draw()
         {
             _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
 
@@ -868,7 +858,7 @@ namespace YARG.Editor
             _nextStatusUpdate = EditorApplication.timeSinceStartup + updateInterval;
             UpdateStatus();
             UpdateTempoLatencyTrials();
-            Repaint();
+            _repaint();
         }
 
         private void UpdateStatus()
