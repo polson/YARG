@@ -10,12 +10,14 @@ namespace YARG.Editor
         {
             "ASIO Clock",
             "ASIO Mic Monitor",
+            "ASIO Routing",
             "Master Mixer",
             "BASS Latency"
         };
 
         private AsioClockTestTab _asioClockTest;
         private AsioMicMonitorTestTab _asioMicMonitorTest;
+        private AsioRoutingTestTab _asioRoutingTest;
         private MasterMixerTestTab _masterMixerTest;
         private BassLatencyTestTab _bassLatencyTest;
 
@@ -36,10 +38,12 @@ namespace YARG.Editor
             minSize = DefaultWindowSize;
             _asioClockTest = new AsioClockTestTab(Repaint, Notify);
             _asioMicMonitorTest = new AsioMicMonitorTestTab(Repaint);
+            _asioRoutingTest = new AsioRoutingTestTab(Repaint);
             _masterMixerTest = new MasterMixerTestTab(Repaint);
             _bassLatencyTest = new BassLatencyTestTab(Repaint, Notify);
             _asioClockTest.Enable();
             _asioMicMonitorTest.Enable();
+            _asioRoutingTest.Enable();
             _masterMixerTest.Enable();
             _bassLatencyTest.Enable();
         }
@@ -48,6 +52,7 @@ namespace YARG.Editor
         {
             _asioClockTest?.Disable();
             _asioMicMonitorTest?.Disable();
+            _asioRoutingTest?.Disable();
             _masterMixerTest?.Disable();
             _bassLatencyTest?.Disable();
         }
@@ -66,6 +71,10 @@ namespace YARG.Editor
                 _asioMicMonitorTest.Draw();
             }
             else if (_selectedTab == 2)
+            {
+                _asioRoutingTest.Draw();
+            }
+            else if (_selectedTab == 3)
             {
                 _masterMixerTest.Draw();
             }
