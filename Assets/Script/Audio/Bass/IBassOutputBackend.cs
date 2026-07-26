@@ -28,6 +28,10 @@ namespace YARG.Audio.BASS
         void SetSongBufferLength(int tempoStreamHandle, int length);
         void SetSongOutputChannel(int tempoStreamHandle, OutputChannel? channel);
 
+        bool AttachMonitor(int sourceHandle, double volume);
+        void DetachMonitor(int sourceHandle);
+        bool SetMonitorVolume(int sourceHandle, double volume);
+
         bool PlaySample(int sourceHandle, OutputChannel? outputChannel);
         void RemoveSample(int sourceHandle);
         void SetSampleOutputChannel(int sourceHandle, OutputChannel? outputChannel);

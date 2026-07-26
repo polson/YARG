@@ -18,6 +18,8 @@ namespace YARG.Audio.BASS
         private readonly HashSet<int> _activeSamples = new();
         private readonly Timer _idleTimer;
         private int _sampleMixerHandle;
+        private int _monitorMixerHandle;
+        private readonly HashSet<int> _monitors = new();
         private bool _disposed;
 
         public int HeardLatencyMilliseconds => Math.Max(0, Bass.Info.Latency);
@@ -160,6 +162,53 @@ namespace YARG.Audio.BASS
             BassHelpers.UpdateOutputChannels(SongMixerHandle(tempoStreamHandle), channel);
         }
 
+        public bool AttachMonitor(int sourceHandle, double volume)
+        {
+            if (_monitors.Contains(sourceHandle))
+            {
+                return SetMonitorVolume(sourceHandle, volume);
+            }
+            if (!EnsureMonitorMixer() || !SetMonitorVolume(sourceHandle, volume))
+            {
+                return false;
+            }
+
+            var flags = BassFlags.MixerChanDownMix | BassFlags.MixerChanNoRampin;
+            if (!BassMix.MixerAddChannel(_monitorMixerHandle, sourceHandle, flags))
+            {
+                YargLogger.LogFormatError("Failed to add source to monitor mixer: {0}",
+                    Bass.LastError);
+                return false;
+            }
+
+            _monitors.Add(sourceHandle);
+            return true;
+        }
+
+        public void DetachMonitor(int sourceHandle)
+        {
+            if (!_monitors.Remove(sourceHandle))
+            {
+                return;
+            }
+            if (!BassMix.MixerRemoveChannel(sourceHandle) && Bass.LastError != Errors.Handle)
+            {
+                YargLogger.LogFormatError("Failed to remove source from monitor mixer: {0}",
+                    Bass.LastError);
+            }
+        }
+
+        public bool SetMonitorVolume(int sourceHandle, double volume)
+        {
+            if (Bass.ChannelSetAttribute(sourceHandle, ChannelAttribute.Volume, volume))
+            {
+                return true;
+            }
+
+            YargLogger.LogFormatError("Failed to set monitor source volume: {0}", Bass.LastError);
+            return false;
+        }
+
         public bool PlaySample(int sourceHandle, OutputChannel? outputChannel)
         {
             lock (_lock)
@@ -243,6 +292,36 @@ namespace YARG.Audio.BASS
             return true;
         }
 
+        private bool EnsureMonitorMixer()
+        {
+            if (_monitorMixerHandle != 0)
+            {
+                return true;
+            }
+
+            var info = Bass.Info;
+            int frequency = info.SampleRate > 0 ? info.SampleRate : 44100;
+            int channels = info.SpeakerCount > 0 ? info.SpeakerCount : 2;
+            int mixer = BassMix.CreateMixerStream(frequency, channels,
+                BassFlags.Float | BassFlags.MixerNonStop);
+            if (mixer == 0)
+            {
+                YargLogger.LogFormatError("Failed to create monitor mixer: {0}", Bass.LastError);
+                return false;
+            }
+
+            Bass.ChannelSetAttribute(mixer, ChannelAttribute.Buffer, 0);
+            if (!Bass.ChannelPlay(mixer))
+            {
+                YargLogger.LogFormatError("Failed to start monitor mixer: {0}", Bass.LastError);
+                Bass.StreamFree(mixer);
+                return false;
+            }
+
+            _monitorMixerHandle = mixer;
+            return true;
+        }
+
         private void OnIdleTimer(object? _)
         {
             UnityMainThreadCallback.QueueEvent(FreeSampleMixerIfIdle);
@@ -281,6 +360,15 @@ namespace YARG.Audio.BASS
             foreach (int tempoStreamHandle in new List<int>(_songMixers.Keys))
             {
                 DetachSong(tempoStreamHandle);
+            }
+            foreach (int monitorHandle in new List<int>(_monitors))
+            {
+                DetachMonitor(monitorHandle);
+            }
+            if (_monitorMixerHandle != 0)
+            {
+                Bass.StreamFree(_monitorMixerHandle);
+                _monitorMixerHandle = 0;
             }
             FreeSampleMixer();
             _idleTimer.Dispose();

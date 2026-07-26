@@ -24,6 +24,7 @@ namespace YARG.Audio.BASS
         private readonly Dictionary<int, TrackedSong> _songPositions = new();
         private TrackedSong[] _callbackSongs = Array.Empty<TrackedSong>();
         private readonly HashSet<int> _samples = new();
+        private readonly HashSet<int> _monitors = new();
         private int _masterMixerHandle;
         private int _bytesPerFrame;
         private int _sampleRate;
@@ -185,6 +186,53 @@ namespace YARG.Audio.BASS
                 ? bassOutputChannel.Flags
                 : BassFlags.Default;
             BassMix.ChannelFlags(tempoStreamHandle, flags, BassFlags.SpeakerFront);
+        }
+
+        public bool AttachMonitor(int sourceHandle, double volume)
+        {
+            if (_monitors.Contains(sourceHandle))
+            {
+                return SetMonitorVolume(sourceHandle, volume);
+            }
+            if (!SetMonitorVolume(sourceHandle, volume))
+            {
+                return false;
+            }
+
+            var flags = BassFlags.MixerChanDownMix | BassFlags.MixerChanNoRampin;
+            if (!BassMix.MixerAddChannel(_masterMixerHandle, sourceHandle, flags))
+            {
+                YargLogger.LogFormatError("Failed to add source to ASIO monitor mixer: {0}",
+                    Bass.LastError);
+                return false;
+            }
+
+            _monitors.Add(sourceHandle);
+            return true;
+        }
+
+        public void DetachMonitor(int sourceHandle)
+        {
+            if (!_monitors.Remove(sourceHandle))
+            {
+                return;
+            }
+            if (!BassMix.MixerRemoveChannel(sourceHandle) && Bass.LastError != Errors.Handle)
+            {
+                YargLogger.LogFormatError("Failed to remove source from ASIO monitor mixer: {0}",
+                    Bass.LastError);
+            }
+        }
+
+        public bool SetMonitorVolume(int sourceHandle, double volume)
+        {
+            if (Bass.ChannelSetAttribute(sourceHandle, ChannelAttribute.Volume, volume))
+            {
+                return true;
+            }
+
+            YargLogger.LogFormatError("Failed to set monitor source volume: {0}", Bass.LastError);
+            return false;
         }
 
         public bool PlaySample(int sourceHandle, OutputChannel? outputChannel)
@@ -408,6 +456,10 @@ namespace YARG.Audio.BASS
                 PublishCallbackSongs();
             }
             _samples.Clear();
+            foreach (int monitorHandle in new List<int>(_monitors))
+            {
+                DetachMonitor(monitorHandle);
+            }
             if (_masterMixerHandle != 0)
             {
                 Bass.StreamFree(_masterMixerHandle);

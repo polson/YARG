@@ -1,17 +1,23 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using ManagedBass;
 using YARG.Core.Audio;
+using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
 {
     /// <summary>
     /// Stable facade for song and sample output routing.
+    /// Lifecycle and route mutations are owned by the main thread. Native BASS calls are never
+    /// made while a managed registry lock is held.
     /// </summary>
     internal sealed class BassAudioOutput : IDisposable
     {
         private readonly HashSet<BassSongPlayback> _playbacks = new();
+        private readonly HashSet<BassMonitorRoute> _monitorRoutes = new();
         private IBassOutputBackend? _backend;
+        private int _outputDeviceId = -1;
         private double _volume = 1;
         private bool _disposed;
 
@@ -19,7 +25,23 @@ namespace YARG.Audio.BASS
 
         public bool InitializeForDevice(BassOutputDevice device, int asioBufferLength)
         {
-            if (_disposed)
+            if (!InitializeBackend(device, asioBufferLength))
+            {
+                return false;
+            }
+
+            if (AttachMonitorRoutes(device.DeviceId))
+            {
+                return true;
+            }
+
+            DisposeBackend();
+            return false;
+        }
+
+        private bool InitializeBackend(BassOutputDevice device, int asioBufferLength)
+        {
+            if (_disposed || _backend != null)
             {
                 return false;
             }
@@ -35,6 +57,7 @@ namespace YARG.Audio.BASS
 
             backend.SetVolume(_volume);
             _backend = backend;
+            _outputDeviceId = device.DeviceId;
             return true;
         }
 
@@ -45,18 +68,18 @@ namespace YARG.Audio.BASS
                 return;
             }
 
+            DetachMonitorRoutes();
             foreach (var playback in _playbacks)
             {
                 playback.PrepareForOutputChange();
                 _backend.DetachSong(playback.TempoStreamHandle);
             }
-            _backend.Dispose();
-            _backend = null;
+            DisposeBackend();
         }
 
         public bool Resume(BassOutputDevice device, int asioBufferLength)
         {
-            if (!InitializeForDevice(device, asioBufferLength))
+            if (!InitializeBackend(device, asioBufferLength))
             {
                 return false;
             }
@@ -69,11 +92,21 @@ namespace YARG.Audio.BASS
                     {
                         _backend.DetachSong(attachedPlayback.TempoStreamHandle);
                     }
-                    _backend.Dispose();
-                    _backend = null;
+                    DisposeBackend();
                     return false;
                 }
             }
+
+            if (!AttachMonitorRoutes(device.DeviceId))
+            {
+                foreach (var attachedPlayback in _playbacks)
+                {
+                    _backend!.DetachSong(attachedPlayback.TempoStreamHandle);
+                }
+                DisposeBackend();
+                return false;
+            }
+
             foreach (var playback in _playbacks)
             {
                 playback.RestoreAfterOutputChange();
@@ -99,6 +132,81 @@ namespace YARG.Audio.BASS
             if (_playbacks.Remove(playback))
             {
                 _backend?.DetachSong(playback.TempoStreamHandle);
+            }
+        }
+
+        public BassMonitorRoute? RegisterMonitor(BassMonitorSource source, double volume)
+        {
+            if (source == null)
+            {
+                throw new ArgumentNullException(nameof(source));
+            }
+            if (double.IsNaN(volume) || double.IsInfinity(volume) || volume < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(volume));
+            }
+            if (_disposed)
+            {
+                return null;
+            }
+            foreach (var existingRoute in _monitorRoutes)
+            {
+                if (existingRoute.Source.Handle == source.Handle)
+                {
+                    YargLogger.LogFormatError(
+                        "Monitor source {0} is already registered", source.Handle);
+                    return null;
+                }
+            }
+
+            var route = new BassMonitorRoute(this, source, volume);
+            _monitorRoutes.Add(route);
+            if (_backend == null)
+            {
+                return route;
+            }
+
+            int originalDevice = source.GetDevice();
+            if (originalDevice < 0)
+            {
+                YargLogger.LogFormatError("Failed to get monitor source device: {0}",
+                    Bass.LastError);
+            }
+            if (originalDevice >= 0 && source.MoveToDevice(_outputDeviceId) &&
+                source.ResetToLive() && _backend.AttachMonitor(source.Handle, volume))
+            {
+                route.IsAttached = true;
+                return route;
+            }
+
+            if (originalDevice >= 0)
+            {
+                source.MoveToDevice(originalDevice);
+            }
+            _monitorRoutes.Remove(route);
+            route.InvalidateOwner();
+            return null;
+        }
+
+        internal void Remove(BassMonitorRoute route)
+        {
+            if (!_monitorRoutes.Contains(route))
+            {
+                return;
+            }
+            if (route.IsAttached)
+            {
+                _backend?.DetachMonitor(route.Source.Handle);
+                route.IsAttached = false;
+            }
+            _monitorRoutes.Remove(route);
+        }
+
+        internal void SetMonitorVolume(BassMonitorRoute route, double volume)
+        {
+            if (_monitorRoutes.Contains(route) && route.IsAttached)
+            {
+                _backend?.SetMonitorVolume(route.Source.Handle, volume);
             }
         }
 
@@ -153,6 +261,88 @@ namespace YARG.Audio.BASS
             _playbacks.Clear();
         }
 
+        private bool AttachMonitorRoutes(int deviceId)
+        {
+            if (_backend == null || _monitorRoutes.Count == 0)
+            {
+                return true;
+            }
+
+            var routes = new List<(BassMonitorRoute Route, int OriginalDevice)>(_monitorRoutes.Count);
+            foreach (var route in _monitorRoutes)
+            {
+                int originalDevice = route.Source.GetDevice();
+                if (originalDevice < 0)
+                {
+                    YargLogger.LogFormatError(
+                        "Failed to get monitor source device: {0}", Bass.LastError);
+                    return false;
+                }
+                routes.Add((route, originalDevice));
+            }
+
+            int migratedCount = 0;
+            int attachedCount = 0;
+            for (int i = 0; i < routes.Count; i++)
+            {
+                var route = routes[i].Route;
+                if (!route.Source.MoveToDevice(deviceId))
+                {
+                    break;
+                }
+                migratedCount++;
+
+                if (!route.Source.ResetToLive() ||
+                    !_backend.AttachMonitor(route.Source.Handle, route.Volume))
+                {
+                    break;
+                }
+                route.IsAttached = true;
+                attachedCount++;
+            }
+
+            if (attachedCount == routes.Count)
+            {
+                return true;
+            }
+
+            for (int i = attachedCount - 1; i >= 0; i--)
+            {
+                var route = routes[i].Route;
+                _backend.DetachMonitor(route.Source.Handle);
+                route.IsAttached = false;
+            }
+            for (int i = migratedCount - 1; i >= 0; i--)
+            {
+                routes[i].Route.Source.MoveToDevice(routes[i].OriginalDevice);
+            }
+            return false;
+        }
+
+        private void DetachMonitorRoutes()
+        {
+            if (_backend == null)
+            {
+                return;
+            }
+            foreach (var route in _monitorRoutes)
+            {
+                if (!route.IsAttached)
+                {
+                    continue;
+                }
+                _backend.DetachMonitor(route.Source.Handle);
+                route.IsAttached = false;
+            }
+        }
+
+        private void DisposeBackend()
+        {
+            _backend?.Dispose();
+            _backend = null;
+            _outputDeviceId = -1;
+        }
+
         public void Dispose()
         {
             if (_disposed)
@@ -161,6 +351,11 @@ namespace YARG.Audio.BASS
             }
             _disposed = true;
             ResetForDeviceChange();
+            foreach (var route in _monitorRoutes)
+            {
+                route.InvalidateOwner();
+            }
+            _monitorRoutes.Clear();
         }
     }
 }
