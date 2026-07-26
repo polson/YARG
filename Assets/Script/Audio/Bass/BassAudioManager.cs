@@ -103,7 +103,7 @@ namespace YARG.Audio.BASS
         public BassAudioManager()
         {
             YargLogger.LogInfo("Initializing BASS...");
-            _audioOutput = new BassAudioOutput();
+            _audioOutput = new BassAudioOutput(OnAsioReinitializeRequested);
             string bassPath = GetBassDirectory();
             string opusLibDirectory = Path.Combine(bassPath, "bassopus");
 
@@ -214,6 +214,10 @@ namespace YARG.Audio.BASS
         {
             PlaybackLatency = _audioOutput.HeardLatencyMilliseconds;
         }
+
+        protected override AudioOutputMetrics OutputMetrics => _audioOutput.Metrics;
+
+        protected override void ResetOutputMetrics() => _audioOutput.ResetMetrics();
 
         protected override bool SetOutputDevice(string name)
         {
@@ -379,9 +383,9 @@ namespace YARG.Audio.BASS
 
         protected override bool ReinitializeOutput(int bufferLength)
         {
-            if (_currentDevice?.IsAsio != true || bufferLength < 0 || bufferLength == _asioBufferLength)
+            if (_currentDevice?.IsAsio != true || bufferLength < 0)
             {
-                return bufferLength == _asioBufferLength;
+                return false;
             }
 
             int previousBufferLength = _asioBufferLength;
@@ -393,6 +397,20 @@ namespace YARG.Audio.BASS
 
             _asioBufferLength = previousBufferLength;
             return false;
+        }
+
+        private void OnAsioReinitializeRequested()
+        {
+            if (_currentDevice?.IsAsio != true)
+            {
+                return;
+            }
+
+            if (!ReinitializeOutput(_asioBufferLength))
+            {
+                YargLogger.LogError("Failed to reinitialize audio after ASIO driver settings changed");
+                ToastManager.ToastError("Failed to reinitialize audio after ASIO driver settings changed.");
+            }
         }
 
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN

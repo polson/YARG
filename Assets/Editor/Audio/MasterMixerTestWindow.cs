@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using ManagedBass;
@@ -16,9 +17,14 @@ namespace YARG.Editor
     /// </summary>
     internal sealed class MasterMixerTestTab
     {
+        private enum AsioOutputTransport
+        {
+            CustomCallback,
+            ChannelEnableBass,
+        }
+
         private const double STATUS_UPDATE_INTERVAL = 0.1;
         private const double TRANSITION_UPDATE_INTERVAL = 0.02;
-        private const double TRANSITION_CAPTURE_LENGTH = 8;
         private const int TEMPO_LATENCY_TRIAL_COUNT = 10;
         private const double TEMPO_TRIAL_SETTLE_SECONDS = 0.25;
         private const double TEMPO_TRIAL_TIMEOUT_SECONDS = 5;
@@ -29,19 +35,26 @@ namespace YARG.Editor
         private readonly object _asioCallbackLock = new();
         private readonly AsioProcedure _asioCallback;
         private readonly AsioTimingMeasurements _asioTiming = new();
+        private readonly List<PositionSample> _positionSamples = new();
+        private List<PositionSample> _lastCustomPositionSamples = new();
+        private List<PositionSample> _lastDirectPositionSamples = new();
         private readonly Action _repaint;
 
         private string _audioPath = string.Empty;
         private string _status = "Select an audio file, then create the test graph.";
         private string[] _asioDeviceNames = Array.Empty<string>();
         private bool _useAsio;
+        private AsioOutputTransport _asioOutputTransport;
         private int _asioDevice;
         private int _bufferLength = 75;
+        private int _positionCaptureLengthSeconds = 30;
         private float _tempo = 100;
         private float _tempoCommand = 150;
         private double _seekPosition;
         private double _length;
         private double _heardPosition;
+        private double _estimatedHeardPosition;
+        private double _explicitDelayedPosition;
         private double _decodePosition;
         private double _normalizedPosition;
         private double _masterBufferedSeconds;
@@ -49,9 +62,20 @@ namespace YARG.Editor
         private double _positionAnchor;
         private double _rawAnchoredPosition;
         private double _anchoredPosition;
+        private double _estimatedAnchoredPosition;
+        private double _explicitAnchoredPosition;
         private double _expectedPosition;
+        private double _transitionExpectedStart;
         private double _rawTransitionError;
         private double _transitionError;
+        private double _estimatedTransitionError;
+        private double _explicitTransitionError;
+        private double _transitionAbsoluteErrorTotal;
+        private double _transitionMaximumAbsoluteError;
+        private double _estimatedTransitionAbsoluteErrorTotal;
+        private double _estimatedTransitionMaximumAbsoluteError;
+        private int _transitionSampleCount;
+        private bool _positionSamplesSaved;
         private double _transitionStartedAt;
         private string _transitionName = "None";
         private string _transitionLog = string.Empty;
@@ -73,6 +97,7 @@ namespace YARG.Editor
         private int _asioBytesPerFrame;
         private int _asioSampleRate;
         private int _asioLatencyFrames;
+        private int _asioLatencyBytes;
         private long _lastAsioPosition;
         private bool _runningTempoLatencyTrials;
         private bool _waitingForTempoTrial;
@@ -128,6 +153,8 @@ namespace YARG.Editor
             using (new EditorGUI.DisabledScope(_masterHandle != 0))
             {
                 _bufferLength = EditorGUILayout.IntSlider("Playback buffer (ms)", _bufferLength, 10, 5000);
+                _positionCaptureLengthSeconds = EditorGUILayout.IntSlider(
+                    "Position capture (s)", _positionCaptureLengthSeconds, 5, 120);
             }
 
             using (new EditorGUILayout.HorizontalScope())
@@ -190,9 +217,16 @@ namespace YARG.Editor
             }
             else if (_useAsio)
             {
+                using (new EditorGUI.DisabledScope(_masterHandle != 0))
+                {
+                    _asioOutputTransport = (AsioOutputTransport) EditorGUILayout.EnumPopup(
+                        "ASIO output transport", _asioOutputTransport);
+                }
+
                 EditorGUILayout.HelpBox(
-                    "ASIO pulls decoded audio directly from master mixer. Playback buffer setting " +
-                    "below only applies to standard BASS output; ASIO driver controls its buffer.",
+                    "Playback buffer setting only applies to standard BASS output. ASIO driver " +
+                    "controls hardware buffering. Compare CustomCallback against ChannelEnableBass " +
+                    "with identical song, tempo, seek, and ASIO buffer settings.",
                     MessageType.Info);
             }
 #else
@@ -284,7 +318,9 @@ namespace YARG.Editor
                         ChangeTempo(_tempoCommand);
                     }
                 }
-                using (new EditorGUI.DisabledScope(!_useAsio || _runningTempoLatencyTrials))
+                using (new EditorGUI.DisabledScope(!_useAsio ||
+                                                   _asioOutputTransport != AsioOutputTransport.CustomCallback ||
+                                                   _runningTempoLatencyTrials))
                 {
                     if (GUILayout.Button($"Measure tempo command latency ({TEMPO_LATENCY_TRIAL_COUNT} trials)"))
                     {
@@ -321,7 +357,16 @@ namespace YARG.Editor
 
             using (new EditorGUI.DisabledScope(true))
             {
-                EditorGUILayout.DoubleField("Heard source position", _heardPosition);
+                EditorGUILayout.TextField("ASIO output transport", _useAsio
+                    ? _asioOutputTransport.ToString()
+                    : "BASS output");
+                EditorGUILayout.DoubleField("BASS source cursor (s)", _heardPosition);
+                EditorGUILayout.DoubleField("MixerLatency position (s)",
+                    _estimatedHeardPosition);
+                EditorGUILayout.DoubleField("Explicit-delay position (s)",
+                    _explicitDelayedPosition);
+                EditorGUILayout.DoubleField("Native position difference (ms)",
+                    (_estimatedHeardPosition - _explicitDelayedPosition) * 1000);
                 EditorGUILayout.DoubleField("Decode position", _decodePosition);
                 EditorGUILayout.DoubleField("Normalized source position", _normalizedPosition);
                 EditorGUILayout.DoubleField("Master buffered seconds", _masterBufferedSeconds);
@@ -329,9 +374,30 @@ namespace YARG.Editor
                 EditorGUILayout.DoubleField("Relative song anchor", _positionAnchor);
                 EditorGUILayout.DoubleField("Raw anchored position", _rawAnchoredPosition);
                 EditorGUILayout.DoubleField("Origin-adjusted position", _anchoredPosition);
+                EditorGUILayout.DoubleField("MixerLatency anchored position",
+                    _estimatedAnchoredPosition);
+                EditorGUILayout.DoubleField("Explicit-delay anchored position",
+                    _explicitAnchoredPosition);
                 EditorGUILayout.DoubleField("Expected position", _expectedPosition);
                 EditorGUILayout.DoubleField("Raw transition error (ms)", _rawTransitionError * 1000);
                 EditorGUILayout.DoubleField("Origin-adjusted error (ms)", _transitionError * 1000);
+                EditorGUILayout.DoubleField("MixerLatency error (ms)",
+                    _estimatedTransitionError * 1000);
+                EditorGUILayout.DoubleField("Explicit-delay error (ms)",
+                    _explicitTransitionError * 1000);
+                EditorGUILayout.IntField("Transition samples", _transitionSampleCount);
+                EditorGUILayout.DoubleField("Cursor mean absolute error (ms)",
+                    _transitionSampleCount > 0
+                        ? _transitionAbsoluteErrorTotal / _transitionSampleCount * 1000
+                        : 0);
+                EditorGUILayout.DoubleField("Cursor maximum absolute error (ms)",
+                    _transitionMaximumAbsoluteError * 1000);
+                EditorGUILayout.DoubleField("MixerLatency mean absolute error (ms)",
+                    _transitionSampleCount > 0
+                        ? _estimatedTransitionAbsoluteErrorTotal / _transitionSampleCount * 1000
+                        : 0);
+                EditorGUILayout.DoubleField("MixerLatency maximum absolute error (ms)",
+                    _estimatedTransitionMaximumAbsoluteError * 1000);
                 EditorGUILayout.IntField("Buffered source bytes", _availableSourceBytes);
                 EditorGUILayout.IntField("FFT bytes read", _fftResult);
                 EditorGUILayout.FloatField("FFT peak magnitude", _fftPeak);
@@ -344,13 +410,13 @@ namespace YARG.Editor
             }
 
             DrawAsioTimingResults();
-
-            EditorGUILayout.LabelField($"Transition capture: {_transitionName}", EditorStyles.boldLabel);
-            EditorGUILayout.TextArea(_transitionLog, GUILayout.MinHeight(100));
+            DrawPositionAccuracyGraph();
 
             EditorGUILayout.HelpBox(
-                "Pass criteria: heard position stops while paused, seek lands near requested position, " +
-                "and FFT/level/sample-data calls continue succeeding without interrupting audio.",
+                "Compare MixerLatency and explicit-delay positions first: they should overlap through " +
+                "play, pause, seek, and tempo changes. BASS source cursor is mixer output-edge position. " +
+                "Absolute speaker validation still requires loopback. Automated tempo timing requires " +
+                "CustomCallback; run tempo changes manually in direct mode.",
                 MessageType.Info);
         }
 
@@ -398,10 +464,212 @@ namespace YARG.Editor
             }
 
             EditorGUILayout.HelpBox(
-                "Times end at ASIO callback where mixer generates changed data. Add reported ASIO " +
-                "latency for estimated physical-output time. Detection uses source-position slope; " +
-                "5% and 95% of requested speed transition mark first affected and fully changed blocks.",
+                "CustomCallback timestamps generated blocks. ChannelEnableBass has no managed output " +
+                "callback. MixerPositionEx maps ASIO-latency-delayed mixer output back to source " +
+                "positions. Validate final physical-output timing with loopback or known clicks.",
                 MessageType.Info);
+        }
+
+        private void DrawPositionAccuracyGraph()
+        {
+            if (!_useAsio)
+            {
+                return;
+            }
+
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Position accuracy", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "Zero line means expected position. Blue = raw output-edge cursor. Green = automatic " +
+                "MixerLatency compensation. Yellow = explicit ASIO-latency delay. Orange = automatic " +
+                "result from previous run using other transport.",
+                MessageType.None);
+
+            List<PositionSample> current = _positionSamples.Count > 1
+                ? _positionSamples
+                : _asioOutputTransport == AsioOutputTransport.CustomCallback
+                    ? _lastCustomPositionSamples
+                    : _lastDirectPositionSamples;
+            List<PositionSample> reference = _asioOutputTransport == AsioOutputTransport.CustomCallback
+                ? _lastDirectPositionSamples
+                : _lastCustomPositionSamples;
+
+            Rect graph = GUILayoutUtility.GetRect(100, 190, GUILayout.ExpandWidth(true));
+            EditorGUI.DrawRect(graph, EditorGUIUtility.isProSkin
+                ? new Color(0.11f, 0.11f, 0.11f)
+                : new Color(0.85f, 0.85f, 0.85f));
+
+            if (current.Count < 2)
+            {
+                GUI.Label(graph, "Waiting for capture data...",
+                    EditorStyles.centeredGreyMiniLabel);
+                return;
+            }
+
+            double measuredMinimum = double.PositiveInfinity;
+            double measuredMaximum = double.NegativeInfinity;
+            var scaleValues = new List<double>(current.Count * 3 + reference.Count);
+            for (int i = 0; i < current.Count; i++)
+            {
+                scaleValues.Add(current[i].CursorErrorMilliseconds);
+                scaleValues.Add(current[i].EstimatedErrorMilliseconds);
+                scaleValues.Add(current[i].ExplicitErrorMilliseconds);
+                measuredMinimum = Math.Min(measuredMinimum,
+                    Math.Min(current[i].ExplicitErrorMilliseconds,
+                        Math.Min(current[i].EstimatedErrorMilliseconds,
+                            current[i].CursorErrorMilliseconds)));
+                measuredMaximum = Math.Max(measuredMaximum,
+                    Math.Max(current[i].ExplicitErrorMilliseconds,
+                        Math.Max(current[i].EstimatedErrorMilliseconds,
+                            current[i].CursorErrorMilliseconds)));
+            }
+            for (int i = 0; i < reference.Count; i++)
+            {
+                scaleValues.Add(reference[i].EstimatedErrorMilliseconds);
+                measuredMinimum = Math.Min(measuredMinimum,
+                    reference[i].EstimatedErrorMilliseconds);
+                measuredMaximum = Math.Max(measuredMaximum,
+                    reference[i].EstimatedErrorMilliseconds);
+            }
+            scaleValues.Sort();
+            int lowerScaleIndex = Mathf.FloorToInt((scaleValues.Count - 1) * 0.01f);
+            int upperScaleIndex = Mathf.CeilToInt((scaleValues.Count - 1) * 0.99f);
+            double minimumError = Math.Min(scaleValues[lowerScaleIndex], -2);
+            double maximumError = Math.Max(scaleValues[upperScaleIndex], 2);
+            double errorRange = maximumError - minimumError;
+            double startTime = current[0].Elapsed;
+            double timeRange = current[current.Count - 1].Elapsed - startTime;
+
+            Rect plot = new(graph.x + 85, graph.y + 10,
+                graph.width - 95, graph.height - 32);
+
+            if (Event.current.type == EventType.Repaint)
+            {
+                float zeroY = MapPositionToGraph(0, plot, minimumError, errorRange);
+                Handles.color = new Color(0.55f, 0.55f, 0.55f, 0.6f);
+                Handles.DrawLine(new Vector3(plot.x, zeroY),
+                    new Vector3(plot.xMax, zeroY));
+
+                if (reference.Count > 1)
+                {
+                    DrawPositionLine(reference, plot, startTime, timeRange,
+                        sample => sample.EstimatedErrorMilliseconds,
+                        new Color(1f, 0.55f, 0.1f), minimumError, errorRange);
+                }
+                DrawPositionLine(current, plot, startTime, timeRange,
+                    sample => sample.CursorErrorMilliseconds,
+                    new Color(0.25f, 0.55f, 1f), minimumError, errorRange);
+                DrawPositionLine(current, plot, startTime, timeRange,
+                    sample => sample.ExplicitErrorMilliseconds,
+                    new Color(1f, 0.9f, 0.2f), minimumError, errorRange, 4);
+                DrawPositionLine(current, plot, startTime, timeRange,
+                    sample => sample.EstimatedErrorMilliseconds,
+                    new Color(0.25f, 1f, 0.4f), minimumError, errorRange, 2);
+            }
+
+            GUI.Label(new Rect(graph.x + 2, plot.y - 7, 80, 16),
+                $"{maximumError:F3}", EditorStyles.miniLabel);
+            GUI.Label(new Rect(graph.x + 2, plot.yMax - 8, 80, 16),
+                $"{minimumError:F3}", EditorStyles.miniLabel);
+            GUI.Label(new Rect(plot.x, plot.yMax + 2, 80, 16),
+                $"{startTime:F1} s", EditorStyles.miniLabel);
+            GUI.Label(new Rect(plot.xMax - 80, plot.yMax + 2, 80, 16),
+                $"{current[current.Count - 1].Elapsed:F1} s", new GUIStyle(EditorStyles.miniLabel)
+                {
+                    alignment = TextAnchor.UpperRight
+                });
+            GUI.Label(new Rect(graph.x + 2, graph.y + graph.height / 2 - 8, 80, 16),
+                "ms", EditorStyles.miniLabel);
+
+            EditorGUILayout.LabelField(
+                $"Full observed error: {measuredMinimum:F3} to {measuredMaximum:F3} ms. " +
+                "Graph scale excludes outer 1% so seek discontinuities do not flatten steady data.",
+                EditorStyles.wordWrappedMiniLabel);
+
+            DrawNativePositionDifferenceGraph(current, startTime, timeRange);
+        }
+
+        private static void DrawNativePositionDifferenceGraph(IReadOnlyList<PositionSample> samples,
+            double startTime, double timeRange)
+        {
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Native compensation agreement", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "Automatic MixerLatency position minus explicit-delay position. Flat at 0 ms means " +
+                "both BASS APIs agree exactly.", MessageType.None);
+
+            double measuredMinimum = double.PositiveInfinity;
+            double measuredMaximum = double.NegativeInfinity;
+            for (int i = 0; i < samples.Count; i++)
+            {
+                measuredMinimum = Math.Min(measuredMinimum,
+                    samples[i].NativeDifferenceMilliseconds);
+                measuredMaximum = Math.Max(measuredMaximum,
+                    samples[i].NativeDifferenceMilliseconds);
+            }
+
+            double maximumMagnitude = Math.Max(0.05,
+                Math.Max(Math.Abs(measuredMinimum), Math.Abs(measuredMaximum)));
+            double minimumDifference = -maximumMagnitude;
+            double differenceRange = maximumMagnitude * 2;
+            Rect graph = GUILayoutUtility.GetRect(100, 120, GUILayout.ExpandWidth(true));
+            EditorGUI.DrawRect(graph, EditorGUIUtility.isProSkin
+                ? new Color(0.11f, 0.11f, 0.11f)
+                : new Color(0.85f, 0.85f, 0.85f));
+            Rect plot = new(graph.x + 85, graph.y + 10,
+                graph.width - 95, graph.height - 32);
+
+            if (Event.current.type == EventType.Repaint)
+            {
+                float zeroY = MapPositionToGraph(0, plot, minimumDifference, differenceRange);
+                Handles.color = new Color(0.55f, 0.55f, 0.55f, 0.6f);
+                Handles.DrawLine(new Vector3(plot.x, zeroY), new Vector3(plot.xMax, zeroY));
+                DrawPositionLine(samples, plot, startTime, timeRange,
+                    sample => sample.NativeDifferenceMilliseconds,
+                    new Color(0.8f, 0.4f, 1f), minimumDifference, differenceRange);
+            }
+
+            GUI.Label(new Rect(graph.x + 2, plot.y - 7, 80, 16),
+                $"{maximumMagnitude:F3}", EditorStyles.miniLabel);
+            GUI.Label(new Rect(graph.x + 2, plot.yMax - 8, 80, 16),
+                $"{-maximumMagnitude:F3}", EditorStyles.miniLabel);
+            GUI.Label(new Rect(plot.x, plot.yMax + 2, 80, 16),
+                $"{startTime:F1} s", EditorStyles.miniLabel);
+            GUI.Label(new Rect(plot.xMax - 80, plot.yMax + 2, 80, 16),
+                $"{samples[samples.Count - 1].Elapsed:F1} s",
+                new GUIStyle(EditorStyles.miniLabel) { alignment = TextAnchor.UpperRight });
+            GUI.Label(new Rect(graph.x + 2, graph.y + graph.height / 2 - 8, 80, 16),
+                "ms", EditorStyles.miniLabel);
+            EditorGUILayout.LabelField(
+                $"Automatic - explicit: {measuredMinimum:F3} to {measuredMaximum:F3} ms.",
+                EditorStyles.wordWrappedMiniLabel);
+        }
+
+        private static void DrawPositionLine(IReadOnlyList<PositionSample> samples, Rect plot,
+            double startTime, double timeRange, Func<PositionSample, double> value,
+            Color color, double minimumError, double errorRange, float width = 2)
+        {
+            var points = new Vector3[samples.Count];
+            for (int i = 0; i < samples.Count; i++)
+            {
+                float normalizedTime = timeRange > 0
+                    ? (float) ((samples[i].Elapsed - startTime) / timeRange)
+                    : 0;
+                points[i] = new Vector3(
+                    Mathf.Lerp(plot.x, plot.xMax, normalizedTime),
+                    MapPositionToGraph(value(samples[i]), plot, minimumError, errorRange));
+            }
+
+            Handles.color = color;
+            Handles.DrawAAPolyLine(width, points);
+        }
+
+        private static float MapPositionToGraph(double position, Rect plot,
+            double minimumPosition, double positionRange)
+        {
+            float normalizedPosition = Mathf.Clamp01(
+                (float) ((position - minimumPosition) / positionRange));
+            return Mathf.Lerp(plot.yMax, plot.y, normalizedPosition);
         }
 
         private void CreateGraph()
@@ -459,7 +727,7 @@ namespace YARG.Editor
             var masterFlags = BassFlags.Float | BassFlags.MixerNonStop;
             if (_useAsio)
             {
-                masterFlags |= BassFlags.Decode;
+                masterFlags |= BassFlags.Decode | BassFlags.MixerPositionEx;
             }
             _masterHandle = BassMix.CreateMixerStream(tempoInfo.Frequency, tempoInfo.Channels,
                 masterFlags);
@@ -526,23 +794,35 @@ namespace YARG.Editor
             }
             BassAsio.Rate = mixerInfo.Frequency;
 
-            if (!BassAsio.ChannelEnable(false, 0, _asioCallback, IntPtr.Zero))
+            if (_asioOutputTransport == AsioOutputTransport.ChannelEnableBass)
             {
-                SetAsioError("Failed to route master mixer to ASIO");
-                return false;
-            }
-
-            for (int channel = 1; channel < mixerInfo.Channels; channel++)
-            {
-                if (!BassAsio.ChannelJoin(false, channel, 0))
+                if (!BassAsio.ChannelEnableBass(false, 0, _masterHandle, true))
                 {
-                    SetAsioError($"Failed to join ASIO output channel {channel}");
+                    SetAsioError("Failed to route master mixer through ChannelEnableBass");
                     return false;
                 }
             }
+            else
+            {
+                if (!BassAsio.ChannelEnable(false, 0, _asioCallback, IntPtr.Zero))
+                {
+                    SetAsioError("Failed to route master mixer to ASIO");
+                    return false;
+                }
 
-            if (!BassAsio.ChannelSetFormat(false, 0, AsioSampleFormat.Float) ||
-                !BassAsio.ChannelSetRate(false, 0, mixerInfo.Frequency))
+                for (int channel = 1; channel < mixerInfo.Channels; channel++)
+                {
+                    if (!BassAsio.ChannelJoin(false, channel, 0))
+                    {
+                        SetAsioError($"Failed to join ASIO output channel {channel}");
+                        return false;
+                    }
+                }
+            }
+
+            if (_asioOutputTransport == AsioOutputTransport.CustomCallback &&
+                (!BassAsio.ChannelSetFormat(false, 0, AsioSampleFormat.Float) ||
+                 !BassAsio.ChannelSetRate(false, 0, mixerInfo.Frequency)))
             {
                 SetAsioError("Failed to configure ASIO output format");
                 return false;
@@ -551,7 +831,7 @@ namespace YARG.Editor
             _asioSampleRate = mixerInfo.Frequency;
             _asioBytesPerFrame = mixerInfo.Channels * sizeof(float);
             _lastAsioPosition = Math.Max(0,
-                BassMix.ChannelGetPosition(_tempoHandle, PositionFlags.Bytes));
+                BassMix.ChannelGetPosition(_tempoHandle, PositionFlags.Bytes, 0));
 
             if (!BassAsio.Start(0, 0))
             {
@@ -560,6 +840,23 @@ namespace YARG.Editor
             }
 
             _asioLatencyFrames = Math.Max(0, BassAsio.GetLatency(false));
+            double latencySeconds = _asioSampleRate > 0
+                ? _asioLatencyFrames / (double) _asioSampleRate
+                : 0;
+            long latencyBytes = Bass.ChannelSeconds2Bytes(_masterHandle, latencySeconds);
+            if (latencyBytes < 0 || latencyBytes > int.MaxValue)
+            {
+                SetBassError("Failed to convert ASIO latency to mixer bytes");
+                return false;
+            }
+            _asioLatencyBytes = (int) latencyBytes;
+
+            if (!Bass.ChannelSetAttribute(_masterHandle, ChannelAttribute.MixerLatency,
+                    (float) latencySeconds))
+            {
+                SetBassError("Failed to set mixer output latency");
+                return false;
+            }
 
             return true;
 #else
@@ -583,7 +880,8 @@ namespace YARG.Editor
                 bytesRead = 0;
             }
 
-            long blockEndPosition = BassMix.ChannelGetPosition(_tempoHandle, PositionFlags.Bytes);
+            long blockEndPosition = BassMix.ChannelGetPosition(
+                _tempoHandle, PositionFlags.Bytes, 0);
             if (blockEndPosition >= 0)
             {
                 lock (_asioCallbackLock)
@@ -609,7 +907,7 @@ namespace YARG.Editor
             lock (_asioCallbackLock)
             {
                 long baseline = Math.Max(0,
-                    BassMix.ChannelGetPosition(_tempoHandle, PositionFlags.Bytes));
+                    BassMix.ChannelGetPosition(_tempoHandle, PositionFlags.Bytes, 0));
                 long timestamp = Stopwatch.GetTimestamp();
                 if (SetSourcePaused(false))
                 {
@@ -647,7 +945,7 @@ namespace YARG.Editor
 
             SetSourcePaused(false);
             _status = $"Tempo source sought to {position:F3}s and resumed; master was not reset.";
-            UpdateStatus();
+            BeginTransitionCapture($"Seek to {position:F3}s");
         }
 
         private void ResetRelativeSource()
@@ -671,11 +969,24 @@ namespace YARG.Editor
 
         private void BeginTransitionCapture(string name)
         {
+            UpdatePositions();
             _transitionName = name;
             _transitionStartedAt = EditorApplication.timeSinceStartup;
+            _transitionExpectedStart = _anchoredPosition >= 0
+                ? _anchoredPosition
+                : _positionAnchor;
             _transitionLog =
                 "elapsed\theard\tdecode\tnormalized\tmaster buffer\traw anchored\tanchored\texpected" +
-                "\traw error ms\terror ms\n";
+                "\traw error ms\terror ms\tmixer latency\tmixer latency anchored" +
+                "\tmixer latency error ms\texplicit delayed\texplicit anchored" +
+                "\texplicit error ms\n";
+            _transitionAbsoluteErrorTotal = 0;
+            _transitionMaximumAbsoluteError = 0;
+            _estimatedTransitionAbsoluteErrorTotal = 0;
+            _estimatedTransitionMaximumAbsoluteError = 0;
+            _transitionSampleCount = 0;
+            _positionSamples.Clear();
+            _positionSamplesSaved = false;
             _captureTransition = true;
             UpdateStatus();
         }
@@ -708,6 +1019,12 @@ namespace YARG.Editor
 
         private void BeginTempoLatencyTrials()
         {
+            if (_asioOutputTransport != AsioOutputTransport.CustomCallback)
+            {
+                _tempoLatencyTrialResult = "requires CustomCallback transport";
+                return;
+            }
+
             if (Mathf.Approximately(_tempo, _tempoCommand))
             {
                 _tempoLatencyTrialResult = "choose command tempo different from current tempo";
@@ -888,8 +1205,10 @@ namespace YARG.Editor
                 CaptureTransitionSample();
             }
 
-            if (_heardPosition < 0 || _decodePosition < 0 || _availableSourceBytes < 0 ||
-                _fftResult < 0 || _levelResult < 0 || _sampleResult < 0)
+            if (_heardPosition < 0 || _estimatedHeardPosition < 0 ||
+                _explicitDelayedPosition < 0 || _decodePosition < 0 ||
+                _availableSourceBytes < 0 || _fftResult < 0 || _levelResult < 0 ||
+                _sampleResult < 0)
             {
                 SetBassError("One or more source inspection calls failed");
             }
@@ -897,9 +1216,23 @@ namespace YARG.Editor
 
         private void UpdatePositions()
         {
-            long heardBytes = BassMix.ChannelGetPosition(_tempoHandle, PositionFlags.Bytes);
+            long heardBytes = _useAsio
+                ? BassMix.ChannelGetPosition(_tempoHandle, PositionFlags.Bytes, 0)
+                : BassMix.ChannelGetPosition(_tempoHandle, PositionFlags.Bytes);
             _heardPosition = heardBytes >= 0
                 ? Bass.ChannelBytes2Seconds(_tempoHandle, heardBytes)
+                : -1;
+
+            long automaticBytes = BassMix.ChannelGetPosition(_tempoHandle, PositionFlags.Bytes);
+            _estimatedHeardPosition = automaticBytes >= 0
+                ? Bass.ChannelBytes2Seconds(_tempoHandle, automaticBytes)
+                : -1;
+
+            long explicitDelayedBytes = _useAsio
+                ? BassMix.ChannelGetPosition(_tempoHandle, PositionFlags.Bytes, _asioLatencyBytes)
+                : automaticBytes;
+            _explicitDelayedPosition = explicitDelayedBytes >= 0
+                ? Bass.ChannelBytes2Seconds(_tempoHandle, explicitDelayedBytes)
                 : -1;
 
             long decodeBytes = Bass.ChannelGetPosition(_tempoHandle, PositionFlags.Decode);
@@ -920,11 +1253,22 @@ namespace YARG.Editor
                 : -1;
             _rawAnchoredPosition = _positionAnchor + _heardPosition;
             _anchoredPosition = _positionAnchor + _normalizedPosition;
+            double originSeconds = _sourcePositionOrigin >= 0
+                ? Bass.ChannelBytes2Seconds(_tempoHandle, _sourcePositionOrigin)
+                : -1;
+            _estimatedAnchoredPosition = _estimatedHeardPosition >= 0 && originSeconds >= 0
+                ? _positionAnchor + _estimatedHeardPosition - originSeconds
+                : -1;
+            _explicitAnchoredPosition = _explicitDelayedPosition >= 0 && originSeconds >= 0
+                ? _positionAnchor + _explicitDelayedPosition - originSeconds
+                : -1;
         }
 
         private void ResetSourcePositionOrigin()
         {
-            long position = BassMix.ChannelGetPosition(_tempoHandle, PositionFlags.Bytes);
+            long position = _useAsio
+                ? BassMix.ChannelGetPosition(_tempoHandle, PositionFlags.Bytes, 0)
+                : BassMix.ChannelGetPosition(_tempoHandle, PositionFlags.Bytes);
             if (position < 0)
             {
                 SetBassError("Failed to reset source position origin");
@@ -937,12 +1281,14 @@ namespace YARG.Editor
         private void CaptureTransitionSample()
         {
             double elapsed = EditorApplication.timeSinceStartup - _transitionStartedAt;
-            _expectedPosition = _positionAnchor + elapsed * (_tempo / 100f);
+            _expectedPosition = _transitionExpectedStart + elapsed * (_tempo / 100f);
             _rawTransitionError = _expectedPosition - _rawAnchoredPosition;
             _transitionError = _expectedPosition - _anchoredPosition;
+            _estimatedTransitionError = _expectedPosition - _estimatedAnchoredPosition;
+            _explicitTransitionError = _expectedPosition - _explicitAnchoredPosition;
             _transitionLog += string.Format(
                 "{0:F3}\t{1:F3}\t{2:F3}\t{3:F3}\t{4:F3}\t{5:F3}\t{6:F3}\t{7:F3}\t{8:F1}" +
-                "\t{9:F1}\n",
+                "\t{9:F1}\t{10:F3}\t{11:F3}\t{12:F1}\t{13:F3}\t{14:F3}\t{15:F1}\n",
                 elapsed,
                 _heardPosition,
                 _decodePosition,
@@ -952,12 +1298,51 @@ namespace YARG.Editor
                 _anchoredPosition,
                 _expectedPosition,
                 _rawTransitionError * 1000,
-                _transitionError * 1000);
+                _transitionError * 1000,
+                _estimatedHeardPosition,
+                _estimatedAnchoredPosition,
+                _estimatedTransitionError * 1000,
+                _explicitDelayedPosition,
+                _explicitAnchoredPosition,
+                _explicitTransitionError * 1000);
 
-            if (elapsed >= TRANSITION_CAPTURE_LENGTH)
+            double absoluteError = Math.Abs(_transitionError);
+            _transitionAbsoluteErrorTotal += absoluteError;
+            _transitionMaximumAbsoluteError = Math.Max(_transitionMaximumAbsoluteError,
+                absoluteError);
+            double estimatedAbsoluteError = Math.Abs(_estimatedTransitionError);
+            _estimatedTransitionAbsoluteErrorTotal += estimatedAbsoluteError;
+            _estimatedTransitionMaximumAbsoluteError = Math.Max(
+                _estimatedTransitionMaximumAbsoluteError, estimatedAbsoluteError);
+            _transitionSampleCount++;
+            _positionSamples.Add(new PositionSample(elapsed, _transitionError * 1000,
+                _estimatedTransitionError * 1000, _explicitTransitionError * 1000,
+                (_estimatedHeardPosition - _explicitDelayedPosition) * 1000));
+
+            if (elapsed >= _positionCaptureLengthSeconds)
             {
                 _captureTransition = false;
+                SavePositionSamples();
             }
+        }
+
+        private void SavePositionSamples()
+        {
+            if (_positionSamplesSaved || !_useAsio || _positionSamples.Count < 2)
+            {
+                return;
+            }
+
+            var samples = new List<PositionSample>(_positionSamples);
+            if (_asioOutputTransport == AsioOutputTransport.CustomCallback)
+            {
+                _lastCustomPositionSamples = samples;
+            }
+            else
+            {
+                _lastDirectPositionSamples = samples;
+            }
+            _positionSamplesSaved = true;
         }
 
         private void UpdateFftMetrics()
@@ -1029,6 +1414,8 @@ namespace YARG.Editor
 
             _length = 0;
             _heardPosition = 0;
+            _estimatedHeardPosition = 0;
+            _explicitDelayedPosition = 0;
             _decodePosition = 0;
             _normalizedPosition = 0;
             _masterBufferedSeconds = 0;
@@ -1036,13 +1423,25 @@ namespace YARG.Editor
             _positionAnchor = 0;
             _rawAnchoredPosition = 0;
             _anchoredPosition = 0;
+            _estimatedAnchoredPosition = 0;
+            _explicitAnchoredPosition = 0;
             _expectedPosition = 0;
+            _transitionExpectedStart = 0;
             _rawTransitionError = 0;
             _transitionError = 0;
+            _estimatedTransitionError = 0;
+            _explicitTransitionError = 0;
+            _transitionAbsoluteErrorTotal = 0;
+            _transitionMaximumAbsoluteError = 0;
+            _estimatedTransitionAbsoluteErrorTotal = 0;
+            _estimatedTransitionMaximumAbsoluteError = 0;
+            _transitionSampleCount = 0;
             _transitionStartedAt = 0;
             _transitionName = "None";
             _transitionLog = string.Empty;
             _captureTransition = false;
+            _positionSamples.Clear();
+            _positionSamplesSaved = false;
             _availableSourceBytes = 0;
             _fftResult = 0;
             _fftPeak = 0;
@@ -1055,6 +1454,7 @@ namespace YARG.Editor
             _asioBytesPerFrame = 0;
             _asioSampleRate = 0;
             _asioLatencyFrames = 0;
+            _asioLatencyBytes = 0;
             _lastAsioPosition = 0;
             _asioTiming.Reset();
             _runningTempoLatencyTrials = false;
@@ -1081,6 +1481,26 @@ namespace YARG.Editor
         {
             _status = $"Error: {message}";
             UnityEngine.Debug.LogError($"Master mixer test: {message}");
+        }
+
+        private readonly struct PositionSample
+        {
+            public readonly double Elapsed;
+            public readonly double CursorErrorMilliseconds;
+            public readonly double EstimatedErrorMilliseconds;
+            public readonly double ExplicitErrorMilliseconds;
+            public readonly double NativeDifferenceMilliseconds;
+
+            public PositionSample(double elapsed, double cursorErrorMilliseconds,
+                double estimatedErrorMilliseconds, double explicitErrorMilliseconds,
+                double nativeDifferenceMilliseconds)
+            {
+                Elapsed = elapsed;
+                CursorErrorMilliseconds = cursorErrorMilliseconds;
+                EstimatedErrorMilliseconds = estimatedErrorMilliseconds;
+                ExplicitErrorMilliseconds = explicitErrorMilliseconds;
+                NativeDifferenceMilliseconds = nativeDifferenceMilliseconds;
+            }
         }
 
         private sealed class AsioTimingMeasurements

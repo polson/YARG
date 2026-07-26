@@ -14,6 +14,7 @@ namespace YARG.Audio.BASS
     /// </summary>
     internal sealed class BassAudioOutput : IDisposable
     {
+        private readonly Action _asioReinitializeRequested;
         private readonly HashSet<BassSongPlayback> _playbacks = new();
         private readonly HashSet<BassMonitorRoute> _monitorRoutes = new();
         private IBassOutputBackend? _backend;
@@ -22,6 +23,12 @@ namespace YARG.Audio.BASS
         private bool _disposed;
 
         public int HeardLatencyMilliseconds => _backend?.HeardLatencyMilliseconds ?? 0;
+        public AudioOutputMetrics Metrics => _backend?.Metrics ?? default;
+
+        public BassAudioOutput(Action asioReinitializeRequested)
+        {
+            _asioReinitializeRequested = asioReinitializeRequested;
+        }
 
         public bool InitializeForDevice(BassOutputDevice device, int asioBufferLength)
         {
@@ -47,7 +54,7 @@ namespace YARG.Audio.BASS
             }
 
             IBassOutputBackend backend = device.IsAsio
-                ? new BassAsioOutputBackend(asioBufferLength)
+                ? new BassAsioOutputBackend(asioBufferLength, _asioReinitializeRequested)
                 : new BassDeviceOutputBackend();
             if (!backend.Initialize(device))
             {
@@ -250,6 +257,8 @@ namespace YARG.Audio.BASS
             _volume = volume;
             _backend?.SetVolume(volume);
         }
+
+        public void ResetMetrics() => _backend?.ResetMetrics();
 
         public void ResetForDeviceChange()
         {

@@ -11,46 +11,72 @@ using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
 {
+    /// <summary>
+    /// Routes worker-rendered song audio and direct live audio into ASIO output.
+    /// </summary>
     internal sealed class BassAsioOutputBackend : IBassOutputBackend
     {
-        private const int POSITION_HISTORY_CAPACITY = 1024;
-        private const double CLOCK_SMOOTHING_SECONDS = 1.0;
+        private const int OUTPUT_CHANNELS = 2;
+        private const int BYTES_PER_FRAME = OUTPUT_CHANNELS * sizeof(float);
 
         private readonly int _bufferLength;
-        // Never call BASS while holding this lock. Its native mutex is also used by the ASIO thread.
-        private readonly object _positionLock = new();
-        private readonly AsioProcedure _outputCallback;
+        private readonly Action _asioReinitializeRequested;
         private readonly HashSet<int> _songs = new();
-        private readonly Dictionary<int, TrackedSong> _songPositions = new();
-        private TrackedSong[] _callbackSongs = Array.Empty<TrackedSong>();
         private readonly HashSet<int> _samples = new();
         private readonly HashSet<int> _monitors = new();
-        private int _masterMixerHandle;
-        private int _bytesPerFrame;
+        private readonly AsioProcedure _outputCallback;
+        private readonly AsioNotifyProcedure _notifyCallback;
+
+        private BassRenderAheadStream? _renderAheadStream;
+        private int _songMixerHandle;
+        private int _outputMixerHandle;
+        private int _bassDeviceId;
         private int _sampleRate;
         private int _latencyFrames;
-        private int _callbackFrames;
         private bool _ownsAsio;
+        private bool _asioStarted;
+        private bool _notifyRegistered;
+        private bool _disposed;
+        private int _notificationQueued;
         private double _volume = 1;
-        private long _submittedFrames;
-        private long _lastClockTimestamp;
-        private double _clockOffset;
-        private double _lastReportedFrame;
-        private bool _clockInitialized;
+        private long _maximumCallbackTicks;
 
-        public int HeardLatencyMilliseconds { get; private set; }
+        public int HeardLatencyMilliseconds => (int) Math.Round(
+            FramesToMilliseconds(_latencyFrames + QueuedFrames));
+
+        public AudioOutputMetrics Metrics
+        {
+            get
+            {
+                BassRenderAheadStream? stream = _renderAheadStream;
+                return new AudioOutputMetrics(
+                    maximumCallbackTimeMilliseconds:
+                        Volatile.Read(ref _maximumCallbackTicks) * 1000.0 / Stopwatch.Frequency,
+                    renderAheadMilliseconds: FramesToMilliseconds(stream?.QueuedFrames ?? 0),
+                    minimumRenderAheadMilliseconds:
+                        FramesToMilliseconds(stream?.MinimumQueuedFrames ?? 0),
+                    maximumRenderTimeMilliseconds: stream?.MaximumRenderTimeMilliseconds ?? 0,
+                    renderUnderrunCount: stream?.UnderrunCount ?? 0);
+            }
+        }
+
         public bool SongMixerRunsContinuously => true;
         public double PlaybackStartDelay => GetCommandDelay();
 
-        public BassAsioOutputBackend(int bufferLength)
+        private int QueuedFrames => _renderAheadStream?.QueuedFrames ?? 0;
+
+        public BassAsioOutputBackend(int bufferLength, Action asioReinitializeRequested)
         {
             _bufferLength = bufferLength;
+            _asioReinitializeRequested = asioReinitializeRequested;
             _outputCallback = FillOutputBuffer;
+            _notifyCallback = OnAsioNotification;
         }
 
         public bool Initialize(BassOutputDevice device)
         {
-            if (!CreateMasterMixer())
+            _bassDeviceId = device.DeviceId;
+            if (!CreateOutputMixers())
             {
                 return false;
             }
@@ -75,37 +101,28 @@ namespace YARG.Audio.BASS
         {
             var flags = BassFlags.MixerChanNoRampin | BassFlags.MixerChanBuffer |
                 BassFlags.MixerChanPause;
-            if (!BassMix.MixerAddChannel(_masterMixerHandle, tempoStreamHandle, flags))
+            if (!BassMix.MixerAddChannel(_songMixerHandle, tempoStreamHandle, flags))
             {
-                YargLogger.LogFormatError("Failed to add tempo stream to master mixer: {0}", Bass.LastError);
+                YargLogger.LogFormatError("Failed to add tempo stream to ASIO song mixer: {0}",
+                    Bass.LastError);
                 return false;
             }
+
             _songs.Add(tempoStreamHandle);
-            long position = BassMix.ChannelGetPosition(tempoStreamHandle, PositionFlags.Bytes);
-            lock (_positionLock)
-            {
-                _songPositions.Add(tempoStreamHandle,
-                    new TrackedSong(tempoStreamHandle, position >= 0 ? position : 0));
-                PublishCallbackSongs();
-            }
             return true;
         }
 
         public void DetachSong(int tempoStreamHandle)
         {
-            lock (_positionLock)
+            if (_songs.Remove(tempoStreamHandle) &&
+                !BassMix.MixerRemoveChannel(tempoStreamHandle) && Bass.LastError != Errors.Handle)
             {
-                _songPositions.Remove(tempoStreamHandle);
-                PublishCallbackSongs();
-            }
-            if (_songs.Remove(tempoStreamHandle) && !BassMix.MixerRemoveChannel(tempoStreamHandle) &&
-                Bass.LastError != Errors.Handle)
-            {
-                YargLogger.LogFormatError("Failed to remove tempo stream from master mixer: {0}!", Bass.LastError);
+                YargLogger.LogFormatError("Failed to remove tempo stream from ASIO song mixer: {0}",
+                    Bass.LastError);
             }
         }
 
-        public int SongMixerHandle(int tempoStreamHandle) => _masterMixerHandle;
+        public int SongMixerHandle(int tempoStreamHandle) => _songMixerHandle;
 
         public bool IsSongPlaying(int tempoStreamHandle)
         {
@@ -116,7 +133,8 @@ namespace YARG.Audio.BASS
 
         public int PlaySong(int tempoStreamHandle, bool restart)
         {
-            return BassMix.ChannelFlags(tempoStreamHandle, BassFlags.Default, BassFlags.MixerChanPause) < 0
+            return BassMix.ChannelFlags(tempoStreamHandle, BassFlags.Default,
+                BassFlags.MixerChanPause) < 0
                 ? (int) Bass.LastError
                 : 0;
         }
@@ -127,7 +145,7 @@ namespace YARG.Audio.BASS
                 BassFlags.MixerChanPause) < 0 ? (int) Bass.LastError : 0;
         }
 
-        public void ResetSongAfterSeek(int tempoStreamHandle) { }
+        public void ResetSongAfterSeek(int tempoStreamHandle) => _renderAheadStream?.Flush();
 
         public void FadeSong(int tempoStreamHandle, double volume, int durationMilliseconds)
         {
@@ -164,16 +182,13 @@ namespace YARG.Audio.BASS
 
         public long GetSongPosition(int tempoStreamHandle)
         {
-            lock (_positionLock)
+            if (_renderAheadStream != null)
             {
-                if (!_songPositions.TryGetValue(tempoStreamHandle, out var song))
-                {
-                    return -1;
-                }
-
-                double heardFrame = GetHeardFrame();
-                return song.Position.GetPosition(heardFrame);
+                return _renderAheadStream.GetSourcePosition(tempoStreamHandle, _latencyFrames);
             }
+
+            return BassMix.ChannelGetPosition(tempoStreamHandle, PositionFlags.Bytes,
+                FramesToBytes(_latencyFrames));
         }
 
         public double GetTempoCommandDelay(int tempoStreamHandle) => GetCommandDelay();
@@ -200,9 +215,9 @@ namespace YARG.Audio.BASS
             }
 
             var flags = BassFlags.MixerChanDownMix | BassFlags.MixerChanNoRampin;
-            if (!BassMix.MixerAddChannel(_masterMixerHandle, sourceHandle, flags))
+            if (!BassMix.MixerAddChannel(_outputMixerHandle, sourceHandle, flags))
             {
-                YargLogger.LogFormatError("Failed to add source to ASIO monitor mixer: {0}",
+                YargLogger.LogFormatError("Failed to add source to ASIO output mixer: {0}",
                     Bass.LastError);
                 return false;
             }
@@ -219,7 +234,7 @@ namespace YARG.Audio.BASS
             }
             if (!BassMix.MixerRemoveChannel(sourceHandle) && Bass.LastError != Errors.Handle)
             {
-                YargLogger.LogFormatError("Failed to remove source from ASIO monitor mixer: {0}",
+                YargLogger.LogFormatError("Failed to remove source from ASIO output mixer: {0}",
                     Bass.LastError);
             }
         }
@@ -242,11 +257,12 @@ namespace YARG.Audio.BASS
             {
                 flags |= bassOutputChannel.Flags;
             }
-            if (!BassMix.MixerAddChannel(_masterMixerHandle, sourceHandle, flags) &&
+            if (!BassMix.MixerAddChannel(_outputMixerHandle, sourceHandle, flags) &&
                 Bass.LastError != Errors.Already)
             {
                 return false;
             }
+
             _samples.Add(sourceHandle);
             return true;
         }
@@ -270,28 +286,39 @@ namespace YARG.Audio.BASS
         public void SetVolume(double volume)
         {
             _volume = volume;
-            if (_masterMixerHandle != 0 &&
-                !Bass.ChannelSetAttribute(_masterMixerHandle, ChannelAttribute.Volume, volume))
+            if (_outputMixerHandle != 0 &&
+                !Bass.ChannelSetAttribute(_outputMixerHandle, ChannelAttribute.Volume, volume))
             {
-                YargLogger.LogFormatError("Failed to set master mixer volume: {0}", Bass.LastError);
+                YargLogger.LogFormatError("Failed to set ASIO output volume: {0}", Bass.LastError);
             }
         }
 
-        private bool CreateMasterMixer()
+        private bool CreateOutputMixers()
         {
             var info = Bass.Info;
             int frequency = info.SampleRate > 0 ? info.SampleRate : 44100;
-            _masterMixerHandle = BassMix.CreateMixerStream(frequency, 2,
-                BassFlags.Float | BassFlags.MixerNonStop | BassFlags.Decode);
-            if (_masterMixerHandle == 0)
+
+            // Song mixer -> render-ahead push stream -> output mixer -> ASIO.
+            // Monitors and samples join output mixer directly, avoiding render-ahead latency.
+            _songMixerHandle = BassMix.CreateMixerStream(frequency, OUTPUT_CHANNELS,
+                BassFlags.Float | BassFlags.MixerNonStop | BassFlags.Decode |
+                BassFlags.MixerPositionEx);
+            if (_songMixerHandle == 0)
             {
-                YargLogger.LogFormatError("Failed to create ASIO master mixer: {0}!", Bass.LastError);
+                YargLogger.LogFormatError("Failed to create ASIO song mixer: {0}", Bass.LastError);
                 return false;
             }
-            Bass.ChannelSetAttribute(_masterMixerHandle, ChannelAttribute.Volume, _volume);
-            var mixerInfo = Bass.ChannelGetInfo(_masterMixerHandle);
-            _sampleRate = mixerInfo.Frequency;
-            _bytesPerFrame = mixerInfo.Channels * sizeof(float);
+
+            _outputMixerHandle = BassMix.CreateMixerStream(frequency, OUTPUT_CHANNELS,
+                BassFlags.Float | BassFlags.MixerNonStop | BassFlags.Decode);
+            if (_outputMixerHandle == 0)
+            {
+                YargLogger.LogFormatError("Failed to create ASIO output mixer: {0}", Bass.LastError);
+                return false;
+            }
+
+            Bass.ChannelSetAttribute(_outputMixerHandle, ChannelAttribute.Volume, _volume);
+            _sampleRate = Bass.ChannelGetInfo(_songMixerHandle).Frequency;
             return true;
         }
 
@@ -300,289 +327,208 @@ namespace YARG.Audio.BASS
         {
             if (!BassAsio.Init(deviceId, AsioInitFlags.Thread))
             {
-                YargLogger.LogFormatError("Failed to initialize ASIO device: {0}", BassAsio.LastError);
+                YargLogger.LogFormatError("Failed to initialize ASIO device: {0}",
+                    BassAsio.LastError);
                 return false;
             }
             _ownsAsio = true;
 
-            var mixerInfo = Bass.ChannelGetInfo(_masterMixerHandle);
-            if (!BassAsio.CheckRate(mixerInfo.Frequency))
+            if (!BassAsio.CheckRate(_sampleRate))
             {
                 YargLogger.LogFormatError("ASIO device does not support {0}Hz: {1}",
-                    mixerInfo.Frequency, BassAsio.LastError);
+                    _sampleRate, BassAsio.LastError);
                 return false;
             }
-            BassAsio.Rate = mixerInfo.Frequency;
-            _callbackFrames = _bufferLength > 0
+            BassAsio.Rate = _sampleRate;
+            int callbackFrames = _bufferLength > 0
                 ? _bufferLength
-                : Math.Max(0, BassAsio.Info.PreferredBufferLength);
+                : Math.Max(1, BassAsio.Info.PreferredBufferLength);
+
             if (!BassAsio.ChannelEnable(false, 0, _outputCallback, IntPtr.Zero) ||
                 !BassAsio.ChannelJoin(false, 1, 0) ||
                 !BassAsio.ChannelSetFormat(false, 0, AsioSampleFormat.Float) ||
-                !BassAsio.ChannelSetRate(false, 0, mixerInfo.Frequency) ||
-                !BassAsio.Start(_bufferLength, 0))
+                !BassAsio.ChannelSetRate(false, 0, _sampleRate))
+            {
+                YargLogger.LogFormatError("Failed to configure ASIO output: {0}",
+                    BassAsio.LastError);
+                return false;
+            }
+
+            _renderAheadStream = BassRenderAheadStream.Create(
+                _songMixerHandle, _bassDeviceId, _sampleRate, OUTPUT_CHANNELS, callbackFrames);
+            if (_renderAheadStream == null)
+            {
+                return false;
+            }
+            if (!BassMix.MixerAddChannel(_outputMixerHandle, _renderAheadStream.Handle,
+                    BassFlags.MixerChanNoRampin))
+            {
+                YargLogger.LogFormatError("Failed to attach ASIO render-ahead stream: {0}",
+                    Bass.LastError);
+                return false;
+            }
+
+            if (!BassAsio.Start(_bufferLength, 0))
             {
                 YargLogger.LogFormatError("Failed to start ASIO output: {0}", BassAsio.LastError);
                 return false;
             }
+            _asioStarted = true;
 
-            int latency = BassAsio.GetLatency(false);
-            _latencyFrames = Math.Max(0, latency);
-            HeardLatencyMilliseconds = (int) Math.Round(_latencyFrames * 1000.0 / mixerInfo.Frequency);
-            return true;
-        }
-
-#endif
-
-        private int FillOutputBuffer(bool input, int channel, IntPtr buffer, int length, IntPtr user)
-        {
-            if (_bytesPerFrame <= 0)
+            if (BassAsio.SetNotify(_notifyCallback, IntPtr.Zero))
             {
-                return 0;
-            }
-
-            long timestamp = Stopwatch.GetTimestamp();
-            long frameCount = length / _bytesPerFrame;
-            long blockStart;
-            lock (_positionLock)
-            {
-                _callbackFrames = (int) frameCount;
-                blockStart = _submittedFrames;
-                UpdateOutputClock(blockStart, timestamp);
-            }
-
-            int bytesRead = Bass.ChannelGetData(_masterMixerHandle, buffer, length);
-            if (bytesRead < 0)
-            {
-                bytesRead = 0;
-            }
-
-            TrackedSong[] songs = Volatile.Read(ref _callbackSongs);
-            for (int i = 0; i < songs.Length; i++)
-            {
-                songs[i].GeneratedPosition = BassMix.ChannelGetPosition(
-                    songs[i].Handle, PositionFlags.Bytes);
-            }
-
-            lock (_positionLock)
-            {
-                _submittedFrames += frameCount;
-
-                for (int i = 0; i < songs.Length; i++)
-                {
-                    TrackedSong song = songs[i];
-                    if (!_songPositions.TryGetValue(song.Handle, out var current) ||
-                        !ReferenceEquals(current, song))
-                    {
-                        continue;
-                    }
-
-                    long position = song.GeneratedPosition >= 0
-                        ? song.GeneratedPosition
-                        : song.Position.LastGeneratedPosition;
-                    song.Position.AddBlock(blockStart, _submittedFrames, position);
-                }
-            }
-
-            return bytesRead;
-        }
-
-        private void UpdateOutputClock(long blockStartFrame, long timestamp)
-        {
-            double callbackTime = (double) timestamp / Stopwatch.Frequency;
-            double observedOffset = (blockStartFrame / (double) _sampleRate) - callbackTime;
-
-            if (!_clockInitialized)
-            {
-                _clockOffset = observedOffset;
-                _clockInitialized = true;
+                _notifyRegistered = true;
             }
             else
             {
-                // Callback entry time contains scheduling jitter. Smooth its frame-clock offset so
-                // position stays stable while still following slow hardware clock drift.
-                double elapsed = (double) (timestamp - _lastClockTimestamp) /
-                    Stopwatch.Frequency;
-                double blend = 1 - Math.Exp(-elapsed / CLOCK_SMOOTHING_SECONDS);
-                _clockOffset += blend * (observedOffset - _clockOffset);
+                YargLogger.LogFormatWarning(
+                    "Failed to register for ASIO driver notifications: {0}", BassAsio.LastError);
             }
 
-            _lastClockTimestamp = timestamp;
+            _latencyFrames = Math.Max(0, BassAsio.GetLatency(false));
+            float latencySeconds = (_latencyFrames + QueuedFrames) / (float) _sampleRate;
+            if (!Bass.ChannelSetAttribute(_songMixerHandle, ChannelAttribute.MixerLatency,
+                    latencySeconds))
+            {
+                YargLogger.LogFormatError("Failed to set ASIO mixer latency: {0}", Bass.LastError);
+                return false;
+            }
+            return true;
         }
 
-        private double GetHeardFrame()
+        private void OnAsioNotification(AsioNotify notification, IntPtr user)
         {
-            if (!_clockInitialized || _sampleRate <= 0)
+            if ((notification != AsioNotify.Reset && notification != AsioNotify.Rate) ||
+                Volatile.Read(ref _disposed) ||
+                Interlocked.Exchange(ref _notificationQueued, 1) != 0)
             {
-                return 0;
+                return;
             }
 
-            double currentTime = (double) Stopwatch.GetTimestamp() / Stopwatch.Frequency;
-            double heardFrame = ((currentTime + _clockOffset) * _sampleRate) - _latencyFrames;
-            heardFrame = Math.Clamp(heardFrame, _lastReportedFrame, _submittedFrames);
-            _lastReportedFrame = heardFrame;
-            return heardFrame;
+            // Driver callbacks may not reinitialize ASIO. Defer and coalesce requests.
+            UnityMainThreadCallback.QueueEvent(HandleAsioNotification);
+        }
+
+        private void HandleAsioNotification()
+        {
+            Interlocked.Exchange(ref _notificationQueued, 0);
+            if (_disposed)
+            {
+                return;
+            }
+
+            YargLogger.LogInfo("ASIO driver settings changed; reinitializing audio output");
+            _asioReinitializeRequested();
+        }
+
+        private int FillOutputBuffer(bool input, int channel, IntPtr buffer, int length, IntPtr user)
+        {
+            long start = Stopwatch.GetTimestamp();
+            try
+            {
+                int callbackFrames = length / BYTES_PER_FRAME;
+                _renderAheadStream?.OnOutputRequested(callbackFrames);
+
+                int bytesRead = Bass.ChannelGetData(_outputMixerHandle, buffer, length);
+                return bytesRead >= 0 ? bytesRead : 0;
+            }
+            finally
+            {
+                UpdateMaximum(ref _maximumCallbackTicks, Stopwatch.GetTimestamp() - start);
+            }
+        }
+#endif
+
+        public void ResetMetrics()
+        {
+            Interlocked.Exchange(ref _maximumCallbackTicks, 0);
+            _renderAheadStream?.ResetMetrics();
         }
 
         private double GetCommandDelay()
         {
-            lock (_positionLock)
+            if (_sampleRate <= 0)
             {
-                if (_sampleRate <= 0)
-                {
-                    return 0;
-                }
-
-                // A command waits 0-1 callback periods before BASS generates data with the new
-                // state. Use the midpoint, then include frames already queued in the ASIO driver.
-                return (_latencyFrames + (_callbackFrames * 0.5)) / _sampleRate;
+                return 0;
             }
+
+            int queuedFrames = _renderAheadStream?.SnapshotQueuedFrames() ?? 0;
+            return (_latencyFrames + queuedFrames) / (double) _sampleRate;
+        }
+
+        private int FramesToBytes(int frames)
+        {
+            long bytes = Math.Max(0, frames) * (long) BYTES_PER_FRAME;
+            return (int) Math.Min(bytes, int.MaxValue);
+        }
+
+        private double FramesToMilliseconds(long frames) => _sampleRate > 0
+            ? Math.Max(0, frames) * 1000.0 / _sampleRate
+            : 0;
+
+        private static void UpdateMaximum(ref long target, long value)
+        {
+            long previous;
+            do
+            {
+                previous = Volatile.Read(ref target);
+                if (value <= previous)
+                {
+                    return;
+                }
+            }
+            while (Interlocked.CompareExchange(ref target, value, previous) != previous);
         }
 
         public void Dispose()
         {
+            if (_disposed)
+            {
+                return;
+            }
+            _disposed = true;
+
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            if (_notifyRegistered)
+            {
+                BassAsio.SetNotify(null, IntPtr.Zero);
+                _notifyRegistered = false;
+            }
+            if (_asioStarted)
+            {
+                BassAsio.Stop();
+                _asioStarted = false;
+            }
+#endif
+
+            _renderAheadStream?.Dispose();
+            _renderAheadStream = null;
+
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
             if (_ownsAsio)
             {
-                BassAsio.Stop();
                 BassAsio.Free();
                 _ownsAsio = false;
             }
 #endif
+
             _songs.Clear();
-            lock (_positionLock)
-            {
-                _songPositions.Clear();
-                PublishCallbackSongs();
-            }
             _samples.Clear();
             foreach (int monitorHandle in new List<int>(_monitors))
             {
                 DetachMonitor(monitorHandle);
             }
-            if (_masterMixerHandle != 0)
+
+            if (_outputMixerHandle != 0)
             {
-                Bass.StreamFree(_masterMixerHandle);
-                _masterMixerHandle = 0;
+                Bass.StreamFree(_outputMixerHandle);
+                _outputMixerHandle = 0;
+            }
+            if (_songMixerHandle != 0)
+            {
+                Bass.StreamFree(_songMixerHandle);
+                _songMixerHandle = 0;
             }
         }
-
-        private void PublishCallbackSongs()
-        {
-            var songs = new TrackedSong[_songPositions.Count];
-            _songPositions.Values.CopyTo(songs, 0);
-            Volatile.Write(ref _callbackSongs, songs);
-        }
-
-        private sealed class TrackedSong
-        {
-            public readonly int Handle;
-            public readonly AsioSongPosition Position;
-            public long GeneratedPosition;
-
-            public TrackedSong(int handle, long initialPosition)
-            {
-                Handle = handle;
-                Position = new AsioSongPosition(initialPosition);
-                GeneratedPosition = initialPosition;
-            }
-        }
-
-        private sealed class AsioSongPosition
-        {
-            private readonly PositionBlock[] _history = new PositionBlock[POSITION_HISTORY_CAPACITY];
-            private int _historyStart;
-            private int _historyCount;
-
-            public long LastGeneratedPosition { get; private set; }
-
-            public AsioSongPosition(long initialPosition)
-            {
-                LastGeneratedPosition = initialPosition;
-            }
-
-            public void AddBlock(long outputStart, long outputEnd, long positionEnd)
-            {
-                // Song seeks reset the tempo stream to zero. Do not interpolate backward from the
-                // previous route across that discontinuity; this output block belongs to the reset stream.
-                long positionStart = positionEnd < LastGeneratedPosition ? 0 : LastGeneratedPosition;
-                var block = new PositionBlock(outputStart, outputEnd, positionStart, positionEnd);
-                LastGeneratedPosition = positionEnd;
-
-                int index = (_historyStart + _historyCount) % _history.Length;
-                _history[index] = block;
-                if (_historyCount < _history.Length)
-                {
-                    _historyCount++;
-                }
-                else
-                {
-                    _historyStart = (_historyStart + 1) % _history.Length;
-                }
-            }
-
-            public long GetPosition(double outputFrame)
-            {
-                if (_historyCount == 0)
-                {
-                    return LastGeneratedPosition;
-                }
-
-                PositionBlock first = _history[_historyStart];
-                if (outputFrame <= first.OutputStart)
-                {
-                    return first.PositionStart;
-                }
-
-                int lastIndex = (_historyStart + _historyCount - 1) % _history.Length;
-                PositionBlock last = _history[lastIndex];
-                if (outputFrame >= last.OutputEnd)
-                {
-                    return last.PositionEnd;
-                }
-
-                // Heard output is normally only a few blocks behind submitted output. Search from
-                // newest to oldest so position reads hold the callback lock for minimal time.
-                for (int i = _historyCount - 1; i >= 0; i--)
-                {
-                    PositionBlock block = _history[(_historyStart + i) % _history.Length];
-                    if (outputFrame < block.OutputStart)
-                    {
-                        continue;
-                    }
-
-                    double blockLength = block.OutputEnd - block.OutputStart;
-                    if (blockLength <= 0)
-                    {
-                        return block.PositionEnd;
-                    }
-
-                    double progress = Math.Clamp(
-                        (outputFrame - block.OutputStart) / blockLength, 0, 1);
-                    return (long) Math.Round(block.PositionStart +
-                        ((block.PositionEnd - block.PositionStart) * progress));
-                }
-
-                return first.PositionStart;
-            }
-        }
-
-        private readonly struct PositionBlock
-        {
-            public readonly long OutputStart;
-            public readonly long OutputEnd;
-            public readonly long PositionStart;
-            public readonly long PositionEnd;
-
-            public PositionBlock(long outputStart, long outputEnd,
-                long positionStart, long positionEnd)
-            {
-                OutputStart = outputStart;
-                OutputEnd = outputEnd;
-                PositionStart = positionStart;
-                PositionEnd = positionEnd;
-            }
-        }
-
     }
 }

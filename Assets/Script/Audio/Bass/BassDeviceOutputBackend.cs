@@ -23,6 +23,7 @@ namespace YARG.Audio.BASS
         private bool _disposed;
 
         public int HeardLatencyMilliseconds => Math.Max(0, Bass.Info.Latency);
+        public AudioOutputMetrics Metrics => default;
         public bool SongMixerRunsContinuously => false;
         public double PlaybackStartDelay => BassLatencyProvider.StartupLatency;
 
@@ -262,6 +263,8 @@ namespace YARG.Audio.BASS
         }
 
         public void SetVolume(double volume) { }
+
+        public void ResetMetrics() { }
 
         private bool EnsureSampleMixer()
         {

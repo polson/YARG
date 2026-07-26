@@ -2,6 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Cysharp.Text;
+using ManagedBass;
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+using ManagedBass.Asio;
+#endif
 using UnityEngine;
 using UnityEngine.InputSystem.LowLevel;
 using YARG.Assets.Script.Gameplay.Player;
@@ -10,6 +14,8 @@ using YARG.Core.Chart;
 using YARG.Core.Extensions;
 using YARG.Gameplay.Player;
 using YARG.Integration;
+using YARG.Settings;
+using YARG.Settings.Types;
 using YARG.Venue.Characters;
 
 namespace YARG.Gameplay
@@ -103,6 +109,7 @@ namespace YARG.Gameplay
                 ("Player", PlayerDebug),
                 ("Timing", TimingDebug),
                 ("Input",  InputDebug),
+                ("Audio",  AudioDebug),
                 ("Venue",  VenueDebug),
 
                 ("Close",  CloseDebug),
@@ -186,6 +193,8 @@ namespace YARG.Gameplay
                 SetDebugEnabled(false);
                 return;
             }
+
+            UpdateAudioCpuUsageDebug();
 
             // Update GUI scale as needed
             if (Screen.height != _debugLastScreenHeight)
@@ -682,6 +691,86 @@ namespace YARG.Gameplay
                 GUILayout.EndScrollView();
             }
             GUILayout.EndVertical();
+        }
+
+        private const double AUDIO_CPU_SAMPLE_INTERVAL_SECONDS = 0.1;
+
+        private Vector2 _debugAudioScroll;
+        private double _debugNextAudioCpuSampleTime;
+        private double _debugBassCpuUsage;
+        private double _debugMaximumBassCpuUsage;
+        private double _debugAsioCpuUsage;
+        private double _debugMaximumAsioCpuUsage;
+        private AudioOutputMetrics _debugAsioMetrics;
+        private bool _debugAsioCpuAvailable;
+
+        private void UpdateAudioCpuUsageDebug()
+        {
+            double now = Time.unscaledTimeAsDouble;
+            if (now < _debugNextAudioCpuSampleTime)
+            {
+                return;
+            }
+            _debugNextAudioCpuSampleTime = now + AUDIO_CPU_SAMPLE_INTERVAL_SECONDS;
+
+            _debugBassCpuUsage = Bass.CPUUsage;
+            _debugMaximumBassCpuUsage = Math.Max(_debugMaximumBassCpuUsage, _debugBassCpuUsage);
+
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            _debugAsioCpuAvailable = SettingsManager.Settings != null &&
+                OutputDeviceSetting.BackendFor(SettingsManager.Settings.OutputDevice.Value) ==
+                AudioOutputBackend.Asio;
+            if (_debugAsioCpuAvailable)
+            {
+                _debugAsioCpuUsage = BassAsio.CPUUsage;
+                _debugMaximumAsioCpuUsage = Math.Max(_debugMaximumAsioCpuUsage, _debugAsioCpuUsage);
+                _debugAsioMetrics = GlobalAudioHandler.OutputMetrics;
+            }
+#else
+            _debugAsioCpuAvailable = false;
+#endif
+        }
+
+        private void AudioDebug()
+        {
+            using (DebugScrollView.Begin(ref _debugAudioScroll,
+                GUILayout.Width(275 * _debugGuiScale), GUILayout.Height(220 * _debugGuiScale)))
+            {
+                using (DebugVerticalArea.Begin("CPU Usage", VerticalGroupStyle))
+                {
+                    using var text = ZString.CreateStringBuilder(true);
+                    text.AppendFormat("BASS current: {0:0.00}%\n", _debugBassCpuUsage);
+                    text.AppendFormat("BASS maximum: {0:0.00}%\n", _debugMaximumBassCpuUsage);
+                    if (_debugAsioCpuAvailable)
+                    {
+                        text.AppendFormat("BASSASIO current: {0:0.00}%\n", _debugAsioCpuUsage);
+                        text.AppendFormat("BASSASIO maximum: {0:0.00}%\n", _debugMaximumAsioCpuUsage);
+                        text.AppendFormat("ASIO callback maximum: {0:0.000} ms\n",
+                            _debugAsioMetrics.MaximumCallbackTimeMilliseconds);
+                        text.AppendFormat("Render ahead: {0:0.000} ms\n",
+                            _debugAsioMetrics.RenderAheadMilliseconds);
+                        text.AppendFormat("Render ahead minimum: {0:0.000} ms\n",
+                            _debugAsioMetrics.MinimumRenderAheadMilliseconds);
+                        text.AppendFormat("Render call maximum: {0:0.000} ms\n",
+                            _debugAsioMetrics.MaximumRenderTimeMilliseconds);
+                        text.AppendFormat("Render underruns: {0}\n",
+                            _debugAsioMetrics.RenderUnderrunCount);
+                    }
+                    else
+                    {
+                        text.Append("BASSASIO: Not active\n");
+                    }
+                    GUILayout.Label(text.AsSpan().TrimEnd('\n').ToString());
+
+                    if (GUILayout.Button("Reset maximums"))
+                    {
+                        _debugMaximumBassCpuUsage = _debugBassCpuUsage;
+                        _debugMaximumAsioCpuUsage = _debugAsioCpuUsage;
+                        GlobalAudioHandler.ResetOutputMetrics();
+                        _debugAsioMetrics = GlobalAudioHandler.OutputMetrics;
+                    }
+                }
+            }
         }
 
         private Vector2 _debugVenueScroll;
