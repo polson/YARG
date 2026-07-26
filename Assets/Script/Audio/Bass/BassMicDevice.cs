@@ -4,7 +4,6 @@ using System.Runtime.InteropServices;
 using ManagedBass;
 using ManagedBass.Fx;
 using UnityEngine;
-using YARG.Audio.BASS.Effects;
 using YARG.Audio.PitchDetection;
 using YARG.Core.Logging;
 using YARG.Core.Audio;
@@ -18,11 +17,12 @@ namespace YARG.Audio.BASS
     internal class MonitorPlaybackHandle : IDisposable
     {
 #nullable enable
-        public static MonitorPlaybackHandle? Create(int sampleRate)
+        public static MonitorPlaybackHandle? Create(int sampleRate, BassAudioOutput audioOutput)
 #nullable disable
         {
-            // Set up monitoring stream
-            int monitorPlaybackHandle = Bass.CreateStream(sampleRate, 1, BassFlags.Default, StreamProcedureType.Push);
+            // Output backends consume this decoding source through their monitor mixers.
+            int monitorPlaybackHandle = Bass.CreateStream(sampleRate, 1,
+                BassFlags.Float | BassFlags.Decode, StreamProcedureType.Push);
             if (monitorPlaybackHandle == 0)
             {
                 YargLogger.LogFormatError("Failed to create monitor stream: {0}!", Bass.LastError);
@@ -45,47 +45,67 @@ namespace YARG.Audio.BASS
             }
 
             // Apply gain to the playback
-            var gain = BassGainDsp.Attach(monitorPlaybackHandle, 1.3f);
-            if (gain == null)
+            int applyGain = Bass.ChannelSetDSP(monitorPlaybackHandle, ApplyGain);
+            if (applyGain == 0)
             {
-                YargLogger.LogError("Failed to add native gain to monitor stream!");
+                YargLogger.LogFormatError("Failed to add gain to monitor stream: {0}!", Bass.LastError);
                 reverb.Dispose();
                 Bass.StreamFree(monitorPlaybackHandle);
                 return null;
             }
 
-            // Start monitoring
-            if (!Bass.ChannelPlay(monitorPlaybackHandle))
+            var source = BassMonitorSource.CreatePush(monitorPlaybackHandle, reverb.RequestReset);
+            if (source == null)
             {
-                YargLogger.LogFormatError("Failed to start monitor stream: {0}!", Bass.LastError);
-                gain.Dispose();
+                Bass.ChannelRemoveDSP(monitorPlaybackHandle, applyGain);
                 reverb.Dispose();
                 Bass.StreamFree(monitorPlaybackHandle);
                 return null;
             }
 
-            return new MonitorPlaybackHandle(monitorPlaybackHandle, reverb, gain);
+            var route = audioOutput.RegisterMonitor(source, 1);
+            if (route == null)
+            {
+                YargLogger.LogError("Failed to register monitor stream with active audio output!");
+                Bass.ChannelRemoveDSP(monitorPlaybackHandle, applyGain);
+                reverb.Dispose();
+                Bass.StreamFree(monitorPlaybackHandle);
+                return null;
+            }
+
+            return new MonitorPlaybackHandle(monitorPlaybackHandle, source, route, reverb, applyGain);
         }
 
         public readonly int Handle;
+        private readonly BassMonitorSource _source;
+        private readonly BassMonitorRoute _route;
         private readonly BassFreeverbDsp _reverb;
-        private readonly BassGainDsp _gain;
+        private readonly int _applyGain;
 
         private bool _disposed;
 
-        private MonitorPlaybackHandle(int handle, BassFreeverbDsp reverb, BassGainDsp gain)
+        private MonitorPlaybackHandle(int handle, BassMonitorSource source, BassMonitorRoute route,
+            BassFreeverbDsp reverb, int applyGain)
         {
             Handle = handle;
+            _source = source;
+            _route = route;
             _reverb = reverb;
-            _gain = gain;
+            _applyGain = applyGain;
+        }
+
+        private static void ApplyGain(int handle, int channel, IntPtr buffer, int length, IntPtr user)
+        {
+            BassHelpers.ApplyGain(1.3f, buffer, length);
         }
 
         private void Dispose(bool disposing)
         {
             if (!_disposed)
             {
+                _route.Dispose();
                 _reverb.Dispose();
-                _gain.Dispose();
+                Bass.ChannelRemoveDSP(Handle, _applyGain);
                 Bass.StreamFree(Handle);
                 _disposed = true;
             }
@@ -102,26 +122,17 @@ namespace YARG.Audio.BASS
             Dispose(false);
         }
 
-        public void ResetReverb()
+        public void DetachRoute()
         {
-            _reverb.RequestReset();
+            _route.Dispose();
         }
 
-        public int ResetBuffer()
+        public bool ResetBuffer()
         {
-            Bass.StreamPutData(Handle, IntPtr.Zero, 0);
-
-            // Restarting a push stream flushes both its playback buffer and unbounded
-            // queue. Resetting position alone does not reliably clear both on all backends.
-            if (!Bass.ChannelPlay(Handle, true))
-            {
-                return (int) Bass.LastError;
-            }
-
-            ResetReverb();
-            return 0;
+            return _source.ResetToLive();
         }
 
+        public void SetVolume(float volume) => _route.SetVolume(volume);
     }
 
     internal class RecordingHandle : IDisposable
@@ -216,7 +227,7 @@ namespace YARG.Audio.BASS
         private const float MIC_HIT_INPUT_THRESHOLD = 25f;
 
 #nullable enable
-        internal static BassMicDevice? Create(int deviceId, string name)
+        internal static BassMicDevice? Create(int deviceId, string name, BassAudioOutput audioOutput)
 #nullable disable
         {
             // Must initialise device before recording
@@ -240,7 +251,7 @@ namespace YARG.Audio.BASS
 
             device._pitchDetector = new PitchTracker(sampleRate: device._sampleRate);
 
-            var monitorPlayback = MonitorPlaybackHandle.Create(device._sampleRate);
+            var monitorPlayback = MonitorPlaybackHandle.Create(device._sampleRate, audioOutput);
             if (monitorPlayback == null)
             {
                 device._recordHandle.Dispose();
@@ -350,10 +361,9 @@ namespace YARG.Audio.BASS
                 }
             }
 
-            int monitorError = _monitorHandle.ResetBuffer();
-            if (monitorError != 0)
+            if (!_monitorHandle.ResetBuffer())
             {
-                return monitorError;
+                return (int) Bass.LastError;
             }
 
             return 0;
@@ -371,10 +381,7 @@ namespace YARG.Audio.BASS
 
         public override void SetMonitoringLevel(float volume)
         {
-            if (!Bass.ChannelSetAttribute(_monitorHandle.Handle, ChannelAttribute.Volume, volume))
-            {
-                YargLogger.LogFormatError("Failed to set volume attribute: {0}", Bass.LastError);
-            }
+            _monitorHandle.SetVolume(volume);
         }
 
 
@@ -389,11 +396,21 @@ namespace YARG.Audio.BASS
             _deviceId = deviceId;
         }
 
-        private bool ProcessRecordData(int handle, IntPtr buffer, int length, IntPtr user)
+        private unsafe bool ProcessRecordData(int handle, IntPtr buffer, int length, IntPtr user)
         {
+            // Recording callbacks provide 16-bit PCM. Monitor mixers require a float decoding
+            // source, so convert only the monitor branch and leave analysis input unchanged.
+            int sampleCount = length / sizeof(short);
+            float* monitorBuffer = stackalloc float[sampleCount];
+            var input = new ReadOnlySpan<short>(buffer.ToPointer(), sampleCount);
+            var monitorSamples = new Span<float>(monitorBuffer, sampleCount);
+            for (int i = 0; i < sampleCount; i++)
+            {
+                monitorSamples[i] = input[i] / 32768f;
+            }
 
-            // Copies the data from the recording buffer to the monitor playback buffer.
-            if (Bass.StreamPutData(_monitorHandle.Handle, buffer, length) == -1)
+            int monitorLength = sampleCount * sizeof(float);
+            if (Bass.StreamPutData(_monitorHandle.Handle, (IntPtr) monitorBuffer, monitorLength) == -1)
             {
                 YargLogger.LogFormatError("Error pushing data to monitor stream: {0}", Bass.LastError);
             }
@@ -591,11 +608,9 @@ namespace YARG.Audio.BASS
 
             ResetProcessingState();
 
-            int monitorError = _monitorHandle.ResetBuffer();
-            if (monitorError != 0)
+            if (!_monitorHandle.ResetBuffer())
             {
-                YargLogger.LogFormatError("Failed to reset monitor stream for mic '{0}': {1}!",
-                    DisplayName, (Errors) monitorError);
+                YargLogger.LogFormatError("Failed to reset monitor stream for mic '{0}'!", DisplayName);
             }
 
             if (!recordHandle.Start())
@@ -608,8 +623,11 @@ namespace YARG.Audio.BASS
 
         protected override void DisposeUnmanagedResources()
         {
-            _monitorHandle.Dispose();
+            // Remove mixer references before stopping the producer, then free the source only
+            // after its recording callback can no longer push data into it.
+            _monitorHandle.DetachRoute();
             StopRecording();
+            _monitorHandle.Dispose();
             Bass.CurrentRecordingDevice = _deviceId;
             if (!Bass.RecordFree())
             {

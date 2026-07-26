@@ -554,7 +554,7 @@ namespace YARG.Audio.BASS
         protected override MicDevice? CreateInputDevice(int deviceId, string name)
 #nullable disable
         {
-            var device = BassMicDevice.Create(deviceId, name);
+            var device = BassMicDevice.Create(deviceId, name, _audioOutput);
             device?.SetMonitoringLevel(SettingsManager.Settings.VocalMonitoring.Value);
             return device;
         }
