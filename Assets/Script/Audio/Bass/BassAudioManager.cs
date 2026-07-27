@@ -503,8 +503,31 @@ namespace YARG.Audio.BASS
         internal bool TryGetAsioInputLevel(int channelIndex, out double level) =>
             _audioOutput.TryGetAsioInputLevel(channelIndex, out level);
 
+        private const string ASIO_MIC_PREFIX = "ASIO: ";
+
+        private static string GetAsioMicName(AsioInputDescriptor descriptor) =>
+            $"{ASIO_MIC_PREFIX}{descriptor.DriverName} - {descriptor.ChannelIndex}: {descriptor.Name}";
+
+        private AsioInputDescriptor? FindAsioInput(string name)
+        {
+            foreach (var descriptor in GetAsioInputDescriptors())
+            {
+                if (string.Equals(GetAsioMicName(descriptor), name, StringComparison.Ordinal))
+                {
+                    return descriptor;
+                }
+            }
+            return null;
+        }
+
         protected override MicDevice? GetInputDevice(string name)
         {
+            var asioInput = FindAsioInput(name);
+            if (asioInput != null)
+            {
+                return BassAsioMicDevice.Create(this, asioInput, name);
+            }
+
             for (int deviceIndex = 0; Bass.RecordGetDeviceInfo(deviceIndex, out var info); deviceIndex++)
             {
                 // Ignore disabled/claimed devices
@@ -537,6 +560,11 @@ namespace YARG.Audio.BASS
         protected override List<(int id, string name)> GetAllInputDevices()
         {
             var mics = new List<(int id, string name)>();
+
+            foreach (var descriptor in GetAsioInputDescriptors())
+            {
+                mics.Add((descriptor.ChannelIndex, GetAsioMicName(descriptor)));
+            }
 
             // Ignored for now since it causes issues on Linux, BASS must not report device info correctly there
             // TODO: allow configuring this at runtime?
@@ -582,6 +610,16 @@ namespace YARG.Audio.BASS
         protected override MicDevice? CreateInputDevice(int deviceId, string name)
 #nullable disable
         {
+            if (name.StartsWith(ASIO_MIC_PREFIX, StringComparison.Ordinal))
+            {
+                var descriptor = FindAsioInput(name);
+                if (descriptor == null || descriptor.ChannelIndex != deviceId)
+                {
+                    return null;
+                }
+                return BassAsioMicDevice.Create(this, descriptor, name);
+            }
+
             var device = BassMicDevice.Create(deviceId, name, _audioOutput);
             device?.SetMonitoringLevel(SettingsManager.Settings.VocalMonitoring.Value);
             return device;
