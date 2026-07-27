@@ -757,8 +757,8 @@ namespace YARG.Playback
             Settling,
         }
 
-        private const double SYNC_START_SECONDS      = 20.005;
-        private const double SYNC_STOP_SECONDS       = 20.0015;
+        private const double SYNC_START_SECONDS      = 0.005;
+        private const double SYNC_STOP_SECONDS       = 0.0015;
         private const double SETTLE_MARGIN_SECONDS   = 0.025;
         private const float  CORRECTION_TIME_SECONDS = 0.1f;
         private const float  SYNC_CLAMP              = 0.50f;

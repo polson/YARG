@@ -745,8 +745,25 @@ namespace YARG.Gameplay
                     {
                         text.AppendFormat("BASSASIO current: {0:0.00}%\n", _debugAsioCpuUsage);
                         text.AppendFormat("BASSASIO maximum: {0:0.00}%\n", _debugMaximumAsioCpuUsage);
-                        text.AppendFormat("ASIO callback maximum: {0:0.000} ms\n",
-                            _debugAsioMetrics.MaximumCallbackTimeMilliseconds);
+                        text.AppendFormat("ASIO output: {0}\n",
+                            _debugAsioMetrics.UsesManagedCallback
+                                ? "managed callback"
+                                : "native BASS");
+                        text.AppendFormat("ASIO buffer period: {0:0.000} ms\n",
+                            _debugAsioMetrics.CallbackPeriodMilliseconds);
+                        if (_debugAsioMetrics.UsesManagedCallback)
+                        {
+                            text.AppendFormat("Callback execution maximum: {0:0.000} ms\n",
+                                _debugAsioMetrics.MaximumCallbackTimeMilliseconds);
+                            text.AppendFormat("Callback entry gap maximum: {0:0.000} ms\n",
+                                _debugAsioMetrics.MaximumCallbackGapMilliseconds);
+                            text.AppendFormat("Callback lateness maximum: {0:0.000} ms\n",
+                                _debugAsioMetrics.MaximumCallbackLatenessMilliseconds);
+                            text.AppendFormat("Late callbacks: {0}\n",
+                                _debugAsioMetrics.LateCallbackCount);
+                            text.AppendFormat("Output underfills: {0}\n",
+                                _debugAsioMetrics.OutputUnderfillCount);
+                        }
                         text.AppendFormat("Render ahead: {0:0.000} ms\n",
                             _debugAsioMetrics.RenderAheadMilliseconds);
                         text.AppendFormat("Render ahead minimum: {0:0.000} ms\n",

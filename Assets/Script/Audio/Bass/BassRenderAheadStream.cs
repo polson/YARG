@@ -16,6 +16,7 @@ namespace YARG.Audio.BASS
         private const int RENDER_AHEAD_MILLISECONDS = 15;
         private const int RENDER_CHUNK_FRAMES = 128;
         private const int START_TIMEOUT_MILLISECONDS = 2000;
+        private const double CLOCK_SMOOTHING_SECONDS = 1.0;
 
         private readonly int _sourceMixerHandle;
         private readonly int _bassDeviceId;
@@ -25,11 +26,16 @@ namespace YARG.Audio.BASS
         private readonly object _renderLock = new();
         private readonly AutoResetEvent _renderWake = new(false);
         private readonly int _targetFrames;
+        private readonly bool _outputRequestsReported;
+        private readonly ContinuousOutputClock _outputClock;
 
         private Thread? _renderThread;
         private volatile bool _running;
         private volatile bool _queueReady;
         private int _disposed;
+        private int _queueEmpty;
+        private int _queueGeneration;
+        private long _generatedFrames;
         private long _maximumRenderTicks;
         private long _minimumQueuedFrames = long.MaxValue;
         private long _underruns;
@@ -65,7 +71,7 @@ namespace YARG.Audio.BASS
         public long UnderrunCount => Volatile.Read(ref _underruns);
 
         private BassRenderAheadStream(int sourceMixerHandle, int bassDeviceId, int sampleRate,
-            int channels, int callbackFrames, int handle)
+            int channels, int callbackFrames, bool outputRequestsReported, int handle)
         {
             _sourceMixerHandle = sourceMixerHandle;
             _bassDeviceId = bassDeviceId;
@@ -73,11 +79,14 @@ namespace YARG.Audio.BASS
             _bytesPerFrame = channels * sizeof(float);
             _renderBuffer = new float[RENDER_CHUNK_FRAMES * channels];
             _targetFrames = TargetFrames(callbackFrames);
+            _outputRequestsReported = outputRequestsReported;
+            _outputClock = new ContinuousOutputClock(sampleRate, callbackFrames);
+            _outputClock.Reset(queueGeneration: 0, nextOutputFrame: 0);
             Handle = handle;
         }
 
         public static BassRenderAheadStream? Create(int sourceMixerHandle, int bassDeviceId,
-            int sampleRate, int channels, int callbackFrames)
+            int sampleRate, int channels, int callbackFrames, bool outputRequestsReported)
         {
             int handle = Bass.CreateStream(sampleRate, channels,
                 BassFlags.Float | BassFlags.Decode, StreamProcedureType.Push);
@@ -89,7 +98,7 @@ namespace YARG.Audio.BASS
             }
 
             var stream = new BassRenderAheadStream(sourceMixerHandle, bassDeviceId, sampleRate,
-                channels, callbackFrames, handle);
+                channels, callbackFrames, outputRequestsReported, handle);
             if (stream.Start())
             {
                 return stream;
@@ -102,9 +111,12 @@ namespace YARG.Audio.BASS
         /// <summary>
         /// Records one output request and wakes producer before BASS consumes queued frames.
         /// </summary>
-        public void OnOutputRequested(int frames)
+        public void OnOutputRequested(int frames, long timestamp)
         {
+            int queueGeneration = Volatile.Read(ref _queueGeneration);
             int queuedFrames = QueuedFrames;
+            _outputClock.ObserveCallback(
+                queueGeneration, timestamp, frames, Math.Min(frames, queuedFrames));
             UpdateMinimum(ref _minimumQueuedFrames, Math.Max(0, queuedFrames - frames));
             if (_queueReady && queuedFrames < frames)
             {
@@ -128,19 +140,37 @@ namespace YARG.Audio.BASS
                     YargLogger.LogFormatError("Failed to flush ASIO render-ahead stream: {0}",
                         Bass.LastError);
                 }
+                else
+                {
+                    int queueGeneration = unchecked(_queueGeneration + 1);
+                    Volatile.Write(ref _queueGeneration, queueGeneration);
+                    _outputClock.Reset(queueGeneration, _generatedFrames);
+                }
             }
             _renderWake.Set();
         }
 
         /// <summary>
-        /// Gets source position at output, accounting for push queue and ASIO driver latency.
-        /// Producer lock keeps source decode position fixed while queue depth is sampled.
+        /// Gets source position at output. A QPC-smoothed output clock advances between ASIO
+        /// buffers; MixerPositionEx maps that output frame back through tempo and seek history.
+        /// Producer lock keeps the mixer output edge fixed during the lookup.
         /// </summary>
         public long GetSourcePosition(int sourceHandle, int outputLatencyFrames)
         {
             lock (_renderLock)
             {
-                int delayBytes = FramesToBytes(outputLatencyFrames + QueuedFrames);
+                long timestamp = Stopwatch.GetTimestamp();
+                double fallbackHeardFrame = 0;
+                if (!_outputClock.IsInitialized)
+                {
+                    fallbackHeardFrame = Math.Max(
+                        0, _generatedFrames - QueuedFrames - outputLatencyFrames);
+                }
+                double heardFrame = _outputClock.GetHeardFrame(
+                    timestamp, outputLatencyFrames, _generatedFrames, fallbackHeardFrame);
+                long delayFrames = (long) Math.Ceiling(
+                    Math.Max(0, _generatedFrames - heardFrame));
+                int delayBytes = FramesToBytes(delayFrames);
                 long position = BassMix.ChannelGetPosition(
                     sourceHandle, PositionFlags.Bytes, delayBytes);
 
@@ -161,9 +191,11 @@ namespace YARG.Audio.BASS
 
         public void ResetMetrics()
         {
+            int queuedFrames = QueuedFrames;
             Interlocked.Exchange(ref _maximumRenderTicks, 0);
-            Interlocked.Exchange(ref _minimumQueuedFrames, QueuedFrames);
+            Interlocked.Exchange(ref _minimumQueuedFrames, queuedFrames);
             Interlocked.Exchange(ref _underruns, 0);
+            Volatile.Write(ref _queueEmpty, queuedFrames == 0 ? 1 : 0);
         }
 
         private bool Start()
@@ -209,9 +241,20 @@ namespace YARG.Audio.BASS
                 Bass.CurrentDevice = _bassDeviceId;
                 while (_running)
                 {
-                    if (QueuedFrames >= _targetFrames)
+                    int queuedFrames = QueuedFrames;
+                    if (_queueReady && !_outputRequestsReported)
                     {
-                        _queueReady = true;
+                        RecordPolledOutput(queuedFrames, Stopwatch.GetTimestamp());
+                    }
+
+                    if (queuedFrames >= _targetFrames)
+                    {
+                        if (!_queueReady)
+                        {
+                            Interlocked.Exchange(ref _minimumQueuedFrames, queuedFrames);
+                            Volatile.Write(ref _queueEmpty, 0);
+                            _queueReady = true;
+                        }
                         _renderWake.WaitOne(2);
                         continue;
                     }
@@ -224,6 +267,23 @@ namespace YARG.Audio.BASS
                 _running = false;
                 YargLogger.LogException(exception, "ASIO render-ahead thread failed");
             }
+        }
+
+        private void RecordPolledOutput(int queuedFrames, long timestamp)
+        {
+            _outputClock.ObserveQueueDepth(
+                Volatile.Read(ref _queueGeneration), timestamp, _generatedFrames, queuedFrames);
+            UpdateMinimum(ref _minimumQueuedFrames, queuedFrames);
+            if (queuedFrames == 0)
+            {
+                if (Interlocked.Exchange(ref _queueEmpty, 1) == 0)
+                {
+                    Interlocked.Increment(ref _underruns);
+                }
+                return;
+            }
+
+            Volatile.Write(ref _queueEmpty, 0);
         }
 
         private void RenderChunk()
@@ -248,10 +308,17 @@ namespace YARG.Audio.BASS
                     }
 
                     bytesRead -= bytesRead % _bytesPerFrame;
-                    if (bytesRead > 0 && Bass.StreamPutData(Handle, _renderBuffer, bytesRead) < 0)
+                    if (bytesRead <= 0)
+                    {
+                        return;
+                    }
+                    if (Bass.StreamPutData(Handle, _renderBuffer, bytesRead) < 0)
                     {
                         FailRender("Failed to queue rendered ASIO audio", Bass.LastError);
+                        return;
                     }
+
+                    _generatedFrames += bytesRead / _bytesPerFrame;
                 }
                 finally
                 {
@@ -270,10 +337,175 @@ namespace YARG.Audio.BASS
             (int) Math.Ceiling(_sampleRate * RENDER_AHEAD_MILLISECONDS / 1000.0),
             callbackFrames * 2);
 
-        private int FramesToBytes(int frames)
+        private int FramesToBytes(long frames)
         {
             long bytes = Math.Max(0, frames) * (long) _bytesPerFrame;
             return (int) Math.Min(bytes, int.MaxValue);
+        }
+
+        /// <summary>
+        /// Maps QPC to the render stream's absolute output-frame domain. Managed output reports
+        /// callback entry directly. Native ChannelEnableBass is deliberately callback-free, so the
+        /// render worker detects queue drains; its polling delay is filtered as callback jitter.
+        /// </summary>
+        private sealed class ContinuousOutputClock
+        {
+            private readonly object _lock = new();
+            private readonly int _sampleRate;
+            private readonly int _callbackFrames;
+
+            private int _queueGeneration;
+            private bool _initialized;
+            private bool _queueDepthInitialized;
+            private long _anchorTimestamp;
+            private long _lastObservationTimestamp;
+            private long _nextCallbackFrame;
+            private long _lastQueueOutputFrame;
+            private long _latestSubmittedFrame;
+            private double _anchorFrame;
+            private double _lastReportedFrame;
+
+            public ContinuousOutputClock(int sampleRate, int callbackFrames)
+            {
+                _sampleRate = sampleRate;
+                _callbackFrames = Math.Max(1, callbackFrames);
+            }
+
+            public bool IsInitialized
+            {
+                get
+                {
+                    lock (_lock)
+                    {
+                        return _initialized;
+                    }
+                }
+            }
+
+            public void ObserveCallback(int queueGeneration, long timestamp,
+                int requestedFrames, int availableFrames)
+            {
+                lock (_lock)
+                {
+                    if (queueGeneration != _queueGeneration)
+                    {
+                        return;
+                    }
+
+                    long blockStart = _nextCallbackFrame;
+                    long submittedFrames = Math.Clamp(availableFrames, 0, requestedFrames);
+                    _nextCallbackFrame += submittedFrames;
+                    RecordObservation(blockStart, _nextCallbackFrame, timestamp);
+                }
+            }
+
+            public void ObserveQueueDepth(int queueGeneration, long timestamp,
+                long generatedFrames, int queuedFrames)
+            {
+                long outputFrame = Math.Max(0, generatedFrames - Math.Max(0, queuedFrames));
+                lock (_lock)
+                {
+                    if (queueGeneration != _queueGeneration)
+                    {
+                        return;
+                    }
+
+                    if (!_queueDepthInitialized)
+                    {
+                        _lastQueueOutputFrame = outputFrame;
+                        _nextCallbackFrame = outputFrame;
+                        _queueDepthInitialized = true;
+                        return;
+                    }
+
+                    long advancedFrames = outputFrame - _lastQueueOutputFrame;
+                    if (advancedFrames <= 0)
+                    {
+                        return;
+                    }
+
+                    // Poll may span several callbacks. Latest callback started one buffer (or the
+                    // available underfill amount) before the newly observed output edge.
+                    long blockFrames = Math.Min(_callbackFrames, advancedFrames);
+                    long blockStart = outputFrame - blockFrames;
+                    _lastQueueOutputFrame = outputFrame;
+                    _nextCallbackFrame = outputFrame;
+                    RecordObservation(blockStart, outputFrame, timestamp);
+                }
+            }
+
+            public double GetHeardFrame(long timestamp, int outputLatencyFrames,
+                long generatedFrames, double fallbackHeardFrame)
+            {
+                lock (_lock)
+                {
+                    double heardFrame;
+                    if (!_initialized || _sampleRate <= 0)
+                    {
+                        heardFrame = fallbackHeardFrame;
+                    }
+                    else
+                    {
+                        double elapsed = (double) (timestamp - _anchorTimestamp) /
+                            Stopwatch.Frequency;
+                        heardFrame = _anchorFrame + Math.Max(0, elapsed) * _sampleRate -
+                            Math.Max(0, outputLatencyFrames);
+                    }
+
+                    double maximumFrame = Math.Min(generatedFrames, _latestSubmittedFrame);
+                    maximumFrame = Math.Max(maximumFrame, _lastReportedFrame);
+                    heardFrame = Math.Clamp(heardFrame, _lastReportedFrame, maximumFrame);
+                    _lastReportedFrame = heardFrame;
+                    return heardFrame;
+                }
+            }
+
+            public void Reset(int queueGeneration, long nextOutputFrame)
+            {
+                lock (_lock)
+                {
+                    _queueGeneration = queueGeneration;
+                    _initialized = false;
+                    _queueDepthInitialized = true;
+                    _anchorTimestamp = 0;
+                    _lastObservationTimestamp = 0;
+                    _nextCallbackFrame = nextOutputFrame;
+                    _lastQueueOutputFrame = nextOutputFrame;
+                    _latestSubmittedFrame = nextOutputFrame;
+                }
+            }
+
+            private void RecordObservation(long blockStartFrame, long submittedFrame,
+                long timestamp)
+            {
+                if (_sampleRate <= 0)
+                {
+                    return;
+                }
+
+                if (!_initialized)
+                {
+                    _anchorFrame = blockStartFrame;
+                    _anchorTimestamp = timestamp;
+                    _initialized = true;
+                }
+                else
+                {
+                    double elapsed = (double) (timestamp - _anchorTimestamp) /
+                        Stopwatch.Frequency;
+                    double predictedFrame = _anchorFrame + Math.Max(0, elapsed) * _sampleRate;
+                    double observationElapsed = (double)
+                        Math.Max(0, timestamp - _lastObservationTimestamp) / Stopwatch.Frequency;
+                    double blend = 1 - Math.Exp(
+                        -observationElapsed / CLOCK_SMOOTHING_SECONDS);
+                    _anchorFrame = predictedFrame +
+                        blend * (blockStartFrame - predictedFrame);
+                    _anchorTimestamp = timestamp;
+                }
+
+                _lastObservationTimestamp = timestamp;
+                _latestSubmittedFrame = Math.Max(_latestSubmittedFrame, submittedFrame);
+            }
         }
 
         private static void UpdateMaximum(ref long target, long value)

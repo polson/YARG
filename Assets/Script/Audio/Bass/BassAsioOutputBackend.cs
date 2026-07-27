@@ -18,6 +18,9 @@ namespace YARG.Audio.BASS
     {
         private const int OUTPUT_CHANNELS = 2;
         private const int BYTES_PER_FRAME = OUTPUT_CHANNELS * sizeof(float);
+        // Native pull keeps Unity GC and managed thread suspension out of the hardware callback.
+        // Set false only to collect managed-callback diagnostics for an A/B test.
+        private const bool USE_NATIVE_ASIO_OUTPUT = true;
 
         private readonly int _bufferLength;
         private readonly Action _asioReinitializeRequested;
@@ -39,7 +42,15 @@ namespace YARG.Audio.BASS
         private bool _disposed;
         private int _notificationQueued;
         private double _volume = 1;
+        private bool _usesManagedCallback;
+        private int _callbackFrames;
+        private int _lastCallbackFrames;
+        private long _lastCallbackTimestamp;
         private long _maximumCallbackTicks;
+        private long _maximumCallbackGapTicks;
+        private long _maximumCallbackLatenessTicks;
+        private long _lateCallbacks;
+        private long _outputUnderfills;
 
         public int HeardLatencyMilliseconds => (int) Math.Round(
             FramesToMilliseconds(_latencyFrames + QueuedFrames));
@@ -50,8 +61,17 @@ namespace YARG.Audio.BASS
             {
                 BassRenderAheadStream? stream = _renderAheadStream;
                 return new AudioOutputMetrics(
+                    usesManagedCallback: _usesManagedCallback,
+                    callbackPeriodMilliseconds:
+                        FramesToMilliseconds(Volatile.Read(ref _callbackFrames)),
                     maximumCallbackTimeMilliseconds:
-                        Volatile.Read(ref _maximumCallbackTicks) * 1000.0 / Stopwatch.Frequency,
+                        TicksToMilliseconds(Volatile.Read(ref _maximumCallbackTicks)),
+                    maximumCallbackGapMilliseconds:
+                        TicksToMilliseconds(Volatile.Read(ref _maximumCallbackGapTicks)),
+                    maximumCallbackLatenessMilliseconds:
+                        TicksToMilliseconds(Volatile.Read(ref _maximumCallbackLatenessTicks)),
+                    lateCallbackCount: Volatile.Read(ref _lateCallbacks),
+                    outputUnderfillCount: Volatile.Read(ref _outputUnderfills),
                     renderAheadMilliseconds: FramesToMilliseconds(stream?.QueuedFrames ?? 0),
                     minimumRenderAheadMilliseconds:
                         FramesToMilliseconds(stream?.MinimumQueuedFrames ?? 0),
@@ -340,22 +360,13 @@ namespace YARG.Audio.BASS
                 return false;
             }
             BassAsio.Rate = _sampleRate;
-            int callbackFrames = _bufferLength > 0
+            _callbackFrames = _bufferLength > 0
                 ? _bufferLength
                 : Math.Max(1, BassAsio.Info.PreferredBufferLength);
 
-            if (!BassAsio.ChannelEnable(false, 0, _outputCallback, IntPtr.Zero) ||
-                !BassAsio.ChannelJoin(false, 1, 0) ||
-                !BassAsio.ChannelSetFormat(false, 0, AsioSampleFormat.Float) ||
-                !BassAsio.ChannelSetRate(false, 0, _sampleRate))
-            {
-                YargLogger.LogFormatError("Failed to configure ASIO output: {0}",
-                    BassAsio.LastError);
-                return false;
-            }
-
             _renderAheadStream = BassRenderAheadStream.Create(
-                _songMixerHandle, _bassDeviceId, _sampleRate, OUTPUT_CHANNELS, callbackFrames);
+                _songMixerHandle, _bassDeviceId, _sampleRate, OUTPUT_CHANNELS, _callbackFrames,
+                outputRequestsReported: !USE_NATIVE_ASIO_OUTPUT);
             if (_renderAheadStream == null)
             {
                 return false;
@@ -366,6 +377,31 @@ namespace YARG.Audio.BASS
                 YargLogger.LogFormatError("Failed to attach ASIO render-ahead stream: {0}",
                     Bass.LastError);
                 return false;
+            }
+
+            if (USE_NATIVE_ASIO_OUTPUT)
+            {
+                if (!BassAsio.ChannelEnableBass(false, 0, _outputMixerHandle, Join: true))
+                {
+                    YargLogger.LogFormatError("Failed to configure native ASIO output: {0}",
+                        BassAsio.LastError);
+                    return false;
+                }
+                YargLogger.LogInfo("ASIO output transport: native BASS channel");
+            }
+            else
+            {
+                if (!BassAsio.ChannelEnable(false, 0, _outputCallback, IntPtr.Zero) ||
+                    !BassAsio.ChannelJoin(false, 1, 0) ||
+                    !BassAsio.ChannelSetFormat(false, 0, AsioSampleFormat.Float) ||
+                    !BassAsio.ChannelSetRate(false, 0, _sampleRate))
+                {
+                    YargLogger.LogFormatError("Failed to configure managed ASIO output: {0}",
+                        BassAsio.LastError);
+                    return false;
+                }
+                _usesManagedCallback = true;
+                YargLogger.LogInfo("ASIO output transport: managed callback");
             }
 
             if (!BassAsio.Start(_bufferLength, 0))
@@ -427,9 +463,14 @@ namespace YARG.Audio.BASS
             try
             {
                 int callbackFrames = length / BYTES_PER_FRAME;
-                _renderAheadStream?.OnOutputRequested(callbackFrames);
+                RecordCallbackEntry(start, callbackFrames);
+                _renderAheadStream?.OnOutputRequested(callbackFrames, start);
 
                 int bytesRead = Bass.ChannelGetData(_outputMixerHandle, buffer, length);
+                if (bytesRead != length)
+                {
+                    Interlocked.Increment(ref _outputUnderfills);
+                }
                 return bytesRead >= 0 ? bytesRead : 0;
             }
             finally
@@ -437,11 +478,46 @@ namespace YARG.Audio.BASS
                 UpdateMaximum(ref _maximumCallbackTicks, Stopwatch.GetTimestamp() - start);
             }
         }
+
+        private void RecordCallbackEntry(long timestamp, int callbackFrames)
+        {
+            int previousFrames = Interlocked.Exchange(ref _lastCallbackFrames, callbackFrames);
+            long previousTimestamp = Interlocked.Exchange(ref _lastCallbackTimestamp, timestamp);
+            Volatile.Write(ref _callbackFrames, callbackFrames);
+            if (previousTimestamp == 0 || previousFrames <= 0 || _sampleRate <= 0)
+            {
+                return;
+            }
+
+            long gapTicks = timestamp - previousTimestamp;
+            UpdateMaximum(ref _maximumCallbackGapTicks, gapTicks);
+
+            long expectedTicks = previousFrames * (long) Stopwatch.Frequency / _sampleRate;
+            long latenessTicks = gapTicks - expectedTicks;
+            if (latenessTicks <= 0)
+            {
+                return;
+            }
+
+            UpdateMaximum(ref _maximumCallbackLatenessTicks, latenessTicks);
+
+            // Ignore normal timer/driver jitter. At least 25% of one buffer period or 0.1ms late
+            // is suspicious at low buffer sizes, but remains diagnostic rather than proof of xrun.
+            long toleranceTicks = Math.Max(expectedTicks / 4, Stopwatch.Frequency / 10000);
+            if (latenessTicks > toleranceTicks)
+            {
+                Interlocked.Increment(ref _lateCallbacks);
+            }
+        }
 #endif
 
         public void ResetMetrics()
         {
             Interlocked.Exchange(ref _maximumCallbackTicks, 0);
+            Interlocked.Exchange(ref _maximumCallbackGapTicks, 0);
+            Interlocked.Exchange(ref _maximumCallbackLatenessTicks, 0);
+            Interlocked.Exchange(ref _lateCallbacks, 0);
+            Interlocked.Exchange(ref _outputUnderfills, 0);
             _renderAheadStream?.ResetMetrics();
         }
 
@@ -465,6 +541,9 @@ namespace YARG.Audio.BASS
         private double FramesToMilliseconds(long frames) => _sampleRate > 0
             ? Math.Max(0, frames) * 1000.0 / _sampleRate
             : 0;
+
+        private static double TicksToMilliseconds(long ticks) =>
+            ticks * 1000.0 / Stopwatch.Frequency;
 
         private static void UpdateMaximum(ref long target, long value)
         {
