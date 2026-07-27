@@ -13,7 +13,7 @@ namespace YARG.Audio.BASS
     /// </summary>
     internal sealed class BassRenderAheadStream : IDisposable
     {
-        private const int RENDER_AHEAD_MILLISECONDS = 15;
+        private const int RENDER_AHEAD_MILLISECONDS = 25;
         private const int RENDER_CHUNK_FRAMES = 128;
         private const int START_TIMEOUT_MILLISECONDS = 2000;
         private const double CLOCK_SMOOTHING_SECONDS = 1.0;

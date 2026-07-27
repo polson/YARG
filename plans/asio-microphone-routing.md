@@ -31,24 +31,20 @@ ASIO input channel ------------+--> vocal analysis
 - ASIO driver/control-panel rate wins. Initialize the driver, read its active rate, then create the
   master mixer and input pool at that rate. Never silently force a different rate.
 - An invalid, unavailable, or unsupported active driver rate fails startup with a clear error.
-- All root, pump, analysis, and monitor splitters are created before `BassAsio.Start`. Profile
-  changes acquire/reset pre-created branches; they do not mutate the native splitter graph.
-- Analysis workers exist only while a channel lease is active.
-- Every ASIO backend attempt receives a process-unique, monotonically increasing `long` generation
-  from `BassAudioOutput`. A newly constructed backend never starts its own generation counter.
-- WDM monitor sources are persistent across output backends. ASIO monitor sources are tagged with
-  their backend generation and are synchronously removed from the route registry before that
-  generation can free its splitter.
-- ASIO input push queues are preallocated and explicitly bounded. If the pump stalls, the callback
-  drops input, records a discontinuity, and keeps memory bounded rather than growing the queue.
+- Input roots and splitter branches are created before `BassAsio.Start`. Profile changes only
+  acquire a lightweight channel lease; they never restart ASIO.
+- Phase 3 uses BASSASIO's native `ChannelEnableBass` input bridge. Custom callback timing and the
+  processing worker belong to Phase 4, where they are needed.
+- ASIO monitoring is backend-local: the lease attaches its monitor splitter directly to the active
+  ASIO output mixer. It never enters the persistent WDM route registry.
 - ASIO monitor audio uses the same existing gain/reverb behavior as BASS/WDM microphones. A new FX
   chain remains out of scope.
 - Leaving the matching ASIO output deactivates the live ASIO microphone but preserves its selected
   identity. Returning to that driver automatically reactivates it, including during gameplay.
 - Multiple saved profiles may reference the same ASIO channel. Only one active lease is permitted;
   later simultaneous assignments remain selected but unresolved with a clear UI/log reason.
-- Driver identity uses a normalized stable driver identifier with name fallback. Enumeration index
-  is never persisted.
+- Runtime descriptors use the ASIO driver identifier with name fallback. Phase 5 defines
+  normalization and persistence. Enumeration index is never persisted.
 
 ## Proven mechanics
 
@@ -88,38 +84,27 @@ This replaces earlier assumption that every detached splitter needs continuous d
 | ASIO master mixer | `BassAsioOutputBackend` | ASIO backend generation |
 | ASIO input callback/root/pump | `BassAsioOutputBackend` | ASIO backend generation |
 | ASIO analysis/monitor splitters | `BassAsioOutputBackend` | ASIO backend generation |
-| ASIO callback metadata ring | Backend input slot | ASIO backend generation |
-| ASIO analysis worker/read gate | ASIO input lease | Active lease |
+| ASIO analysis read gate | ASIO input lease | Active lease |
 | BASS/WDM recording stream | `BassMicDevice` | Active WDM mic |
 | WDM monitor decode source | `BassMicDevice` | Active WDM mic |
-| ASIO monitor source wrapper | ASIO input lease | Active lease/backend generation |
-| Backend attachment | `BassAudioOutput` route token | Registered source lifetime |
+| ASIO monitor splitter attachment | ASIO input lease/backend | Active lease |
+| WDM backend attachment | `BassAudioOutput` route token | Registered source lifetime |
 | Vocal processor | Mic device | Active mic |
 | Persisted mic selection | `ProfileBindings` | Until user explicitly removes selection |
 
-Raw native ASIO root and branch handles must not escape the backend/input-slot layer. Client code
-receives a generation-bound lease and an opaque monitor source wrapper. Backend can synchronously
-invalidate and reclaim every lease during shutdown.
+Raw native ASIO root and branch handles do not escape the backend/input-slot layer. Client code
+receives a lease with guarded read and monitor operations. Backend invalidates all leases during
+shutdown.
 
 ## Thread and mutation model
 
-- Main thread owns backend state, routes, leases, topology notifications, and active mic replacement.
-- ASIO callback captures timing metadata, updates lock-free/atomic telemetry, and pushes PCM only.
-  It does not allocate, log, wait, run DSP, or mutate lifecycle state.
-- Each metadata ring is single-producer/single-consumer. Callback publishes a slot with a final
-  sequence stamp; worker never consumes PCM without matching committed metadata.
-- One lease-owned analysis worker reads its pre-created analysis branch through a guarded read API
-  and sends managed blocks to a capture sink. Phase 3 uses a test sink; Phase 4 supplies the mic
-  processor and clock mapping.
-- Lease shutdown rejects new reads, cancels and joins its worker, then waits for any in-flight native
-  read before backend frees or resets branch streams.
-- `BassAudioOutput` detaches all routes and invalidates routes owned by the outgoing backend
-  generation before asking that backend to free streams. Persistent WDM routes remain registered.
-- Native BASS/BASSASIO calls never occur while managed registry locks are held.
-- Backend shutdown first rejects mutations and stops callbacks, then invalidates leases and waits for
-  workers before freeing any stream they can reference.
-- If `BassAsio.Stop` fails and the driver is still started, shutdown enters a stop-failed/quarantined
-  state. Streams, delegates, and backend references remain rooted; output switching aborts safely.
+- Main thread owns backend lifecycle, lease acquisition, and monitor mutation.
+- BASSASIO's native input bridge pushes each channel into its BASS root; Phase 3 adds no managed
+  input callback or worker.
+- Per-input lock serializes lease reads with invalidation and stream teardown.
+- Backend shutdown stops ASIO, invalidates leases, frees BASSASIO bindings, then frees input streams.
+- Persistent WDM monitor routes keep existing `BassAudioOutput` behavior. ASIO monitor streams never
+  leave their owning backend.
 
 ## Phase 1 - Backend-neutral monitor routing (complete)
 
@@ -143,7 +128,7 @@ Implement:
 4. `BassDeviceOutputBackend` uses dedicated playable, non-stop monitor mixer.
 5. `BassAsioOutputBackend` adds monitor source to existing decoding master mixer.
 6. `BassAudioOutput` retains persistent registered routes while backend is suspended and reattaches
-   them after resume. Phase 3 adds generation-bound routes, which are invalidated instead.
+   them after resume. Phase 3 keeps ASIO input monitoring local to the ASIO backend instead.
 7. Before attaching on another BASS device, move decoding source with `Bass.ChannelSetDevice` while old device remains alive.
 8. Failed output switch moves routes back during rollback.
 9. Route token detaches synchronously; caller frees source only after token disposal.
@@ -171,8 +156,8 @@ Acceptance:
 - Volume persists across backend switches.
 - Duplicate disposal and partial attach failure are safe.
 
-Phase 3 extends this contract with source lifetime. Existing WDM push sources remain persistent and
-keep all behavior above. Backend-owned ASIO split sources never migrate or survive their generation.
+ASIO inputs do not extend this registry contract. Their monitor splitters attach directly to the
+owning ASIO backend and disappear with it; existing WDM push sources keep all behavior above.
 
 ## Phase 2 - Route existing BASS/WDM microphones (complete)
 
@@ -207,242 +192,91 @@ Acceptance:
 
 This phase resolves USB/WDM monitoring through ASIO before adding ASIO inputs.
 
-## Phase 3 - Runtime ASIO input pool and opaque leases
+## Phase 3 - Runtime ASIO input pool and lightweight leases
 
-Suggested commits:
-
-- `refactor(audio): initialize ASIO graph at driver rate`
-- `feat(audio): add ASIO capture timeline`
-- `feat(audio): add ASIO input leases`
+Suggested commit: `feat(audio): add ASIO input routing`
 
 Primary files:
 
 - `Assets/Script/Audio/Bass/BassAsioOutputBackend.cs`
+- `Assets/Script/Audio/Bass/BassAsioInputLease.cs`
 - `Assets/Script/Audio/Bass/BassAudioOutput.cs`
 - `Assets/Script/Audio/Bass/BassAudioManager.cs`
-- `Assets/Script/Audio/Bass/BassMonitorRoute.cs`
-- `Assets/Script/Audio/Bass/IBassOutputBackend.cs`
-- New ASIO input pool/lease types under `Assets/Script/Audio/Bass/`
-- New managed timeline, lifecycle, and failure-injection tests
 
-Implement as three independently buildable subphases. Do not land the native graph, lock-free
-timeline, lease registry, and shutdown refactor as one large change.
+Keep this phase narrow: open inputs, route them through BASS, and provide exclusive access. Do not
+build timing, processing, persistence, or failure-injection frameworks before those features exist.
 
-### Phase 3A - Rate-first transactional graph
+### Rate-first startup
 
-Current production order must be inverted: `BassAsioOutputBackend` currently creates mixers from
-`Bass.Info.SampleRate` before `BassAsio.Init`. ASIO initialization and active-rate validation must
-happen first. The no-sound BASS device may remain initialized at 44.1 kHz; every stream in the ASIO
-pipeline receives the active ASIO rate explicitly.
+1. Initialize selected ASIO driver before creating ASIO mixers.
+2. Read and validate active control-panel rate. Never assign `BassAsio.Rate`.
+3. Create song mixer, output mixer, and render-ahead stream explicitly at active rate.
+4. Configure inputs and output, then call `BassAsio.Start` once.
 
-Initialization order:
+### Input graph
 
-1. Allocate a process-unique backend generation in `BassAudioOutput` and construct the backend with
-   it. Failed initialization attempts still consume a generation; generations are never reused.
-2. Initialize the selected ASIO driver, select its thread-local device context, and read driver
-   identity, `AsioInfo`, and active control-panel rate.
-3. Validate that rate as finite, positive, supported by BASS stream creation, and representable by
-   the integer stream-rate APIs. Fail clearly; never assign `BassAsio.Rate` to force another rate.
-4. Capture the effective `BassMix.SplitBufferLength` before creating the first splitter. Do not
-   change it mid-generation; remember that changing it is process-global and does not resize
-   existing splitter buffers.
-5. Create the song mixer, output/master mixer, render-ahead push stream, and all associated stream
-   state explicitly at the active driver rate.
-6. Query input count and immutable channel metadata. Keep physical channel indices even when the
-   usable pool is sparse.
-7. For each candidate channel, create a mono float decode push root. Preallocate its queue before
-   callbacks can run.
-8. Create its pump, analysis, and monitor splitters. Add the non-slave pump permanently to the
-   output/master mixer with volume 0.
-9. Allocate the fixed metadata ring and callback state, then register the custom input callback and
-   set float format plus device-rate/no-resampling configuration.
-10. Configure output channels and output callback at the same active rate.
-11. Call `BassAsio.Start` once. After success, read actual input/output latency, register
-   notifications, increment start telemetry, and publish the backend as `Running`.
-
-Each input slot is a local transaction. Driver/channel-specific metadata, enable, format, or rate
-failure may exclude that channel after resetting every setting that was applied and freeing its
-slot resources. Failure to reset a callback binding cannot be treated as optional. BASS allocation,
-splitter creation, pump attachment, metadata allocation, or other shared/resource failure aborts the
-whole initialization rather than silently degrading after an out-of-memory or corrupt-state error.
-Zero usable inputs is valid; ASIO output still starts.
-
-Any failure after driver initialization unwinds a resource ledger in reverse order. If callbacks
-were ever started, rollback first stops ASIO and verifies `BassAsio.IsStarted == false`. Before
-freeing a root, rollback resets every ASIO channel that can still reference it. A start failure is a
-full initialization failure; runtime profile operations never retry or restart ASIO.
-
-Input push queues must remain bounded even if the output pump stalls. Reserve queue storage with
-`Bass.StreamPutData(root, IntPtr.Zero, reserveBytes)` before enabling callbacks. Callback checks
-queued frames before each push. Exceeding the configured cap drops that block, marks a pending
-discontinuity for the next accepted block, and updates atomic telemetry without logging or waiting.
-
-### Phase 3B - Capture timeline and discontinuity protocol
-
-Each usable channel owns two monotonic frame domains:
-
-- Capture frame: advances for every well-formed hardware callback block, including dropped blocks.
-- Source frame: advances only for PCM successfully accepted by the BASS push root. Splitter BASS
-  byte positions map to this domain.
-
-One committed metadata record describes accepted PCM:
+For each physical input channel, create this fixed graph before ASIO starts:
 
 ```text
-Sequence
-Generation
-SourceStartFrame
-CaptureStartFrame
-FrameCount
-CallbackDeliveryQpc
-DiscontinuityBefore
-PublishedSequence
+BassAsio.ChannelEnableBass
+    -> float mono push root
+         +-- non-slave pump splitter -> output mixer at volume 0
+         +-- slave analysis splitter -> lease.Read
+         +-- slave monitor splitter  -> output mixer while monitoring
 ```
 
-Producer protocol in the ASIO callback:
+`ChannelEnableBass` handles callback-to-push-stream transport. Pump keeps root advancing at output
+cadence. Monitoring attaches directly to owning backend's output mixer; no generic route token,
+generation ID, or cross-backend migration is needed.
 
-1. Capture QPC immediately on entry and validate callback direction, channel, and whole-float frame
-   length.
-2. Advance capture-frame accounting for a valid hardware block.
-3. Check the root queue cap. A cap hit or failed `StreamPutData` advances no source frames and sets a
-   pending-discontinuity flag.
-4. For accepted PCM, populate the next ring slot, including any pending discontinuity, then publish
-   it with a final `Volatile.Write`/interlocked sequence stamp. The callback never waits for the
-   consumer and may overwrite old records while recording overwrite telemetry.
-5. Only after successful push and slot publication advance source-frame and producer-sequence state.
+Publish immutable runtime descriptors containing driver identifier/name, physical channel index,
+channel name/group, active sample rate, and input latency.
 
-PCM can become visible to BASS just before its metadata commit. Consumer therefore looks up and
-validates committed metadata before reading the analysis splitter. A not-yet-committed next record
-is a transient producer race and is retried; it is not immediately classified as data loss. Record
-sequence mismatch, generation mismatch, overwritten metadata, impossible source position, queue
-drop, or splitter overflow is an explicit discontinuity.
+### Lease
 
-Lease acquisition aligns analysis to live data as follows:
-
-1. `BassMix.SplitStreamReset(analysis, 0)`.
-2. Read the analysis splitter's BASS byte position and convert it to the exact source-frame cursor.
-   Do not initialize from the latest callback total, which can include unconsumed root data.
-3. Wait for a committed metadata range containing that cursor or beginning at its next source
-   frame. Never synthesize a Unity-update timestamp while waiting.
-
-Worker requests at most the remaining frames in one committed callback range, so a delivered block
-never silently crosses metadata anchors. Partial native reads advance both cursor and adjusted
-metadata by the exact returned frame count. Splitter position is checked against the expected source
-cursor around reads. On discontinuity, worker notifies its sink, resets the analysis branch to live,
-re-establishes cursor mapping, and increments reason-specific telemetry. Phase 4 makes the mic
-processor reset in response to this notification.
-
-Ring capacity is calculated in records from maximum supported splitter lag, active sample rate, and
-minimum supported ASIO callback frame count, with explicit safety margin. Validate total allocation
-across every input channel before callbacks are enabled. Cover 44.1/48/96 kHz, every supported
-buffer size, wraparound, and worst-case splitter lag. Steady-state callback and worker paths use
-preallocated storage.
-
-### Phase 3C - Opaque leases, route lifetime, and failure-aware shutdown
-
-Introduce runtime-only identity primitives here:
-
-- `AsioDriverIdentity`: normalized `AsioDeviceInfo.Driver`, with explicit normalized-name fallback.
-- `AsioInputDescriptor`: driver identity, physical channel index, name, group, active rate, input
-  latency, and backend generation.
-- `AsioInputAcquireResult`: success, no ASIO backend, driver mismatch, unavailable channel, already
-  leased, shutting down, or internal failure.
-
-Phase 5 persists these identities and migrates profiles; it does not redefine runtime identity.
-
-Lease API shape:
+One lightweight lease per channel:
 
 ```text
-GetAsioInputDescriptors()
-TryAcquireAsioInput(driverIdentity, channelIndex, out lease) -> AsioInputAcquireResult
+TryAcquireAsioInput(driverId, channelIndex, out lease)
 lease.Descriptor
-lease.MonitorSource
-lease.Generation
-lease.IsValid
-lease.StartAnalysis(captureSink)
+lease.Read(buffer)
+lease.EnableMonitoring(volume)
+lease.SetMonitoringLevel(volume)
+lease.DisableMonitoring()
 lease.Dispose()
 ```
 
-`MonitorSource` is opaque to mic/profile code and tagged `BackendGeneration(lease.Generation)`.
-Only `BassAudioOutput` and low-level BASS helpers can access its native handle. No analysis handle is
-exposed. `StartAnalysis` starts one lease-owned worker with a preallocated buffer and guarded native
-read entry. Capture sink receives synchronous managed sample blocks plus metadata and discontinuity
-events. A test sink exercises this contract in Phase 3; `BassMicProcessor` implements it in Phase 4.
+Acquisition resets analysis branch to live position. Monitoring resets monitor branch before attach.
+Per-input lock prevents teardown from racing a native read. Duplicate acquisition returns
+`AlreadyInUse`. No worker, callback metadata ring, discontinuity taxonomy, telemetry hierarchy, or
+raw native handle escapes in this phase.
 
-A lease grants exclusive use of pre-created branches and resets them to live before use. Registry
-rejects a second active acquisition of the same channel with a typed reason; persisted selections
-are not deleted. `IsValid` is informational only, not synchronization: every native read must enter
-the lease read gate, recheck generation/state, and leave the gate in `finally`.
+### Teardown
 
-Extend `BassMonitorSource`/route registration with source lifetime:
+1. Stop ASIO callbacks.
+2. Invalidate active leases and detach backend-local monitor splitters.
+3. Free BASSASIO driver/bindings.
+4. Free input splitters and roots, then existing output resources.
 
-```text
-Persistent                         -- WDM push source; migrate across output backends
-BackendGeneration(generation)      -- ASIO split source; never migrate or survive generation
-```
-
-`BassAudioOutput` removes and invalidates generation-bound route tokens after callbacks are
-confirmed stopped but before backend frees monitor splitters. Persistent WDM routes remain in the
-registry and keep existing rollback behavior. A stale ASIO route must never reach
-`AttachMonitorRoutes`, `GetDevice`, `MoveToDevice`, or `ResetToLive` after its generation ends.
-
-Shutdown must be failure-aware rather than relying only on `IDisposable`. Add an internal staged
-shutdown result/API so `BassAudioOutput.Suspend` and `BassAudioManager.ApplyOutputDevice` can abort
-an output switch when the outgoing backend cannot stop safely. `Dispose` uses the same state machine.
-
-Mutation and shutdown state machine:
-
-```text
-Running
-  -> Stopping: reject new leases/routes and detach active routes
-  -> unregister/suppress ASIO notifications
-  -> request BassAsio.Stop and verify BassAsio.IsStarted == false
-       -> if still started: StopFailed/Quarantined
-          retain backend, delegates, streams, leases, and native ownership for retry/process exit
-          abort output switch; initialize no replacement ASIO backend
-  -> callbacks stopped
-  -> invalidate/remove routes tagged with outgoing generation
-  -> invalidate generation and leases
-  -> reject new lease reads, cancel/join analysis workers, wait for in-flight reads
-  -> reset ASIO input/output callback bindings
-  -> free pre-created analysis/monitor branches
-  -> free pump splitters and roots
-  -> stop/free render-ahead stream and free output/song mixers
-  -> free BASSASIO driver
-  -> Stopped
-```
-
-Never free a stream while an ASIO callback, output callback, analysis read, render worker, or route
-can reference it. Backend forcibly invalidates and reclaims leases even if client forgot to dispose,
-but it never claims successful cleanup after a failed stop. Do not clear callback delegates or drop
-the final managed backend reference while native code may still call them.
-
-Phase 3 tests include a minimal injectable native/lifecycle seam for every initialization stage
-introduced here. Keep standalone hardware routing tests separate from deterministic managed tests.
-Failure injection now covers rate validation, input N setup, pump attachment, output binding, before
-start, after successful start, lease acquisition, active read invalidation, route invalidation, stop
-failure, and callback reset failure. Phase 7 adds cross-feature failures rather than deferring these
-ownership tests.
+Existing WDM monitor routes remain unchanged.
 
 Acceptance:
 
-- Runtime backend pre-enables all usable inputs before start.
-- Song/output mixers, render-ahead stream, callback channels, and input streams use the active
-  driver/control-panel rate without assigning a different `BassAsio.Rate`.
-- ASIO output starts and works with zero usable inputs or one excluded input.
-- Pump keeps root queues bounded with zero selected profiles; simulated pump stall cannot grow them
-  beyond configured cap and produces a discontinuity.
-- Lease add/remove only resets pre-created branches and leaves ASIO start count unchanged.
-- Duplicate channel lease returns a typed conflict reason.
-- Stop/start and failed rebuild attempts consume unique generations and invalidate old leases.
-- Generation-bound monitor routes are removed before their source is freed and are never migrated;
-  persistent WDM routes still survive successful switch and rollback.
-- Partial initialization rollback leaves no native handles or callbacks alive.
-- Failed `BassAsio.Stop` leaves all callback-reachable resources alive and blocks replacement backend
-  initialization.
-- Callback/route mutations do not deadlock under stress.
-- Repeated worker acquire/release and backend stop during worker reads are safe.
-- Callback metadata publication races, wrap/overwrite, queue drops, splitter overflow, and cursor
-  mismatch are detected, reported by reason, and recover to live audio.
+- Active ASIO driver rate is used without forcing another rate.
+- All input channels are enabled before single ASIO start.
+- Input roots remain pumped with no active lease.
+- Lease acquire/release does not restart ASIO.
+- Distinct channels can be leased together; duplicate channel cannot.
+- Monitoring toggles by attaching/removing monitor splitter from same output mixer.
+- Backend shutdown invalidates leases before freeing their streams.
+- Existing ASIO output and WDM microphone behavior remain unchanged.
+
+Deferred deliberately:
+
+- Capture QPC/timestamp contract and processing worker -> Phase 4.
+- Persisted driver/channel identity and profile re-resolution -> Phase 5.
+- User-facing ASIO mic device -> Phase 6.
+- Failure injection, stop-failure quarantine, stress telemetry, and rare-driver hardening -> Phase 7.
 
 ## Phase 4 - Shared processing and capture-time contract
 
@@ -451,67 +285,66 @@ Suggested commit: `refactor(audio): share microphone processing and capture cloc
 Primary files:
 
 - New `Assets/Script/Audio/Bass/BassMicProcessor.cs`
-- New ASIO/QPC clock helper under `Assets/Script/Audio/Bass/`
+- Small ASIO capture queue/clock helper under `Assets/Script/Audio/Bass/`
 - `Assets/Script/Audio/Bass/BassMicDevice.cs`
+- `Assets/Script/Audio/Bass/BassAsioOutputBackend.cs`
 - Tests for processor and clock mapping
 
-Extract from `BassMicDevice`:
+Extract existing conversion, EQ, amplitude/hit detection, pitch tracking, frame queueing, reset, and
+disposal behavior from `BassMicDevice` into `BassMicProcessor`.
 
-- Sample conversion and buffering.
-- EQ-fed sample handling.
-- Amplitude and hit detection.
-- Pitch tracking.
-- `MicOutputFrame` queueing.
-- Reset, sample-rate change, queue clear, and disposal state.
-
-Processor contract must receive timing explicitly:
+Processor input is explicit:
 
 ```text
-ProcessSamples(samples, captureBlockMetadata)
+ProcessSamples(samples, captureTime)
 ```
 
-`captureBlockMetadata` includes sample rate, generation, source-frame position, capture-frame
-position, sample count, callback-delivery QPC, and offset within the original callback range.
-Processor must never invent ASIO timestamps from Unity update time.
+### ASIO capture handoff
 
-Clock mapping consumes the callback metadata ring created in Phase 3:
+Replace Phase 3's `ChannelEnableBass` input bridge with one small custom callback per backend:
+
+1. Capture QPC at callback entry.
+2. Push float PCM into existing BASS root for pumping and monitoring.
+3. If channel has active analysis consumer, copy same PCM into fixed preallocated SPSC block queue.
+4. Queue item carries exact PCM block, capture start frame, frame count, callback QPC, and one
+   `DiscontinuityBefore` bit.
+5. Full queue drops analysis block and sets discontinuity bit for next accepted block. Callback does
+   not allocate, log, wait, or run pitch processing.
+
+Samples and timing travel in same queue item. Do not build a second metadata timeline or correlate
+BASS splitter byte positions back to callback records.
+
+One worker per active ASIO lease drains queue and calls `BassMicProcessor`. Lease invalidation stops
+and joins worker before backend frees queue storage. WDM capture keeps existing callback flow but
+uses same processor.
+
+### Clock mapping
 
 1. Anchor QPC seconds to `InputState.currentTime` on main/input thread.
-2. Use capture-frame positions for clock continuity and source-frame positions only to correlate
-   BASS reads. Use QPC to anchor, not to inject callback jitter into every frame.
-3. Compensate ASIO input latency separately from output latency.
-4. Treat callback QPC as buffer-delivery time; derive sample times from callback frame range.
-5. Keep mapping monotonic across long runs and reject stale generation data.
-6. Validate exact offset with physical loopback before final scoring sign-off.
-
-Analysis consumer:
-
-- ASIO callback only timestamps and pushes samples; no pitch/EQ work in callback.
-- Phase 3 lease-owned worker remains the sole analysis reader. Phase 4 supplies
-  `BassMicProcessor` as its capture sink; mic code does not receive a native analysis handle.
-- Discontinuity events reset processor buffering, pitch/amplitude state, and output queues before
-  the first resynchronized block is accepted.
-- Worker wake/cadence keeps lag bounded well below split buffer.
-- Worker shutdown completes before branches are freed.
+2. Treat callback QPC as buffer-delivery time and derive sample time from frame offset.
+3. Compensate ASIO input latency.
+4. Keep emitted times monotonic.
+5. Reset processor and clock state after queue discontinuity.
+6. Validate final sign/offset with physical loopback before scoring sign-off.
 
 Tests:
 
-- Empty/partial buffers.
-- 16-bit WDM and float ASIO equivalence.
-- 44.1/48/96 kHz sample-rate changes.
-- Reset and queue clearing.
-- Pitch/amplitude state reset.
-- Timestamp monotonicity and block boundaries.
-- Input-latency compensation.
-- QPC/InputSystem clock offset and drift.
+- Empty and partial buffers.
+- 16-bit WDM and float ASIO processing equivalence.
+- 44.1/48/96 kHz.
+- Reset, queue clear, pitch, and amplitude state.
+- Queue wrap/full behavior and discontinuity reset.
+- Timestamp monotonicity and callback block offsets.
+- Input-latency compensation and QPC/InputSystem offset/drift.
 - Lease invalidation while worker is active.
-- Callback metadata wrap, loss, discontinuity, and live resynchronization.
 
 Acceptance:
 
 - Existing WDM output remains behaviorally equivalent.
-- Processor has no dependency on arbitrary Unity frame time for supplied samples.
-- ASIO timing contract is complete before scoreable ASIO mic exists.
+- ASIO callback performs bounded copy/push work only.
+- Every processed ASIO sample block carries its own capture timing.
+- No Unity update-time timestamp fallback.
+- Worker stops before callback queue or backend streams are freed.
 
 ## Phase 5 - Stable identity and selected-vs-active profiles
 
@@ -538,11 +371,8 @@ DeviceIdentity/Name: WDM compatibility identity
 DisplayName: UI fallback only
 ```
 
-Backend generation is runtime liveness data and is never persisted.
-
-Reuse Phase 3 `AsioDriverIdentity` normalization: stable ASIO driver field when available, explicit
-normalized-name fallback otherwise. Never encode identity into display name or persist enumeration
-index.
+Normalize Phase 3 runtime `DriverId`: stable ASIO driver field when available, explicit normalized
+name fallback otherwise. Never encode identity into display name or persist enumeration index.
 
 Profile model:
 
@@ -606,25 +436,22 @@ Creation flow:
 
 ```text
 profile resolves selected ASIO identity
-    -> backend grants generation-bound channel lease or typed unresolved reason
-    -> lease resets/grants pre-created analysis and monitor branches
-    -> mic supplies shared processor as capture sink and starts lease-owned worker
-    -> generation-bound monitor route registers with BassAudioOutput
-    -> monitor reset-to-live before mixer attach
+    -> backend grants channel lease or typed unresolved reason
+    -> mic starts Phase 4 capture worker with shared processor
+    -> lease enables backend-local monitoring when requested
     -> no ASIO restart
 ```
 
 Device behavior:
 
-- Feed shared processor from analysis worker using callback sample metadata.
+- Feed shared processor from Phase 4 capture queue using callback timing.
 - Apply the same existing monitor gain/reverb behavior as BASS/WDM mics; do not introduce a new FX
   chain in this phase.
-- Expose raw input level through lease/backend telemetry.
-- Monitoring level controls route without stopping analysis.
-- Route deselection/reset does not disable root or raw level.
-- Dispose route before releasing monitor branch and lease.
-- Backend invalidation removes the generation-bound route before freeing its source, makes device
-  unavailable, and stops worker safely.
+- Expose raw input level through backend level query.
+- Monitoring level controls backend-local monitor splitter without stopping analysis.
+- Monitoring off does not disable root, analysis, or raw level.
+- Dispose lease after stopping worker; lease detaches monitoring.
+- Backend invalidation makes device unavailable and stops worker before freeing capture state.
 - Never call BASSASIO lifecycle APIs.
 
 Acceptance:
@@ -636,7 +463,7 @@ Acceptance:
 - Multiple distinct channels operate independently.
 - Duplicate channel assignment fails clearly.
 - Switching away from ASIO deactivates device but retains selection.
-- Switching back re-creates device with correct generation.
+- Switching back re-creates device against current backend.
 - Timestamp tests pass before merge; no Unity-update-time fallback.
 
 ## Phase 7 - Lifecycle hardening and integration coverage
@@ -659,8 +486,8 @@ Cover:
 - ASIO <-> normal output.
 - ASIO driver switch.
 - Output switch failure and rollback.
-- Persistent WDM route migration versus ASIO generation-route invalidation.
-- Stop-failed/quarantined backend behavior and later cleanup retry.
+- Persistent WDM route migration versus backend-local ASIO monitor cleanup.
+- ASIO stop/free failures and safe cleanup behavior.
 - Buffer-size and sample-rate changes.
 - Scene transitions and microphone restart paths.
 - Profile add/remove during gameplay.
@@ -671,14 +498,14 @@ Cover:
 - Rapid route and volume mutation.
 - Long detach/reattach and long-run drift.
 
-Reuse Phase 3 low-level failure injection in integration scenarios; do not first introduce those
-ownership checks here. Extend it with profile/device orchestration stages:
+Add focused failure seams only where hardware tests show value. Cover profile/device orchestration
+stages such as:
 
 ```text
 after profile resolves identity
 after lease acquisition, before worker start
-after worker start, before monitor registration
-while invalidating an active generation route
+after worker start, before monitoring enable
+while invalidating an active lease
 after outgoing backend stop, before replacement initialization
 after replacement failure, during rollback/re-resolution
 while scene/gameplay context holds an active mic
@@ -698,20 +525,15 @@ Runtime hardware matrix:
 
 Required telemetry/assertions:
 
-- ASIO generation and start count.
-- Root queued milliseconds, queue high-water mark, and dropped-block count.
-- Analysis/monitor splitter lag.
-- Callback gap/error count, metadata overwrite count, and discontinuities by reason.
-- Route mutation errors and persistent/generation-bound route counts.
-- Lease count and invalidation count.
+- ASIO start count.
+- Capture queue depth, dropped-block count, and callback errors.
+- Lease count and monitor attach state.
 - Input sample/QPC drift.
-- Shutdown state and stop-failure/quarantine count.
-- No stale native handles after successful shutdown; injected stop failure intentionally retains all
-  callback-reachable handles until cleanup retry/process exit.
+- No stale native handles after shutdown.
 
 ## Commit discipline
 
-Each phase and Phase 3 subphase must:
+Each phase must:
 
 1. Build independently.
 2. Preserve normal BASS output and existing WDM microphone behavior.
@@ -728,11 +550,8 @@ Do not defer callback safety, ownership rollback, or lease invalidation to final
 DONE  Phase 0: standalone lifecycle/fan-out/timestamp proof
 DONE  Phase 1: monitor route contract
 DONE  Phase 2: existing WDM mic migration
-NEXT  Phase 3: ASIO input pool + opaque leases and callback timeline
-        3A: rate-first transactional graph
-        3B: capture timeline + discontinuity protocol
-        3C: leases + route lifetime + failure-aware shutdown
-      Phase 4: shared processor + capture clock
+DONE  Phase 3: rate-first ASIO input pool + lightweight leases
+NEXT  Phase 4: shared processor + capture clock
       Phase 5: stable identity + selected/active profile state
       Phase 6: ASIO mic device/UI with correct timestamps
       Phase 7: lifecycle matrix + runtime integration tests

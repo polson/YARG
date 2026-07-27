@@ -493,6 +493,16 @@ namespace YARG.Audio.BASS
             return _audioOutput.CreateSongPlayback(tempoStreamHandle);
         }
 
+        internal IReadOnlyList<AsioInputDescriptor> GetAsioInputDescriptors() =>
+            _audioOutput.GetAsioInputDescriptors();
+
+        internal AsioInputAcquireResult TryAcquireAsioInput(string driverId, int channelIndex,
+            out BassAsioInputLease? lease) =>
+            _audioOutput.TryAcquireAsioInput(driverId, channelIndex, out lease);
+
+        internal bool TryGetAsioInputLevel(int channelIndex, out double level) =>
+            _audioOutput.TryGetAsioInputLevel(channelIndex, out level);
+
         protected override MicDevice? GetInputDevice(string name)
         {
             for (int deviceIndex = 0; Bass.RecordGetDeviceInfo(deviceIndex, out var info); deviceIndex++)

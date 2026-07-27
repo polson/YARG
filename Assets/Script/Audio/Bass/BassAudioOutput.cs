@@ -260,6 +260,30 @@ namespace YARG.Audio.BASS
 
         public void ResetMetrics() => _backend?.ResetMetrics();
 
+        internal IReadOnlyList<AsioInputDescriptor> GetAsioInputDescriptors() =>
+            _backend is BassAsioOutputBackend asioBackend
+                ? asioBackend.GetInputDescriptors()
+                : Array.Empty<AsioInputDescriptor>();
+
+        internal AsioInputAcquireResult TryAcquireAsioInput(string driverId, int channelIndex,
+            out BassAsioInputLease? lease)
+        {
+            lease = null;
+            return _backend is BassAsioOutputBackend asioBackend
+                ? asioBackend.TryAcquireInput(driverId, channelIndex, out lease)
+                : AsioInputAcquireResult.NoAsioBackend;
+        }
+
+        internal bool TryGetAsioInputLevel(int channelIndex, out double level)
+        {
+            if (_backend is BassAsioOutputBackend asioBackend)
+            {
+                return asioBackend.TryGetInputLevel(channelIndex, out level);
+            }
+            level = 0;
+            return false;
+        }
+
         public void ResetForDeviceChange()
         {
             Suspend();

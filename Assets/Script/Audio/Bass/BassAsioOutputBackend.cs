@@ -27,15 +27,20 @@ namespace YARG.Audio.BASS
         private readonly HashSet<int> _songs = new();
         private readonly HashSet<int> _samples = new();
         private readonly HashSet<int> _monitors = new();
+        private readonly Dictionary<int, BassAsioInput> _inputs = new();
         private readonly AsioProcedure _outputCallback;
         private readonly AsioNotifyProcedure _notifyCallback;
 
+        private AsioInputDescriptor[] _inputDescriptors = Array.Empty<AsioInputDescriptor>();
         private BassRenderAheadStream? _renderAheadStream;
         private int _songMixerHandle;
         private int _outputMixerHandle;
+        private int _asioDeviceId = -1;
         private int _bassDeviceId;
         private int _sampleRate;
         private int _latencyFrames;
+        private string _asioDriverId = string.Empty;
+        private string _asioDriverName = string.Empty;
         private bool _ownsAsio;
         private bool _asioStarted;
         private bool _notifyRegistered;
@@ -96,15 +101,11 @@ namespace YARG.Audio.BASS
         public bool Initialize(BassOutputDevice device)
         {
             _bassDeviceId = device.DeviceId;
-            if (!CreateOutputMixers())
-            {
-                return false;
-            }
-
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
             try
             {
-                return StartAsio(device.AsioDeviceId);
+                return InitializeAsioDriver(device.AsioDeviceId) &&
+                    CreateOutputMixers(_sampleRate) && StartAsio();
             }
             catch (Exception exception)
             {
@@ -313,11 +314,8 @@ namespace YARG.Audio.BASS
             }
         }
 
-        private bool CreateOutputMixers()
+        private bool CreateOutputMixers(int frequency)
         {
-            var info = Bass.Info;
-            int frequency = info.SampleRate > 0 ? info.SampleRate : 44100;
-
             // Song mixer -> render-ahead push stream -> output mixer -> ASIO.
             // Monitors and samples join output mixer directly, avoiding render-ahead latency.
             _songMixerHandle = BassMix.CreateMixerStream(frequency, OUTPUT_CHANNELS,
@@ -343,7 +341,7 @@ namespace YARG.Audio.BASS
         }
 
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
-        private bool StartAsio(int deviceId)
+        private bool InitializeAsioDriver(int deviceId)
         {
             if (!BassAsio.Init(deviceId, AsioInitFlags.Thread))
             {
@@ -352,22 +350,53 @@ namespace YARG.Audio.BASS
                 return false;
             }
             _ownsAsio = true;
+            _asioDeviceId = deviceId;
+            BassAsio.CurrentDevice = deviceId;
 
-            if (!BassAsio.CheckRate(_sampleRate))
+            var asioInfo = BassAsio.Info;
+            if (asioInfo.Outputs < OUTPUT_CHANNELS)
             {
-                YargLogger.LogFormatError("ASIO device does not support {0}Hz: {1}",
-                    _sampleRate, BassAsio.LastError);
+                YargLogger.LogError("ASIO device does not provide stereo output");
                 return false;
             }
-            BassAsio.Rate = _sampleRate;
+
+            double activeRate = BassAsio.Rate;
+            double roundedRate = Math.Round(activeRate);
+            if (double.IsNaN(activeRate) || double.IsInfinity(activeRate) || activeRate <= 0 ||
+                roundedRate <= 0 || roundedRate > int.MaxValue ||
+                Math.Abs(activeRate - roundedRate) > 0.01)
+            {
+                YargLogger.LogFormatError("ASIO device reported invalid sample rate: {0}",
+                    activeRate);
+                return false;
+            }
+            _sampleRate = (int) roundedRate;
+
+            var deviceInfo = BassAsio.GetDeviceInfo(deviceId);
+            _asioDriverName = string.IsNullOrWhiteSpace(deviceInfo.Name)
+                ? $"ASIO {deviceId}"
+                : deviceInfo.Name;
+            _asioDriverId = string.IsNullOrWhiteSpace(deviceInfo.Driver)
+                ? _asioDriverName
+                : deviceInfo.Driver;
             _callbackFrames = _bufferLength > 0
                 ? _bufferLength
-                : Math.Max(1, BassAsio.Info.PreferredBufferLength);
+                : Math.Max(1, asioInfo.PreferredBufferLength);
+            return true;
+        }
+
+        private bool StartAsio()
+        {
 
             _renderAheadStream = BassRenderAheadStream.Create(
                 _songMixerHandle, _bassDeviceId, _sampleRate, OUTPUT_CHANNELS, _callbackFrames,
                 outputRequestsReported: !USE_NATIVE_ASIO_OUTPUT);
             if (_renderAheadStream == null)
+            {
+                return false;
+            }
+
+            if (!CreateInputPool())
             {
                 return false;
             }
@@ -411,6 +440,18 @@ namespace YARG.Audio.BASS
             }
             _asioStarted = true;
 
+            int inputLatencyFrames = Math.Max(0, BassAsio.GetLatency(true));
+            var descriptors = new AsioInputDescriptor[_inputs.Count];
+            int descriptorIndex = 0;
+            foreach (var input in _inputs.Values)
+            {
+                input.SetInputLatency(inputLatencyFrames);
+                descriptors[descriptorIndex++] = input.Descriptor;
+            }
+            Array.Sort(descriptors, (left, right) =>
+                left.ChannelIndex.CompareTo(right.ChannelIndex));
+            _inputDescriptors = descriptors;
+
             if (BassAsio.SetNotify(_notifyCallback, IntPtr.Zero))
             {
                 _notifyRegistered = true;
@@ -428,6 +469,39 @@ namespace YARG.Audio.BASS
             {
                 YargLogger.LogFormatError("Failed to set ASIO mixer latency: {0}", Bass.LastError);
                 return false;
+            }
+            return true;
+        }
+
+        private bool CreateInputPool()
+        {
+            int inputCount = Math.Max(0, BassAsio.Info.Inputs);
+            for (int channel = 0; channel < inputCount; channel++)
+            {
+                var channelInfo = BassAsio.ChannelGetInfo(true, channel);
+                string name = string.IsNullOrWhiteSpace(channelInfo.Name)
+                    ? $"Input {channel}"
+                    : channelInfo.Name;
+                BassAsioInput? input = BassAsioInput.Create(_asioDriverId, _asioDriverName,
+                    channel, name, channelInfo.Group, _sampleRate, _outputMixerHandle);
+                if (input == null)
+                {
+                    YargLogger.LogFormatError("Failed to create ASIO input {0}: {1}",
+                        channel, Bass.LastError);
+                    return false;
+                }
+
+                // Add before binding so failed initialization keeps callback-reachable streams
+                // alive until BassAsio.Free runs during cleanup.
+                _inputs.Add(channel, input);
+                if (!BassAsio.ChannelEnableBass(true, channel, input.RootHandle, Join: false) ||
+                    !BassAsio.ChannelSetFormat(true, channel, AsioSampleFormat.Float) ||
+                    !BassAsio.ChannelSetRate(true, channel, _sampleRate))
+                {
+                    YargLogger.LogFormatError("Failed to configure ASIO input {0}: {1}",
+                        channel, BassAsio.LastError);
+                    return false;
+                }
             }
             return true;
         }
@@ -521,6 +595,41 @@ namespace YARG.Audio.BASS
             _renderAheadStream?.ResetMetrics();
         }
 
+        internal IReadOnlyList<AsioInputDescriptor> GetInputDescriptors() =>
+            (AsioInputDescriptor[]) _inputDescriptors.Clone();
+
+        internal AsioInputAcquireResult TryAcquireInput(string driverId, int channelIndex,
+            out BassAsioInputLease? lease)
+        {
+            lease = null;
+            if (_disposed || !_asioStarted ||
+                !_inputs.TryGetValue(channelIndex, out var input))
+            {
+                return AsioInputAcquireResult.UnavailableChannel;
+            }
+            if (!string.Equals(driverId, _asioDriverId, StringComparison.OrdinalIgnoreCase))
+            {
+                return AsioInputAcquireResult.DriverMismatch;
+            }
+            return input.TryAcquire(out lease);
+        }
+
+        internal bool TryGetInputLevel(int channelIndex, out double level)
+        {
+            level = 0;
+            if (_disposed || !_asioStarted || !_inputs.ContainsKey(channelIndex))
+            {
+                return false;
+            }
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            BassAsio.CurrentDevice = _asioDeviceId;
+            level = BassAsio.ChannelGetLevel(true, channelIndex);
+            return level >= 0;
+#else
+            return false;
+#endif
+        }
+
         private double GetCommandDelay()
         {
             if (_sampleRate <= 0)
@@ -580,6 +689,11 @@ namespace YARG.Audio.BASS
             }
 #endif
 
+            foreach (var input in _inputs.Values)
+            {
+                input.Invalidate();
+            }
+
             _renderAheadStream?.Dispose();
             _renderAheadStream = null;
 
@@ -590,6 +704,13 @@ namespace YARG.Audio.BASS
                 _ownsAsio = false;
             }
 #endif
+
+            foreach (var input in _inputs.Values)
+            {
+                input.FreeNativeStreams();
+            }
+            _inputs.Clear();
+            _inputDescriptors = Array.Empty<AsioInputDescriptor>();
 
             _songs.Clear();
             _samples.Clear();
