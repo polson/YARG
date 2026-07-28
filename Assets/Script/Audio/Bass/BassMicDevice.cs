@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Concurrent;
-using System.Runtime.InteropServices;
 using ManagedBass;
 using ManagedBass.Fx;
 using UnityEngine;
@@ -44,59 +43,41 @@ namespace YARG.Audio.BASS
                 return null;
             }
 
-            // Apply gain to the playback
-            int applyGain = Bass.ChannelSetDSP(monitorPlaybackHandle, ApplyGain);
-            if (applyGain == 0)
-            {
-                YargLogger.LogFormatError("Failed to add gain to monitor stream: {0}!", Bass.LastError);
-                reverb.Dispose();
-                Bass.StreamFree(monitorPlaybackHandle);
-                return null;
-            }
-
             var source = BassMonitorSource.CreatePush(monitorPlaybackHandle, reverb.RequestReset);
             if (source == null)
             {
-                Bass.ChannelRemoveDSP(monitorPlaybackHandle, applyGain);
                 reverb.Dispose();
                 Bass.StreamFree(monitorPlaybackHandle);
                 return null;
             }
 
-            var route = audioOutput.RegisterMonitor(source, 1);
+            // Mixer source volume provides native gain without a managed real-time DSP callback.
+            var route = audioOutput.RegisterMonitor(source, 1.3);
             if (route == null)
             {
                 YargLogger.LogError("Failed to register monitor stream with active audio output!");
-                Bass.ChannelRemoveDSP(monitorPlaybackHandle, applyGain);
                 reverb.Dispose();
                 Bass.StreamFree(monitorPlaybackHandle);
                 return null;
             }
 
-            return new MonitorPlaybackHandle(monitorPlaybackHandle, source, route, reverb, applyGain);
+            return new MonitorPlaybackHandle(monitorPlaybackHandle, source, route, reverb);
         }
 
         public readonly int Handle;
         private readonly BassMonitorSource _source;
         private readonly BassMonitorRoute _route;
         private readonly BassFreeverbDsp _reverb;
-        private readonly int _applyGain;
 
         private bool _disposed;
 
         private MonitorPlaybackHandle(int handle, BassMonitorSource source, BassMonitorRoute route,
-            BassFreeverbDsp reverb, int applyGain)
+            BassFreeverbDsp reverb)
         {
             Handle = handle;
             _source = source;
             _route = route;
             _reverb = reverb;
-            _applyGain = applyGain;
-        }
-
-        private static void ApplyGain(int handle, int channel, IntPtr buffer, int length, IntPtr user)
-        {
-            BassHelpers.ApplyGain(1.3f, buffer, length);
         }
 
         private void Dispose(bool disposing)
@@ -105,7 +86,6 @@ namespace YARG.Audio.BASS
             {
                 _route.Dispose();
                 _reverb.Dispose();
-                Bass.ChannelRemoveDSP(Handle, _applyGain);
                 Bass.StreamFree(Handle);
                 _disposed = true;
             }

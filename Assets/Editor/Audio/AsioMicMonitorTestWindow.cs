@@ -201,7 +201,7 @@ namespace YARG.Editor
                 _enableDsps = EditorGUILayout.Toggle("Enable native DSPs", _enableDsps);
                 using (new EditorGUI.DisabledScope(!_enableDsps))
                 {
-                    _enableFreeverb = EditorGUILayout.Toggle("Enable managed Freeverb",
+                    _enableFreeverb = EditorGUILayout.Toggle("Enable Freeverb",
                         _enableFreeverb);
                 }
             }
@@ -264,7 +264,7 @@ namespace YARG.Editor
 
             EditorGUILayout.HelpBox(
                 "Native FX chain: 110 Hz high-pass, 300 Hz mud cut, 3.2 kHz presence boost, " +
-                "4:1 compressor. Managed Freeverb can be enabled separately for GC testing.",
+                $"4:1 compressor. Freeverb backend: {BassFreeverbDsp.BackendName}.",
                 MessageType.None);
 
             DrawInputLevelMeter();
