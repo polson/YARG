@@ -166,8 +166,15 @@ namespace YARG.Audio.BASS
             if (Bass.CurrentDevice != -1)
             {
                 YargLogger.LogInfo("BASS already initialized, cleaning up first");
-                Bass.PluginFree(0);
-                Bass.Free();
+                try
+                {
+                    Bass.Free();
+                    Bass.PluginFree(0);
+                }
+                catch (Exception ex)
+                {
+                    YargLogger.LogWarning($"Exception encountered during BASS pre-initialization cleanup: {ex.Message}");
+                }
             }
 #endif
 
@@ -996,8 +1003,8 @@ namespace YARG.Audio.BASS
         {
             _audioOutput.Dispose();
             YargLogger.LogInfo("Unloading BASS plugins");
-            Bass.PluginFree(0);
             Bass.Free();
+            Bass.PluginFree(0);
         }
 
         private static string GetBassDirectory()
