@@ -47,43 +47,32 @@ namespace YARG.Audio.BASS
     internal sealed class BassAsioInput
     {
         private readonly object _lock = new();
-        private readonly int _outputMixerHandle;
 
         private BassAsioInputLease? _lease;
         private bool _valid = true;
-        private bool _monitorAttached;
+        private bool _monitorEnabled;
+        private bool _attached;
 
         private int _rootHandle;
-        private int _pumpHandle;
-        private int _analysisHandle;
-        private int _monitorHandle;
 
         public int ChannelIndex { get; }
         public AsioInputDescriptor Descriptor { get; private set; }
         internal int RootHandle => _rootHandle;
+        internal bool IsAttached => _attached;
 
         private BassAsioInput(string driverId, string driverName, int channelIndex,
-            string name, int group, int sampleRate, int outputMixerHandle,
-            int rootHandle, int pumpHandle, int analysisHandle, int monitorHandle)
+            string name, int group, int sampleRate, int rootHandle)
         {
             ChannelIndex = channelIndex;
-            _outputMixerHandle = outputMixerHandle;
             _rootHandle = rootHandle;
-            _pumpHandle = pumpHandle;
-            _analysisHandle = analysisHandle;
-            _monitorHandle = monitorHandle;
             Descriptor = new AsioInputDescriptor(driverId, driverName, channelIndex,
                 name, group, sampleRate, 0);
         }
 
         public static BassAsioInput? Create(string driverId, string driverName,
-            int channelIndex, string name, int group, int sampleRate, int outputMixerHandle)
+            int channelIndex, string name, int group, int sampleRate)
         {
             int rootHandle = 0;
-            int pumpHandle = 0;
-            int analysisHandle = 0;
-            int monitorHandle = 0;
-            bool pumpAttached = false;
             try
             {
                 rootHandle = Bass.CreateStream(sampleRate, 1,
@@ -93,50 +82,42 @@ namespace YARG.Audio.BASS
                     return null;
                 }
 
-                var splitFlags = BassFlags.Decode | BassFlags.SplitPosition;
-                pumpHandle = BassMix.CreateSplitStream(rootHandle, splitFlags, null);
-                analysisHandle = BassMix.CreateSplitStream(rootHandle,
-                    splitFlags | BassFlags.SplitSlave, null);
-                monitorHandle = BassMix.CreateSplitStream(rootHandle,
-                    splitFlags | BassFlags.SplitSlave, null);
-                if (pumpHandle == 0 || analysisHandle == 0 || monitorHandle == 0 ||
-                    !Bass.ChannelSetAttribute(pumpHandle, ChannelAttribute.Volume, 0) ||
-                    !BassMix.MixerAddChannel(outputMixerHandle, pumpHandle,
-                        BassFlags.MixerChanDownMix | BassFlags.MixerChanNoRampin))
+                if (!Bass.ChannelSetAttribute(rootHandle, ChannelAttribute.Volume, 0))
                 {
                     return null;
                 }
-                pumpAttached = true;
 
                 var input = new BassAsioInput(driverId, driverName, channelIndex, name, group,
-                    sampleRate, outputMixerHandle, rootHandle, pumpHandle,
-                    analysisHandle, monitorHandle);
-                rootHandle = pumpHandle = analysisHandle = monitorHandle = 0;
+                    sampleRate, rootHandle);
+                rootHandle = 0;
                 return input;
             }
             finally
             {
-                if (monitorHandle != 0)
-                {
-                    Bass.StreamFree(monitorHandle);
-                }
-                if (analysisHandle != 0)
-                {
-                    Bass.StreamFree(analysisHandle);
-                }
-                if (pumpHandle != 0)
-                {
-                    if (pumpAttached)
-                    {
-                        BassMix.MixerRemoveChannel(pumpHandle);
-                    }
-                    Bass.StreamFree(pumpHandle);
-                }
                 if (rootHandle != 0)
                 {
                     Bass.StreamFree(rootHandle);
                 }
             }
+        }
+
+        internal bool AttachToOutputMixer(int outputMixerHandle)
+        {
+            if (_attached)
+            {
+                return true;
+            }
+
+            // Only acquired microphones enter the realtime graph. Mixer buffering provides a
+            // non-consuming analysis tap without enabling every physical ASIO input.
+            var flags = BassFlags.MixerChanBuffer | BassFlags.MixerChanDownMix |
+                BassFlags.MixerChanNoRampin;
+            if (!BassMix.MixerAddChannel(outputMixerHandle, _rootHandle, flags))
+            {
+                return false;
+            }
+            _attached = true;
+            return true;
         }
 
         public void SetInputLatency(int frames)
@@ -159,12 +140,6 @@ namespace YARG.Audio.BASS
                 {
                     return AsioInputAcquireResult.AlreadyInUse;
                 }
-                if (!BassMix.SplitStreamReset(_analysisHandle, 0))
-                {
-                    YargLogger.LogFormatError("Failed to reset ASIO input {0}: {1}",
-                        ChannelIndex, Bass.LastError);
-                    return AsioInputAcquireResult.UnavailableChannel;
-                }
 
                 _lease = lease = new BassAsioInputLease(this, Descriptor);
                 return AsioInputAcquireResult.Success;
@@ -179,7 +154,7 @@ namespace YARG.Audio.BASS
                 {
                     return -1;
                 }
-                return Bass.ChannelGetData(_analysisHandle, buffer,
+                return BassMix.ChannelGetData(_rootHandle, buffer,
                     checked(buffer.Length * sizeof(float)));
             }
         }
@@ -200,21 +175,13 @@ namespace YARG.Audio.BASS
                 {
                     return false;
                 }
-                if (_monitorAttached)
-                {
-                    return Bass.ChannelSetAttribute(
-                        _monitorHandle, ChannelAttribute.Volume, volume);
-                }
-                if (!BassMix.SplitStreamReset(_monitorHandle, 0) ||
-                    !Bass.ChannelSetAttribute(_monitorHandle, ChannelAttribute.Volume, volume) ||
-                    !BassMix.MixerAddChannel(_outputMixerHandle, _monitorHandle,
-                        BassFlags.MixerChanDownMix | BassFlags.MixerChanNoRampin))
+                if (!Bass.ChannelSetAttribute(_rootHandle, ChannelAttribute.Volume, volume))
                 {
                     YargLogger.LogFormatError("Failed to monitor ASIO input {0}: {1}",
                         ChannelIndex, Bass.LastError);
                     return false;
                 }
-                _monitorAttached = true;
+                _monitorEnabled = true;
                 return true;
             }
         }
@@ -223,9 +190,9 @@ namespace YARG.Audio.BASS
         {
             lock (_lock)
             {
-                if (_valid && _monitorAttached && ReferenceEquals(_lease, lease))
+                if (_valid && _monitorEnabled && ReferenceEquals(_lease, lease))
                 {
-                    Bass.ChannelSetAttribute(_monitorHandle, ChannelAttribute.Volume, volume);
+                    Bass.ChannelSetAttribute(_rootHandle, ChannelAttribute.Volume, volume);
                 }
             }
         }
@@ -236,7 +203,7 @@ namespace YARG.Audio.BASS
             {
                 if (ReferenceEquals(_lease, lease))
                 {
-                    DetachMonitor();
+                    DisableMonitor();
                 }
             }
         }
@@ -247,7 +214,7 @@ namespace YARG.Audio.BASS
             {
                 if (ReferenceEquals(_lease, lease))
                 {
-                    DetachMonitor();
+                    DisableMonitor();
                     _lease = null;
                 }
             }
@@ -263,7 +230,7 @@ namespace YARG.Audio.BASS
                     return;
                 }
                 _valid = false;
-                DetachMonitor();
+                DisableMonitor();
                 lease = _lease;
                 _lease = null;
             }
@@ -272,35 +239,24 @@ namespace YARG.Audio.BASS
 
         public void FreeNativeStreams()
         {
-            if (_monitorHandle != 0)
-            {
-                Bass.StreamFree(_monitorHandle);
-                _monitorHandle = 0;
-            }
-            if (_analysisHandle != 0)
-            {
-                Bass.StreamFree(_analysisHandle);
-                _analysisHandle = 0;
-            }
-            if (_pumpHandle != 0)
-            {
-                BassMix.MixerRemoveChannel(_pumpHandle);
-                Bass.StreamFree(_pumpHandle);
-                _pumpHandle = 0;
-            }
             if (_rootHandle != 0)
             {
+                if (_attached)
+                {
+                    BassMix.MixerRemoveChannel(_rootHandle);
+                    _attached = false;
+                }
                 Bass.StreamFree(_rootHandle);
                 _rootHandle = 0;
             }
         }
 
-        private void DetachMonitor()
+        private void DisableMonitor()
         {
-            if (_monitorAttached)
+            if (_monitorEnabled)
             {
-                BassMix.MixerRemoveChannel(_monitorHandle);
-                _monitorAttached = false;
+                Bass.ChannelSetAttribute(_rootHandle, ChannelAttribute.Volume, 0);
+                _monitorEnabled = false;
             }
         }
     }

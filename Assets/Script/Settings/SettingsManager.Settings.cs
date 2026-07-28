@@ -14,6 +14,7 @@ using YARG.Integration;
 using YARG.Integration.RB3E;
 using YARG.Integration.Sacn;
 using YARG.Integration.StageKit;
+using YARG.Input.Bindings;
 using YARG.Menu.Filters;
 using YARG.Menu.History;
 using YARG.Menu.MusicLibrary;
@@ -998,7 +999,19 @@ namespace YARG.Settings
                     return;
                 }
 
-                GlobalAudioHandler.SetOutputDevice(name);
+                // Input and output must use the same backend. Release current routes before
+                // replacing the output graph, then restore only bindings compatible with the
+                // active backend. Serialized incompatible bindings remain available if the user
+                // switches back.
+                BindingsContainer.ReleaseMicrophonesForOutputChange();
+                try
+                {
+                    GlobalAudioHandler.SetOutputDevice(name);
+                }
+                finally
+                {
+                    BindingsContainer.ResolveMicrophones();
+                }
 
                 string activeDevice = Settings.OutputDevice.Value;
                 AudioOutputBackend backend = OutputDeviceSetting.BackendFor(activeDevice);

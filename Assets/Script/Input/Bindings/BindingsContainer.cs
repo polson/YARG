@@ -102,5 +102,21 @@ namespace YARG.Input.Bindings
             BindingSerialization.SerializeBindings(serialized, path);
             return _bindings.Count;
         }
+
+        public static void ReleaseMicrophonesForOutputChange()
+        {
+            foreach (var player in PlayerContainer.Players)
+            {
+                player.Bindings.ReleaseMicrophoneForOutputChange();
+            }
+        }
+
+        public static void ResolveMicrophones()
+        {
+            foreach (var player in PlayerContainer.Players)
+            {
+                player.Bindings.ResolveMicrophone();
+            }
+        }
     }
 }

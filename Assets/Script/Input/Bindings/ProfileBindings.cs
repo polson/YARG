@@ -161,7 +161,12 @@ namespace YARG.Input
                     OnDeviceAdded(device);
             }
 
-            if (_unresolvedMic is not null)
+            ResolveMicrophone();
+        }
+
+        public void ResolveMicrophone()
+        {
+            if (Microphone is null && _unresolvedMic is not null)
             {
                 var device = GlobalAudioHandler.GetInputDevice(_unresolvedMic.Name);
                 if (device != null)
@@ -169,6 +174,12 @@ namespace YARG.Input
                     AddMicrophone(device);
                 }
             }
+        }
+
+        public void ReleaseMicrophoneForOutputChange()
+        {
+            Microphone?.Dispose();
+            Microphone = null;
         }
 
         public void EnableInputs()

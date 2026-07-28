@@ -19,7 +19,6 @@ namespace YARG.Editor
         private const float MAX_MONITOR_GAIN = 4f;
 
         private readonly Action _repaint;
-        private readonly AsioProcedure _outputCallback;
 
         private string[] _deviceNames = Array.Empty<string>();
         private string[] _inputNames = Array.Empty<string>();
@@ -31,6 +30,8 @@ namespace YARG.Editor
         private int _sampleRate = 48000;
         private int _bufferLength;
         private float _monitorVolume;
+        private bool _enableDsps = true;
+        private bool _enableFreeverb;
         private bool _headphonesConfirmed;
         private bool _ownsAsio;
         private bool _ownsBass;
@@ -51,7 +52,6 @@ namespace YARG.Editor
         public AsioMicMonitorTestTab(Action repaint)
         {
             _repaint = repaint;
-            _outputCallback = FillOutputBuffer;
         }
 
         public void Enable()
@@ -196,6 +196,16 @@ namespace YARG.Editor
                 "I am using headphones or have otherwise prevented acoustic feedback",
                 _headphonesConfirmed);
 
+            using (new EditorGUI.DisabledScope(_running))
+            {
+                _enableDsps = EditorGUILayout.Toggle("Enable native DSPs", _enableDsps);
+                using (new EditorGUI.DisabledScope(!_enableDsps))
+                {
+                    _enableFreeverb = EditorGUILayout.Toggle("Enable managed Freeverb",
+                        _enableFreeverb);
+                }
+            }
+
             EditorGUI.BeginChangeCheck();
             _monitorVolume = EditorGUILayout.Slider(
                 new GUIContent("Monitor gain", "1.0 is unity gain; values above 1 amplify input."),
@@ -230,6 +240,14 @@ namespace YARG.Editor
                     }
                 }
             }
+
+            using (new EditorGUI.DisabledScope(!_running))
+            {
+                if (GUILayout.Button("Force GC"))
+                {
+                    GC.Collect();
+                }
+            }
         }
 
         private void DrawResults()
@@ -245,8 +263,8 @@ namespace YARG.Editor
                 MessageType.None);
 
             EditorGUILayout.HelpBox(
-                "FX chain: 110 Hz high-pass, 300 Hz mud cut, 3.2 kHz presence boost, " +
-                "4:1 compressor, light Freeverb.",
+                "Native FX chain: 110 Hz high-pass, 300 Hz mud cut, 3.2 kHz presence boost, " +
+                "4:1 compressor. Managed Freeverb can be enabled separately for GC testing.",
                 MessageType.None);
 
             DrawInputLevelMeter();
@@ -452,7 +470,7 @@ namespace YARG.Editor
                     return;
                 }
 
-                if (!ConfigureMonitoringEffects())
+                if (_enableDsps && !ConfigureMonitoringEffects())
                 {
                     SetBassError("Failed to configure monitoring effects");
                     StopMonitoring();
@@ -489,10 +507,8 @@ namespace YARG.Editor
                 }
 
                 int outputChannel = _outputPairChannels[_outputPair];
-                if (!BassAsio.ChannelEnable(false, outputChannel, _outputCallback, IntPtr.Zero) ||
-                    !BassAsio.ChannelJoin(false, outputChannel + 1, outputChannel) ||
-                    !BassAsio.ChannelSetFormat(false, outputChannel, AsioSampleFormat.Float) ||
-                    !BassAsio.ChannelSetRate(false, outputChannel, _sampleRate))
+                if (!BassAsio.ChannelEnableBass(false, outputChannel, _masterMixerHandle,
+                        Join: true))
                 {
                     SetAsioError("Failed to configure ASIO monitoring output");
                     StopMonitoring();
@@ -573,6 +589,11 @@ namespace YARG.Editor
                 return false;
             }
 
+            if (!_enableFreeverb)
+            {
+                return true;
+            }
+
             _reverbDsp = BassFreeverbDsp.Create(_inputStreamHandle,
                 dryMix: 1f,
                 wetMix: 0.15f,
@@ -581,18 +602,6 @@ namespace YARG.Editor
                 width: 1f,
                 priority: 4);
             return _reverbDsp != null;
-        }
-
-        private int FillOutputBuffer(bool input, int channel, IntPtr buffer, int length, IntPtr user)
-        {
-            int mixer = _masterMixerHandle;
-            if (mixer == 0)
-            {
-                return 0;
-            }
-
-            int bytesRead = Bass.ChannelGetData(mixer, buffer, length);
-            return bytesRead < 0 ? 0 : bytesRead;
         }
 
         private void ApplyMonitorVolume()

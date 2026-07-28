@@ -522,10 +522,18 @@ namespace YARG.Audio.BASS
 
         protected override MicDevice? GetInputDevice(string name)
         {
-            var asioInput = FindAsioInput(name);
-            if (asioInput != null)
+            if (_currentDevice?.IsAsio == true)
             {
-                return BassAsioMicDevice.Create(this, asioInput, name);
+                var asioInput = FindAsioInput(name);
+                return asioInput != null
+                    ? BassAsioMicDevice.Create(this, asioInput, name)
+                    : null;
+            }
+
+            // ASIO inputs are valid only while their owning ASIO output driver is active.
+            if (name.StartsWith(ASIO_MIC_PREFIX, StringComparison.Ordinal))
+            {
+                return null;
             }
 
             for (int deviceIndex = 0; Bass.RecordGetDeviceInfo(deviceIndex, out var info); deviceIndex++)
@@ -561,9 +569,13 @@ namespace YARG.Audio.BASS
         {
             var mics = new List<(int id, string name)>();
 
-            foreach (var descriptor in GetAsioInputDescriptors())
+            if (_currentDevice?.IsAsio == true)
             {
-                mics.Add((descriptor.ChannelIndex, GetAsioMicName(descriptor)));
+                foreach (var descriptor in GetAsioInputDescriptors())
+                {
+                    mics.Add((descriptor.ChannelIndex, GetAsioMicName(descriptor)));
+                }
+                return mics;
             }
 
             // Ignored for now since it causes issues on Linux, BASS must not report device info correctly there
@@ -610,7 +622,7 @@ namespace YARG.Audio.BASS
         protected override MicDevice? CreateInputDevice(int deviceId, string name)
 #nullable disable
         {
-            if (name.StartsWith(ASIO_MIC_PREFIX, StringComparison.Ordinal))
+            if (_currentDevice?.IsAsio == true)
             {
                 var descriptor = FindAsioInput(name);
                 if (descriptor == null || descriptor.ChannelIndex != deviceId)
@@ -618,6 +630,11 @@ namespace YARG.Audio.BASS
                     return null;
                 }
                 return BassAsioMicDevice.Create(this, descriptor, name);
+            }
+
+            if (name.StartsWith(ASIO_MIC_PREFIX, StringComparison.Ordinal))
+            {
+                return null;
             }
 
             var device = BassMicDevice.Create(deviceId, name, _audioOutput);

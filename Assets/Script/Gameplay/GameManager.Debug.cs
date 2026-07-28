@@ -770,6 +770,16 @@ namespace YARG.Gameplay
                             _debugAsioMetrics.MinimumRenderAheadMilliseconds);
                         text.AppendFormat("Render call maximum: {0:0.000} ms\n",
                             _debugAsioMetrics.MaximumRenderTimeMilliseconds);
+                        text.AppendFormat("Render source-read maximum: {0:0.000} ms\n",
+                            _debugAsioMetrics.MaximumRenderSourceReadTimeMilliseconds);
+                        text.AppendFormat("Render queue-write maximum: {0:0.000} ms\n",
+                            _debugAsioMetrics.MaximumRenderQueueWriteTimeMilliseconds);
+                        text.AppendFormat("Render maximum with GC: {0:0.000} ms\n",
+                            _debugAsioMetrics.MaximumGcRenderTimeMilliseconds);
+                        text.AppendFormat("Render maximum without GC: {0:0.000} ms\n",
+                            _debugAsioMetrics.MaximumNonGcRenderTimeMilliseconds);
+                        text.AppendFormat("Render calls crossing GC: {0}\n",
+                            _debugAsioMetrics.GcOverlapRenderCallCount);
                         text.AppendFormat("Render underruns: {0}\n",
                             _debugAsioMetrics.RenderUnderrunCount);
                     }

@@ -18,6 +18,7 @@ namespace YARG.Audio.BASS
     {
         private const int OUTPUT_CHANNELS = 2;
         private const int BYTES_PER_FRAME = OUTPUT_CHANNELS * sizeof(float);
+        private const int ASIO_PROCESSING_THREADS = 1;
         // Native pull keeps Unity GC and managed thread suspension out of the hardware callback.
         // Set false only to collect managed-callback diagnostics for an A/B test.
         private const bool USE_NATIVE_ASIO_OUTPUT = true;
@@ -81,6 +82,15 @@ namespace YARG.Audio.BASS
                     minimumRenderAheadMilliseconds:
                         FramesToMilliseconds(stream?.MinimumQueuedFrames ?? 0),
                     maximumRenderTimeMilliseconds: stream?.MaximumRenderTimeMilliseconds ?? 0,
+                    maximumRenderSourceReadTimeMilliseconds:
+                        stream?.MaximumSourceReadTimeMilliseconds ?? 0,
+                    maximumRenderQueueWriteTimeMilliseconds:
+                        stream?.MaximumQueueWriteTimeMilliseconds ?? 0,
+                    maximumGcRenderTimeMilliseconds:
+                        stream?.MaximumGcRenderTimeMilliseconds ?? 0,
+                    maximumNonGcRenderTimeMilliseconds:
+                        stream?.MaximumNonGcRenderTimeMilliseconds ?? 0,
+                    gcOverlapRenderCallCount: stream?.GcOverlapRenderCallCount ?? 0,
                     renderUnderrunCount: stream?.UnderrunCount ?? 0);
             }
         }
@@ -433,12 +443,14 @@ namespace YARG.Audio.BASS
                 YargLogger.LogInfo("ASIO output transport: managed callback");
             }
 
-            if (!BassAsio.Start(_bufferLength, 0))
+            if (!BassAsio.Start(_bufferLength, ASIO_PROCESSING_THREADS))
             {
                 YargLogger.LogFormatError("Failed to start ASIO output: {0}", BassAsio.LastError);
                 return false;
             }
             _asioStarted = true;
+            YargLogger.LogFormatInfo("ASIO processing threads: {0}",
+                ASIO_PROCESSING_THREADS);
 
             int inputLatencyFrames = Math.Max(0, BassAsio.GetLatency(true));
             var descriptors = new AsioInputDescriptor[_inputs.Count];
@@ -483,7 +495,7 @@ namespace YARG.Audio.BASS
                     ? $"Input {channel}"
                     : channelInfo.Name;
                 BassAsioInput? input = BassAsioInput.Create(_asioDriverId, _asioDriverName,
-                    channel, name, channelInfo.Group, _sampleRate, _outputMixerHandle);
+                    channel, name, channelInfo.Group, _sampleRate);
                 if (input == null)
                 {
                     YargLogger.LogFormatError("Failed to create ASIO input {0}: {1}",
@@ -491,18 +503,57 @@ namespace YARG.Audio.BASS
                     return false;
                 }
 
-                // Add before binding so failed initialization keeps callback-reachable streams
-                // alive until BassAsio.Free runs during cleanup.
                 _inputs.Add(channel, input);
-                if (!BassAsio.ChannelEnableBass(true, channel, input.RootHandle, Join: false) ||
-                    !BassAsio.ChannelSetFormat(true, channel, AsioSampleFormat.Float) ||
-                    !BassAsio.ChannelSetRate(true, channel, _sampleRate))
-                {
-                    YargLogger.LogFormatError("Failed to configure ASIO input {0}: {1}",
-                        channel, BassAsio.LastError);
-                    return false;
-                }
             }
+            return true;
+        }
+
+        private bool ActivateInput(BassAsioInput input)
+        {
+            if (input.IsAttached)
+            {
+                return true;
+            }
+
+            BassAsio.CurrentDevice = _asioDeviceId;
+            if (!BassAsio.Stop())
+            {
+                YargLogger.LogFormatError("Failed to stop ASIO while activating input {0}: {1}",
+                    input.ChannelIndex, BassAsio.LastError);
+                return false;
+            }
+            _asioStarted = false;
+
+            bool configured = BassAsio.ChannelEnableBass(
+                    true, input.ChannelIndex, input.RootHandle, Join: false) &&
+                BassAsio.ChannelSetFormat(
+                    true, input.ChannelIndex, AsioSampleFormat.Float) &&
+                BassAsio.ChannelSetRate(true, input.ChannelIndex, _sampleRate) &&
+                input.AttachToOutputMixer(_outputMixerHandle);
+            if (!configured)
+            {
+                YargLogger.LogFormatError("Failed to activate ASIO input {0}: {1}",
+                    input.ChannelIndex, BassAsio.LastError);
+                BassAsio.ChannelReset(true, input.ChannelIndex,
+                    AsioChannelResetFlags.Enable | AsioChannelResetFlags.Format |
+                    AsioChannelResetFlags.Rate);
+            }
+
+            if (!BassAsio.Start(_bufferLength, ASIO_PROCESSING_THREADS))
+            {
+                YargLogger.LogFormatError("Failed to restart ASIO after activating input {0}: {1}",
+                    input.ChannelIndex, BassAsio.LastError);
+                return false;
+            }
+            _asioStarted = true;
+
+            if (!configured)
+            {
+                return false;
+            }
+
+            input.SetInputLatency(Math.Max(0, BassAsio.GetLatency(true)));
+            YargLogger.LogFormatInfo("Activated selected ASIO input {0}", input.ChannelIndex);
             return true;
         }
 
@@ -611,13 +662,18 @@ namespace YARG.Audio.BASS
             {
                 return AsioInputAcquireResult.DriverMismatch;
             }
+            if (!ActivateInput(input))
+            {
+                return AsioInputAcquireResult.UnavailableChannel;
+            }
             return input.TryAcquire(out lease);
         }
 
         internal bool TryGetInputLevel(int channelIndex, out double level)
         {
             level = 0;
-            if (_disposed || !_asioStarted || !_inputs.ContainsKey(channelIndex))
+            if (_disposed || !_asioStarted ||
+                !_inputs.TryGetValue(channelIndex, out var input) || !input.IsAttached)
             {
                 return false;
             }
