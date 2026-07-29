@@ -701,7 +701,6 @@ namespace YARG.Gameplay
         private double _debugMaximumBassCpuUsage;
         private double _debugAsioCpuUsage;
         private double _debugMaximumAsioCpuUsage;
-        private AudioOutputMetrics _debugAsioMetrics;
         private bool _debugAsioCpuAvailable;
 
         private void UpdateAudioCpuUsageDebug()
@@ -724,7 +723,6 @@ namespace YARG.Gameplay
             {
                 _debugAsioCpuUsage = BassAsio.CPUUsage;
                 _debugMaximumAsioCpuUsage = Math.Max(_debugMaximumAsioCpuUsage, _debugAsioCpuUsage);
-                _debugAsioMetrics = GlobalAudioHandler.OutputMetrics;
             }
 #else
             _debugAsioCpuAvailable = false;
@@ -741,51 +739,10 @@ namespace YARG.Gameplay
                     using var text = ZString.CreateStringBuilder(true);
                     text.AppendFormat("BASS current: {0:0.00}%\n", _debugBassCpuUsage);
                     text.AppendFormat("BASS maximum: {0:0.00}%\n", _debugMaximumBassCpuUsage);
-                    text.AppendFormat("Managed file reads: {0}\n",
-                        YARG.Audio.BASS.BassStreamProcedures.GetDiagnostics());
-                    text.AppendFormat("Standard output: {0}\n",
-                        YARG.Audio.BASS.BassDeviceOutputBackend.GetDiagnostics());
                     if (_debugAsioCpuAvailable)
                     {
                         text.AppendFormat("BASSASIO current: {0:0.00}%\n", _debugAsioCpuUsage);
                         text.AppendFormat("BASSASIO maximum: {0:0.00}%\n", _debugMaximumAsioCpuUsage);
-                        text.AppendFormat("ASIO output: {0}\n",
-                            _debugAsioMetrics.UsesManagedCallback
-                                ? "managed callback"
-                                : "native BASS");
-                        text.AppendFormat("ASIO buffer period: {0:0.000} ms\n",
-                            _debugAsioMetrics.CallbackPeriodMilliseconds);
-                        if (_debugAsioMetrics.UsesManagedCallback)
-                        {
-                            text.AppendFormat("Callback execution maximum: {0:0.000} ms\n",
-                                _debugAsioMetrics.MaximumCallbackTimeMilliseconds);
-                            text.AppendFormat("Callback entry gap maximum: {0:0.000} ms\n",
-                                _debugAsioMetrics.MaximumCallbackGapMilliseconds);
-                            text.AppendFormat("Callback lateness maximum: {0:0.000} ms\n",
-                                _debugAsioMetrics.MaximumCallbackLatenessMilliseconds);
-                            text.AppendFormat("Late callbacks: {0}\n",
-                                _debugAsioMetrics.LateCallbackCount);
-                            text.AppendFormat("Output underfills: {0}\n",
-                                _debugAsioMetrics.OutputUnderfillCount);
-                        }
-                        text.AppendFormat("Render ahead: {0:0.000} ms\n",
-                            _debugAsioMetrics.RenderAheadMilliseconds);
-                        text.AppendFormat("Render ahead minimum: {0:0.000} ms\n",
-                            _debugAsioMetrics.MinimumRenderAheadMilliseconds);
-                        text.AppendFormat("Render call maximum: {0:0.000} ms\n",
-                            _debugAsioMetrics.MaximumRenderTimeMilliseconds);
-                        text.AppendFormat("Render source-read maximum: {0:0.000} ms\n",
-                            _debugAsioMetrics.MaximumRenderSourceReadTimeMilliseconds);
-                        text.AppendFormat("Render queue-write maximum: {0:0.000} ms\n",
-                            _debugAsioMetrics.MaximumRenderQueueWriteTimeMilliseconds);
-                        text.AppendFormat("Render maximum with GC: {0:0.000} ms\n",
-                            _debugAsioMetrics.MaximumGcRenderTimeMilliseconds);
-                        text.AppendFormat("Render maximum without GC: {0:0.000} ms\n",
-                            _debugAsioMetrics.MaximumNonGcRenderTimeMilliseconds);
-                        text.AppendFormat("Render calls crossing GC: {0}\n",
-                            _debugAsioMetrics.GcOverlapRenderCallCount);
-                        text.AppendFormat("Render underruns: {0}\n",
-                            _debugAsioMetrics.RenderUnderrunCount);
                     }
                     else
                     {
@@ -797,9 +754,6 @@ namespace YARG.Gameplay
                     {
                         _debugMaximumBassCpuUsage = _debugBassCpuUsage;
                         _debugMaximumAsioCpuUsage = _debugAsioCpuUsage;
-                        GlobalAudioHandler.ResetOutputMetrics();
-                        YARG.Audio.BASS.BassStreamProcedures.ResetDiagnostics();
-                        _debugAsioMetrics = GlobalAudioHandler.OutputMetrics;
                     }
                 }
             }

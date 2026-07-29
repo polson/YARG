@@ -23,8 +23,6 @@ namespace YARG.Audio.BASS
         private bool _disposed;
 
         public int HeardLatencyMilliseconds => _backend?.HeardLatencyMilliseconds ?? 0;
-        public AudioOutputMetrics Metrics => _backend?.Metrics ?? default;
-
         public BassAudioOutput(Action asioReinitializeRequested)
         {
             _asioReinitializeRequested = asioReinitializeRequested;
@@ -132,34 +130,6 @@ namespace YARG.Audio.BASS
             playback.MarkValid();
             _playbacks.Add(playback);
             return playback;
-        }
-
-        internal string GetPlaybackDiagnostics()
-        {
-            if (_playbacks.Count == 0)
-            {
-                return "playbacks=0";
-            }
-
-            var diagnostics = new System.Text.StringBuilder($"playbacks={_playbacks.Count}");
-            foreach (var playback in _playbacks)
-            {
-                long position = playback.GetPosition();
-                double seconds = position >= 0
-                    ? Bass.ChannelBytes2Seconds(playback.TempoStreamHandle, position)
-                    : -1;
-                int mixerHandle = _backend?.SongMixerHandle(playback.TempoStreamHandle) ?? 0;
-                int availableBytes = mixerHandle != 0
-                    ? Bass.ChannelGetData(mixerHandle, IntPtr.Zero, (int) DataFlags.Available)
-                    : -1;
-                long outputPos = mixerHandle != 0 ? Bass.ChannelGetPosition(mixerHandle, PositionFlags.Bytes) : -1;
-                double outputSec = outputPos >= 0 ? Bass.ChannelBytes2Seconds(mixerHandle, outputPos) : -1;
-                diagnostics.Append($" state={(playback.IsPlaying ? "playing" : "stopped")}");
-                diagnostics.Append($" outputMixer={outputSec:0.###}s");
-                diagnostics.Append($" tempoPos={seconds:0.###}s");
-                diagnostics.Append($" mixer-available={availableBytes}B");
-            }
-            return diagnostics.ToString();
         }
 
         internal void Remove(BassSongPlayback playback)
@@ -285,8 +255,6 @@ namespace YARG.Audio.BASS
             _volume = volume;
             _backend?.SetVolume(volume);
         }
-
-        public void ResetMetrics() => _backend?.ResetMetrics();
 
         internal IReadOnlyList<AsioInputDescriptor> GetAsioInputDescriptors() =>
             _backend is BassAsioOutputBackend asioBackend

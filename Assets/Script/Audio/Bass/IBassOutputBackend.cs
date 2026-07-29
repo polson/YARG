@@ -7,7 +7,6 @@ namespace YARG.Audio.BASS
     internal interface IBassOutputBackend : IDisposable
     {
         int HeardLatencyMilliseconds { get; }
-        AudioOutputMetrics Metrics { get; }
         bool SongMixerRunsContinuously { get; }
         double PlaybackStartDelay { get; }
         int SongMixerHandle(int tempoStreamHandle);
@@ -37,6 +36,5 @@ namespace YARG.Audio.BASS
         void RemoveSample(int sourceHandle);
         void SetSampleOutputChannel(int sourceHandle, OutputChannel? outputChannel);
         void SetVolume(double volume);
-        void ResetMetrics();
     }
 }

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Threading;
 using ManagedBass;
 using ManagedBass.Mix;
@@ -12,9 +11,6 @@ namespace YARG.Audio.BASS
     {
         private const int TargetQueueFrames = 8820; // ~200ms at 44.1kHz
         private const int RenderChunkFrames = 256;
-        private static readonly object DiagnosticLock = new object();
-        private static readonly List<BassOneShotStream> DiagnosticStreams = new List<BassOneShotStream>();
-
         private readonly object _lifecycleLock = new object();
         private readonly object _renderLock = new object();
         private readonly AutoResetEvent _renderWake = new AutoResetEvent(false);
@@ -31,9 +27,6 @@ namespace YARG.Audio.BASS
 
         private float _volume = 1f;
         private bool _enabled = true;
-
-        private long _renderedFrames;
-        private int _minimumQueuedFrames = int.MaxValue;
 
         internal BassOneShotStream(int sampleRate, int channels, float[] sample,
             double[] schedule, double leadTime)
@@ -62,64 +55,9 @@ namespace YARG.Audio.BASS
                 Name = "YARG.OneShotRenderAhead"
             };
             _renderThread.Start();
-
-            lock (DiagnosticLock)
-            {
-                DiagnosticStreams.Add(this);
-            }
         }
 
         internal int StreamHandle => _streamHandle;
-
-        public static IDisposable PauseProducersForDiagnostics()
-        {
-            return new ProducerPauseScope();
-        }
-
-        private sealed class ProducerPauseScope : IDisposable
-        {
-            public ProducerPauseScope()
-            {
-                lock (DiagnosticLock)
-                {
-                    foreach (var stream in DiagnosticStreams)
-                    {
-                        Monitor.Enter(stream._renderLock);
-                    }
-                }
-            }
-
-            public void Dispose()
-            {
-                lock (DiagnosticLock)
-                {
-                    foreach (var stream in DiagnosticStreams)
-                    {
-                        Monitor.Exit(stream._renderLock);
-                    }
-                }
-            }
-        }
-
-        public static string GetDiagnostics()
-        {
-            lock (DiagnosticLock)
-            {
-                int count = DiagnosticStreams.Count;
-                long totalRendered = 0;
-                int minQueued = int.MaxValue;
-                foreach (var stream in DiagnosticStreams)
-                {
-                    totalRendered += Interlocked.Read(ref stream._renderedFrames);
-                    int streamMin = Volatile.Read(ref stream._minimumQueuedFrames);
-                    if (streamMin < minQueued)
-                    {
-                        minQueued = streamMin;
-                    }
-                }
-                return $"count={count}, renderedFrames={totalRendered}, minQueuedFrames={(minQueued == int.MaxValue ? -1 : minQueued)}";
-            }
-        }
 
         internal void Attach(int mixerHandle)
         {
@@ -309,7 +247,6 @@ namespace YARG.Audio.BASS
                 }
 
                 int queuedFrames = queuedBytes / _bytesPerFrame;
-                UpdateMinimumQueuedFrames(queuedFrames);
                 if (queuedFrames >= _targetFrames)
                 {
                     return;
@@ -328,22 +265,7 @@ namespace YARG.Audio.BASS
                     _running = false;
                     return;
                 }
-                Interlocked.Add(ref _renderedFrames, frames);
             }
-        }
-
-        private void UpdateMinimumQueuedFrames(int frames)
-        {
-            int previous;
-            do
-            {
-                previous = Volatile.Read(ref _minimumQueuedFrames);
-                if (frames >= previous)
-                {
-                    return;
-                }
-            }
-            while (Interlocked.CompareExchange(ref _minimumQueuedFrames, frames, previous) != previous);
         }
 
         public void Dispose()
@@ -384,11 +306,6 @@ namespace YARG.Audio.BASS
             if (_renderThread != Thread.CurrentThread)
             {
                 _renderThread.Join();
-            }
-
-            lock (DiagnosticLock)
-            {
-                DiagnosticStreams.Remove(this);
             }
 
             if (_streamHandle != 0)

@@ -222,10 +222,6 @@ namespace YARG.Audio.BASS
             PlaybackLatency = _audioOutput.HeardLatencyMilliseconds;
         }
 
-        protected override AudioOutputMetrics OutputMetrics => _audioOutput.Metrics;
-
-        protected override void ResetOutputMetrics() => _audioOutput.ResetMetrics();
-
         protected override bool SetOutputDevice(string name)
         {
             int bufferLength = SettingsManager.GetAsioBufferLength(name);
@@ -1064,14 +1060,13 @@ namespace YARG.Audio.BASS
             // https://www.un4seen.com/forum/?topic=20148.msg140872#msg140872
             const BassFlags streamFlags = BassFlags.Prescan | BassFlags.Decode | BassFlags.AsyncFile | (BassFlags) 64;
 
-            var procedures = new BassStreamProcedures(stream);
-            streamHandle = Bass.CreateStream(StreamSystem.NoBuffer, streamFlags, procedures);
+            streamHandle = Bass.CreateStream(StreamSystem.NoBuffer, streamFlags,
+                new BassStreamProcedures(stream));
             if (streamHandle == 0)
             {
                 YargLogger.LogFormatError("Failed to create source stream: {0}!", Bass.LastError);
                 return false;
             }
-            procedures.RegisterStream(streamHandle);
             return true;
         }
 

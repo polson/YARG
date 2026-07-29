@@ -33,17 +33,8 @@ namespace YARG.Audio.BASS
         private volatile bool _running;
         private volatile bool _queueReady;
         private int _disposed;
-        private int _queueEmpty;
         private int _queueGeneration;
         private long _generatedFrames;
-        private long _maximumRenderTicks;
-        private long _maximumSourceReadTicks;
-        private long _maximumQueueWriteTicks;
-        private long _maximumGcRenderTicks;
-        private long _maximumNonGcRenderTicks;
-        private long _gcOverlapRenderCalls;
-        private long _minimumQueuedFrames = long.MaxValue;
-        private long _underruns;
 
         public int Handle { get; }
 
@@ -60,34 +51,6 @@ namespace YARG.Audio.BASS
                 return queuedBytes > 0 ? queuedBytes / _bytesPerFrame : 0;
             }
         }
-
-        public int MinimumQueuedFrames
-        {
-            get
-            {
-                long frames = Volatile.Read(ref _minimumQueuedFrames);
-                return frames == long.MaxValue ? QueuedFrames : (int) frames;
-            }
-        }
-
-        public double MaximumRenderTimeMilliseconds =>
-            Volatile.Read(ref _maximumRenderTicks) * 1000.0 / Stopwatch.Frequency;
-
-        public double MaximumSourceReadTimeMilliseconds =>
-            Volatile.Read(ref _maximumSourceReadTicks) * 1000.0 / Stopwatch.Frequency;
-
-        public double MaximumQueueWriteTimeMilliseconds =>
-            Volatile.Read(ref _maximumQueueWriteTicks) * 1000.0 / Stopwatch.Frequency;
-
-        public double MaximumGcRenderTimeMilliseconds =>
-            Volatile.Read(ref _maximumGcRenderTicks) * 1000.0 / Stopwatch.Frequency;
-
-        public double MaximumNonGcRenderTimeMilliseconds =>
-            Volatile.Read(ref _maximumNonGcRenderTicks) * 1000.0 / Stopwatch.Frequency;
-
-        public long GcOverlapRenderCallCount => Volatile.Read(ref _gcOverlapRenderCalls);
-
-        public long UnderrunCount => Volatile.Read(ref _underruns);
 
         private BassRenderAheadStream(int sourceMixerHandle, int bassDeviceId, int sampleRate,
             int channels, int callbackFrames, bool outputRequestsReported, int handle)
@@ -136,12 +99,6 @@ namespace YARG.Audio.BASS
             int queuedFrames = QueuedFrames;
             _outputClock.ObserveCallback(
                 queueGeneration, timestamp, frames, Math.Min(frames, queuedFrames));
-            UpdateMinimum(ref _minimumQueuedFrames, Math.Max(0, queuedFrames - frames));
-            if (_queueReady && queuedFrames < frames)
-            {
-                Interlocked.Increment(ref _underruns);
-            }
-
             _renderWake.Set();
         }
 
@@ -208,20 +165,6 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public void ResetMetrics()
-        {
-            int queuedFrames = QueuedFrames;
-            Interlocked.Exchange(ref _maximumRenderTicks, 0);
-            Interlocked.Exchange(ref _maximumSourceReadTicks, 0);
-            Interlocked.Exchange(ref _maximumQueueWriteTicks, 0);
-            Interlocked.Exchange(ref _maximumGcRenderTicks, 0);
-            Interlocked.Exchange(ref _maximumNonGcRenderTicks, 0);
-            Interlocked.Exchange(ref _gcOverlapRenderCalls, 0);
-            Interlocked.Exchange(ref _minimumQueuedFrames, queuedFrames);
-            Interlocked.Exchange(ref _underruns, 0);
-            Volatile.Write(ref _queueEmpty, queuedFrames == 0 ? 1 : 0);
-        }
-
         private bool Start()
         {
             int reserveFrames = _targetFrames + (RENDER_CHUNK_FRAMES * 2);
@@ -275,8 +218,6 @@ namespace YARG.Audio.BASS
                     {
                         if (!_queueReady)
                         {
-                            Interlocked.Exchange(ref _minimumQueuedFrames, queuedFrames);
-                            Volatile.Write(ref _queueEmpty, 0);
                             _queueReady = true;
                         }
                         _renderWake.WaitOne(2);
@@ -297,17 +238,6 @@ namespace YARG.Audio.BASS
         {
             _outputClock.ObserveQueueDepth(
                 Volatile.Read(ref _queueGeneration), timestamp, _generatedFrames, queuedFrames);
-            UpdateMinimum(ref _minimumQueuedFrames, queuedFrames);
-            if (queuedFrames == 0)
-            {
-                if (Interlocked.Exchange(ref _queueEmpty, 1) == 0)
-                {
-                    Interlocked.Increment(ref _underruns);
-                }
-                return;
-            }
-
-            Volatile.Write(ref _queueEmpty, 0);
         }
 
         private void RenderChunk()
@@ -319,58 +249,29 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                int gen0Collections = GC.CollectionCount(0);
-                int gen1Collections = GC.CollectionCount(1);
-                int gen2Collections = GC.CollectionCount(2);
-                long start = Stopwatch.GetTimestamp();
-                try
+                int requestedBytes = _renderBuffer.Length * sizeof(float);
+                int bytesRead = Bass.ChannelGetData(
+                    _sourceMixerHandle, _renderBuffer, requestedBytes);
+                if (bytesRead < 0)
                 {
-                    int requestedBytes = _renderBuffer.Length * sizeof(float);
-                    long sourceReadStart = Stopwatch.GetTimestamp();
-                    int bytesRead = Bass.ChannelGetData(
-                        _sourceMixerHandle, _renderBuffer, requestedBytes);
-                    UpdateMaximum(ref _maximumSourceReadTicks,
-                        Stopwatch.GetTimestamp() - sourceReadStart);
-                    if (bytesRead < 0)
-                    {
-                        FailRender("Failed to render ASIO audio", Bass.LastError);
-                        return;
-                    }
-
-                    bytesRead -= bytesRead % _bytesPerFrame;
-                    if (bytesRead <= 0)
-                    {
-                        return;
-                    }
-                    long queueWriteStart = Stopwatch.GetTimestamp();
-                    int putResult = Bass.StreamPutData(Handle, _renderBuffer, bytesRead);
-                    UpdateMaximum(ref _maximumQueueWriteTicks,
-                        Stopwatch.GetTimestamp() - queueWriteStart);
-                    if (putResult < 0)
-                    {
-                        FailRender("Failed to queue rendered ASIO audio", Bass.LastError);
-                        return;
-                    }
-
-                    _generatedFrames += bytesRead / _bytesPerFrame;
+                    FailRender("Failed to render ASIO audio", Bass.LastError);
+                    return;
                 }
-                finally
+
+                bytesRead -= bytesRead % _bytesPerFrame;
+                if (bytesRead <= 0)
                 {
-                    long elapsedTicks = Stopwatch.GetTimestamp() - start;
-                    UpdateMaximum(ref _maximumRenderTicks, elapsedTicks);
-                    bool gcOverlapped = GC.CollectionCount(0) != gen0Collections ||
-                        GC.CollectionCount(1) != gen1Collections ||
-                        GC.CollectionCount(2) != gen2Collections;
-                    if (gcOverlapped)
-                    {
-                        Interlocked.Increment(ref _gcOverlapRenderCalls);
-                        UpdateMaximum(ref _maximumGcRenderTicks, elapsedTicks);
-                    }
-                    else
-                    {
-                        UpdateMaximum(ref _maximumNonGcRenderTicks, elapsedTicks);
-                    }
+                    return;
                 }
+
+                int putResult = Bass.StreamPutData(Handle, _renderBuffer, bytesRead);
+                if (putResult < 0)
+                {
+                    FailRender("Failed to queue rendered ASIO audio", Bass.LastError);
+                    return;
+                }
+
+                _generatedFrames += bytesRead / _bytesPerFrame;
             }
         }
 
@@ -553,34 +454,6 @@ namespace YARG.Audio.BASS
                 _lastObservationTimestamp = timestamp;
                 _latestSubmittedFrame = Math.Max(_latestSubmittedFrame, submittedFrame);
             }
-        }
-
-        private static void UpdateMaximum(ref long target, long value)
-        {
-            long previous;
-            do
-            {
-                previous = Volatile.Read(ref target);
-                if (value <= previous)
-                {
-                    return;
-                }
-            }
-            while (Interlocked.CompareExchange(ref target, value, previous) != previous);
-        }
-
-        private static void UpdateMinimum(ref long target, long value)
-        {
-            long previous;
-            do
-            {
-                previous = Volatile.Read(ref target);
-                if (value >= previous)
-                {
-                    return;
-                }
-            }
-            while (Interlocked.CompareExchange(ref target, value, previous) != previous);
         }
 
         public void Dispose()
