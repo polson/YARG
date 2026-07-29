@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UnityEngine.SceneManagement;
 using YARG.Audio.BASS;
 using YARG.Core.Logging;
@@ -111,28 +112,36 @@ namespace YARG
         }
 
 #if UNITY_EDITOR
-
         // For respecting the editor's mute button
         private bool _previousMute;
+#endif
 
         private void Update()
         {
+#if UNITY_EDITOR
             bool muted = UnityEditor.EditorUtility.audioMasterMute;
             if (muted != _previousMute)
             {
                 GlobalAudioHandler.SetMasterVolume(muted ? 0 : SettingsManager.Settings.MasterMusicVolume.Value);
                 _previousMute = muted;
             }
+#endif
 
+            if (Keyboard.current != null && Keyboard.current.f8Key.wasPressedThisFrame)
+            {
+                YargLogger.LogInfo("Triggered Garbage Collection");
+                GC.Collect();
+            }
+
+#if UNITY_EDITOR
             if (CurrentScene != SceneIndex.Gameplay && Time.realtimeSinceStartup > _nextLocalizationUpdate)
             {
                 _ = LocalizationManager.LoadUpdates();
                 _nextLocalizationUpdate = Time.realtimeSinceStartup + LOCALIZATION_UPDATE_INTERVAL + UnityEngine.Random.Range(-30f, 30f);
                 YargLogger.LogFormatDebug("Updating localization at {0}, next update at {1}", Time.realtimeSinceStartup, _nextLocalizationUpdate);
             }
-        }
-
 #endif
+        }
 
         protected override void SingletonDestroy()
         {

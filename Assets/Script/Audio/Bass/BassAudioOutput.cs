@@ -134,6 +134,34 @@ namespace YARG.Audio.BASS
             return playback;
         }
 
+        internal string GetPlaybackDiagnostics()
+        {
+            if (_playbacks.Count == 0)
+            {
+                return "playbacks=0";
+            }
+
+            var diagnostics = new System.Text.StringBuilder($"playbacks={_playbacks.Count}");
+            foreach (var playback in _playbacks)
+            {
+                long position = playback.GetPosition();
+                double seconds = position >= 0
+                    ? Bass.ChannelBytes2Seconds(playback.TempoStreamHandle, position)
+                    : -1;
+                int mixerHandle = _backend?.SongMixerHandle(playback.TempoStreamHandle) ?? 0;
+                int availableBytes = mixerHandle != 0
+                    ? Bass.ChannelGetData(mixerHandle, IntPtr.Zero, (int) DataFlags.Available)
+                    : -1;
+                long outputPos = mixerHandle != 0 ? Bass.ChannelGetPosition(mixerHandle, PositionFlags.Bytes) : -1;
+                double outputSec = outputPos >= 0 ? Bass.ChannelBytes2Seconds(mixerHandle, outputPos) : -1;
+                diagnostics.Append($" state={(playback.IsPlaying ? "playing" : "stopped")}");
+                diagnostics.Append($" outputMixer={outputSec:0.###}s");
+                diagnostics.Append($" tempoPos={seconds:0.###}s");
+                diagnostics.Append($" mixer-available={availableBytes}B");
+            }
+            return diagnostics.ToString();
+        }
+
         internal void Remove(BassSongPlayback playback)
         {
             if (_playbacks.Remove(playback))

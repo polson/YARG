@@ -114,6 +114,12 @@ namespace YARG.Audio.BASS
         }
 
         [BurstCompile(CompileSynchronously = true)]
+        public static void Render(OneShotNativeContext* context, void* buffer, int length)
+        {
+            ProcessStream(0, buffer, length, context);
+        }
+
+        [BurstCompile(CompileSynchronously = true)]
         [MonoPInvokeCallback(typeof(BassNativeStreamProcedure))]
         public static int ProcessStream(int stream, void* buffer, int length, void* user)
         {
