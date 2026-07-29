@@ -12,6 +12,19 @@ using YARG.Settings;
 
 namespace YARG.Audio.BASS
 {
+    internal static class BassMicMonitoringEffects
+    {
+#nullable enable
+        public static BassFreeverbDsp? CreateReverb(int streamHandle) =>
+            BassFreeverbDsp.Create(streamHandle,
+                dryMix: 0.3f,
+                wetMix: 1f,
+                roomSize: 0.4f,
+                damp: 0.7f,
+                width: 0f,
+                priority: 1);
+#nullable disable
+    }
 
     internal class MonitorPlaybackHandle : IDisposable
     {
@@ -29,13 +42,7 @@ namespace YARG.Audio.BASS
             }
 
             // Add reverb to the monitor playback
-            var reverb = BassFreeverbDsp.Create(monitorPlaybackHandle,
-                dryMix: 0.3f,
-                wetMix: 1f,
-                roomSize: 0.4f,
-                damp: 0.7f,
-                width: 0f,
-                priority: 1);
+            var reverb = BassMicMonitoringEffects.CreateReverb(monitorPlaybackHandle);
             if (reverb == null)
             {
                 YargLogger.LogError("Failed to add reverb to monitor stream!");

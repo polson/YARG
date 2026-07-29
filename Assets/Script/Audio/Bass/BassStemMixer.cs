@@ -423,6 +423,11 @@ namespace YARG.Audio.BASS
                 return;
             }
 
+            // Normalization analysis streams belong to the current BASS device and are read by a
+            // background worker. Stop and free them before the old device can be released. The
+            // current gain remains applied; a new mixer will create a new normalizer.
+            StopNormalization();
+
             foreach (StemData stemData in _stemDatas)
             {
                 if (!Bass.ChannelSetDevice(stemData.ReverbHandles.Stream, bassDevice.DeviceId))
@@ -454,6 +459,13 @@ namespace YARG.Audio.BASS
                 YargLogger.LogFormatError("Failed to change device for tempo stream handle: {0}", Bass.LastError);
             }
 
+        }
+
+        private void StopNormalization()
+        {
+            _shouldNormalize = false;
+            _normalizer.OnGainAdjusted -= OnGainAdjusted;
+            _normalizer.Dispose();
         }
 
         private void OnOutputChanged()
@@ -635,8 +647,7 @@ namespace YARG.Audio.BASS
             _gainDsp?.Dispose();
             _gainDsp = null;
 
-            _normalizer.OnGainAdjusted -= OnGainAdjusted;
-            _normalizer.Dispose();
+            StopNormalization();
 
             foreach (var channel in Channels)
             {
