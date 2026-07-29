@@ -58,7 +58,7 @@ namespace YARG.Audio.BASS
             context->Speed = 1;
             context->Enabled = 1;
             float initialVolume = 1;
-            context->VolumeBits = *(int*)&initialVolume;
+            context->VolumeBits = *(int*) &initialVolume;
             context->AppliedGeneration = -1;
 
             context->Sample = (float*)UnsafeUtility.Malloc(
@@ -109,14 +109,13 @@ namespace YARG.Audio.BASS
 
         public static void SetVolume(OneShotNativeContext* c, float volume)
         {
-            int bits = *(int*)&volume;
+            int bits = *(int*) &volume;
             Interlocked.Exchange(ref c->VolumeBits, bits);
         }
 
-        [BurstCompile(CompileSynchronously = true)]
-        public static void Render(OneShotNativeContext* context, void* buffer, int length)
+        public static void SetEnabled(OneShotNativeContext* c, bool enabled)
         {
-            ProcessStream(0, buffer, length, context);
+            Interlocked.Exchange(ref c->Enabled, enabled ? 1 : 0);
         }
 
         [BurstCompile(CompileSynchronously = true)]
@@ -143,14 +142,12 @@ namespace YARG.Audio.BASS
             long start = c->CursorFrame;
             c->CursorFrame += frames;
             int volumeBits = Interlocked.CompareExchange(ref c->VolumeBits, 0, 0);
-            float volume = *(float*)&volumeBits;
+            float volume = c->Enabled != 0 ? *(float*) &volumeBits : 0;
             MixActive(c, output, frames, volume);
             int pending = Interlocked.Exchange(ref c->PendingPlays, 0);
-            if (c->Enabled != 0)
-                for (int i = 0; i < pending && c->ActiveCount < MaxActive; i++)
-                    Start(c, output, frames, 0, volume);
+            for (int i = 0; i < pending && c->ActiveCount < MaxActive; i++)
+                Start(c, output, frames, 0, volume);
 
-            if (c->Enabled == 0) return length;
             while (c->NextSchedule < c->ScheduleCount)
             {
                 long target = TargetFrame(c, c->Schedule[c->NextSchedule]);
@@ -204,8 +201,7 @@ namespace YARG.Audio.BASS
             int dest = offset * c->Channels;
             for (int i = 0; i < count * c->Channels; i++)
             {
-                float value = output[dest] + c->Sample[source] * volume;
-                output[dest++] = Math.Clamp(value, -1f, 1f);
+                output[dest++] += c->Sample[source] * volume;
                 source++;
             }
             sourceFrame += count;

@@ -1,7 +1,7 @@
 using System;
 using System.Threading;
 using ManagedBass;
-using ManagedBass.Mix;
+using Unity.Burst;
 using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
@@ -9,24 +9,15 @@ namespace YARG.Audio.BASS
     /// <summary>Owns one Burst-generated source attached to a BASS mixer.</summary>
     internal sealed unsafe class BassOneShotStream : IDisposable
     {
-        private const int TargetQueueFrames = 8820; // ~200ms at 44.1kHz
-        private const int RenderChunkFrames = 256;
+        private static readonly FunctionPointer<BassNativeStreamProcedure> Callback =
+            BurstCompiler.CompileFunctionPointer<BassNativeStreamProcedure>(OneShotProcessor.ProcessStream);
+
         private readonly object _lifecycleLock = new object();
-        private readonly object _renderLock = new object();
-        private readonly AutoResetEvent _renderWake = new AutoResetEvent(false);
         private readonly OneShotNativeContext* _context;
-        private readonly string _name = "Burst one-shot push stream";
-        private readonly float[] _renderBuffer;
-        private readonly int _bytesPerFrame;
-        private readonly int _targetFrames;
-        private readonly Thread _renderThread;
+        private readonly string _name = "Burst one-shot stream";
         private int _streamHandle;
         private int _mixerHandle;
         private bool _disposed;
-        private volatile bool _running = true;
-
-        private float _volume = 1f;
-        private bool _enabled = true;
 
         internal BassOneShotStream(int sampleRate, int channels, float[] sample,
             double[] schedule, double leadTime)
@@ -37,24 +28,13 @@ namespace YARG.Audio.BASS
                 throw new InvalidOperationException("Failed to allocate one-shot state.");
             }
 
-            _bytesPerFrame = channels * sizeof(float);
-            _targetFrames = TargetQueueFrames;
-            _renderBuffer = new float[RenderChunkFrames * channels];
-
-            _streamHandle = Bass.CreateStream(sampleRate, channels, BassFlags.Float | BassFlags.Decode,
-                StreamProcedureType.Push);
+            _streamHandle = BassNativeStream.Create(
+                sampleRate, channels, Callback.Value, (IntPtr) _context);
             if (_streamHandle == 0)
             {
                 OneShotProcessor.Destroy(_context);
-                throw new InvalidOperationException($"Failed to create push stream: {Bass.LastError}");
+                throw new InvalidOperationException($"Failed to create one-shot stream: {Bass.LastError}");
             }
-
-            _renderThread = new Thread(RenderLoop)
-            {
-                IsBackground = true,
-                Name = "YARG.OneShotRenderAhead"
-            };
-            _renderThread.Start();
         }
 
         internal int StreamHandle => _streamHandle;
@@ -115,8 +95,7 @@ namespace YARG.Audio.BASS
                 {
                     return;
                 }
-                _volume = volume;
-                ApplyVolume();
+                OneShotProcessor.SetVolume(_context, volume);
             }
         }
 
@@ -128,8 +107,7 @@ namespace YARG.Audio.BASS
                 {
                     return;
                 }
-                _enabled = enabled;
-                ApplyVolume();
+                OneShotProcessor.SetEnabled(_context, enabled);
             }
         }
 
@@ -142,17 +120,7 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                lock (_renderLock)
-                {
-                    Volatile.Write(ref _context->Paused, paused ? 1 : 0);
-                    if (!Bass.ChannelSetPosition(_streamHandle, 0, PositionFlags.Bytes))
-                    {
-                        YargLogger.LogFormatError("Failed to flush paused one-shot stream: {0}",
-                            Bass.LastError);
-                    }
-                    FillQueue();
-                }
-                _renderWake.Set();
+                Volatile.Write(ref _context->Paused, paused ? 1 : 0);
             }
         }
 
@@ -171,7 +139,6 @@ namespace YARG.Audio.BASS
                 {
                     pending = Volatile.Read(ref _context->PendingPlays);
                 }
-                _renderWake.Set();
             }
         }
 
@@ -184,87 +151,7 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                lock (_renderLock)
-                {
-                    if (!Bass.ChannelSetPosition(_streamHandle, 0, PositionFlags.Bytes))
-                    {
-                        YargLogger.LogFormatError("Failed to flush one-shot push stream: {0}",
-                            Bass.LastError);
-                    }
-                    OneShotProcessor.SetAnchor(_context, outputFrame, songPosition, speed,
-                        clearActive);
-                    FillQueue();
-                }
-                _renderWake.Set();
-            }
-        }
-
-        private void ApplyVolume()
-        {
-            if (_streamHandle != 0 &&
-                !Bass.ChannelSetAttribute(_streamHandle, ChannelAttribute.Volume,
-                    _enabled ? _volume : 0))
-            {
-                YargLogger.LogFormatError("Failed to set one-shot stream volume: {0}",
-                    Bass.LastError);
-            }
-        }
-
-        private void RenderLoop()
-        {
-            try
-            {
-                while (_running)
-                {
-                    lock (_renderLock)
-                    {
-                        if (_running)
-                        {
-                            FillQueue();
-                        }
-                    }
-                    _renderWake.WaitOne(2);
-                }
-            }
-            catch (Exception exception)
-            {
-                _running = false;
-                YargLogger.LogException(exception, "One-shot render-ahead thread failed");
-            }
-        }
-
-        private void FillQueue()
-        {
-            while (_running)
-            {
-                int queuedBytes = Bass.StreamPutData(_streamHandle, IntPtr.Zero, 0);
-                if (queuedBytes < 0)
-                {
-                    YargLogger.LogFormatError("Failed to query one-shot push stream: {0}",
-                        Bass.LastError);
-                    _running = false;
-                    return;
-                }
-
-                int queuedFrames = queuedBytes / _bytesPerFrame;
-                if (queuedFrames >= _targetFrames)
-                {
-                    return;
-                }
-
-                int frames = Math.Min(RenderChunkFrames, _targetFrames - queuedFrames);
-                int bytes = frames * _bytesPerFrame;
-                fixed (float* buffer = _renderBuffer)
-                {
-                    OneShotProcessor.Render(_context, buffer, bytes);
-                }
-                if (Bass.StreamPutData(_streamHandle, _renderBuffer, bytes) < 0)
-                {
-                    YargLogger.LogFormatError("Failed to fill one-shot push stream: {0}",
-                        Bass.LastError);
-                    _running = false;
-                    return;
-                }
+                OneShotProcessor.SetAnchor(_context, outputFrame, songPosition, speed, clearActive);
             }
         }
 
@@ -299,22 +186,13 @@ namespace YARG.Audio.BASS
                     }
                 }
                 _mixerHandle = 0;
-                _running = false;
-                _renderWake.Set();
+                if (_streamHandle != 0)
+                {
+                    Bass.StreamFree(_streamHandle);
+                    _streamHandle = 0;
+                }
+                OneShotProcessor.Destroy(_context);
             }
-
-            if (_renderThread != Thread.CurrentThread)
-            {
-                _renderThread.Join();
-            }
-
-            if (_streamHandle != 0)
-            {
-                Bass.StreamFree(_streamHandle);
-                _streamHandle = 0;
-            }
-            OneShotProcessor.Destroy(_context);
-            _renderWake.Dispose();
         }
     }
 }

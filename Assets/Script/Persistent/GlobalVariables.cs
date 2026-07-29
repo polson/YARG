@@ -131,10 +131,6 @@ namespace YARG
             {
                 YargLogger.LogInfo("Triggered Garbage Collection");
                 GC.Collect();
-                // A full collection can drain a one-shot push stream while the native song
-                // output continues consuming buffered audio. Re-anchor scheduled effects to
-                // the song mixer so the metronome does not retain that underrun as an offset.
-                BassOneShotChannel.ResynchronizeAll();
             }
 
 #if UNITY_EDITOR
