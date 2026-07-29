@@ -28,8 +28,10 @@ namespace YARG.Audio.BASS
         private readonly HashSet<int> _samples = new();
         private readonly HashSet<int> _monitors = new();
         private readonly Dictionary<int, BassAsioInput> _inputs = new();
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
         private readonly AsioProcedure _outputCallback;
         private readonly AsioNotifyProcedure _notifyCallback;
+#endif
 
         private AsioInputDescriptor[] _inputDescriptors = Array.Empty<AsioInputDescriptor>();
         private BassRenderAheadStream? _renderAheadStream;
@@ -61,8 +63,10 @@ namespace YARG.Audio.BASS
         {
             _bufferLength = bufferLength;
             _asioReinitializeRequested = asioReinitializeRequested;
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
             _outputCallback = FillOutputBuffer;
             _notifyCallback = OnAsioNotification;
+#endif
         }
 
         public bool Initialize(BassOutputDevice device)
@@ -556,6 +560,7 @@ namespace YARG.Audio.BASS
             out BassAsioInputLease? lease)
         {
             lease = null;
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
             if (_disposed || !_asioStarted ||
                 !_inputs.TryGetValue(channelIndex, out var input))
             {
@@ -570,6 +575,9 @@ namespace YARG.Audio.BASS
                 return AsioInputAcquireResult.UnavailableChannel;
             }
             return input.TryAcquire(out lease);
+#else
+            return AsioInputAcquireResult.UnavailableChannel;
+#endif
         }
 
         internal bool TryGetInputLevel(int channelIndex, out double level)
