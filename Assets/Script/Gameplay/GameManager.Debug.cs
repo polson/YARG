@@ -741,6 +741,10 @@ namespace YARG.Gameplay
                     using var text = ZString.CreateStringBuilder(true);
                     text.AppendFormat("BASS current: {0:0.00}%\n", _debugBassCpuUsage);
                     text.AppendFormat("BASS maximum: {0:0.00}%\n", _debugMaximumBassCpuUsage);
+                    text.AppendFormat("Managed file reads: {0}\n",
+                        YARG.Audio.BASS.BassStreamProcedures.GetDiagnostics());
+                    text.AppendFormat("Standard output: {0}\n",
+                        YARG.Audio.BASS.BassDeviceOutputBackend.GetDiagnostics());
                     if (_debugAsioCpuAvailable)
                     {
                         text.AppendFormat("BASSASIO current: {0:0.00}%\n", _debugAsioCpuUsage);
@@ -794,6 +798,7 @@ namespace YARG.Gameplay
                         _debugMaximumBassCpuUsage = _debugBassCpuUsage;
                         _debugMaximumAsioCpuUsage = _debugAsioCpuUsage;
                         GlobalAudioHandler.ResetOutputMetrics();
+                        YARG.Audio.BASS.BassStreamProcedures.ResetDiagnostics();
                         _debugAsioMetrics = GlobalAudioHandler.OutputMetrics;
                     }
                 }

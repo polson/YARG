@@ -129,8 +129,15 @@ namespace YARG
 
             if (Keyboard.current != null && Keyboard.current.f8Key.wasPressedThisFrame)
             {
-                YargLogger.LogInfo("Triggered Garbage Collection");
+                YargLogger.LogFormatInfo("Triggered Garbage Collection; reads before: {0}",
+                    BassStreamProcedures.GetDiagnostics());
+                YargLogger.LogFormatInfo("Standard output before GC: {0}",
+                    BassDeviceOutputBackend.GetDiagnostics());
                 GC.Collect();
+                YargLogger.LogFormatInfo("Garbage Collection complete; reads after: {0}",
+                    BassStreamProcedures.GetDiagnostics());
+                YargLogger.LogFormatInfo("Standard output after GC: {0}",
+                    BassDeviceOutputBackend.GetDiagnostics());
             }
 
 #if UNITY_EDITOR

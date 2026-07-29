@@ -1064,12 +1064,14 @@ namespace YARG.Audio.BASS
             // https://www.un4seen.com/forum/?topic=20148.msg140872#msg140872
             const BassFlags streamFlags = BassFlags.Prescan | BassFlags.Decode | BassFlags.AsyncFile | (BassFlags) 64;
 
-            streamHandle = Bass.CreateStream(StreamSystem.NoBuffer, streamFlags, new BassStreamProcedures(stream));
+            var procedures = new BassStreamProcedures(stream);
+            streamHandle = Bass.CreateStream(StreamSystem.NoBuffer, streamFlags, procedures);
             if (streamHandle == 0)
             {
                 YargLogger.LogFormatError("Failed to create source stream: {0}!", Bass.LastError);
                 return false;
             }
+            procedures.RegisterStream(streamHandle);
             return true;
         }
 

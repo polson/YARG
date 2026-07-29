@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Text;
 using System.Threading;
 using ManagedBass;
 using ManagedBass.Mix;
@@ -21,6 +22,11 @@ namespace YARG.Audio.BASS
         private int _monitorMixerHandle;
         private readonly HashSet<int> _monitors = new();
         private bool _disposed;
+        private int _lastAvailableBeforeRestart = -1;
+        private int _lastAvailableAfterUpdate = -1;
+        private int _lastAvailableAfterPlay = -1;
+
+        private static BassDeviceOutputBackend? _diagnosticInstance;
 
         public int HeardLatencyMilliseconds => Math.Max(0, Bass.Info.Latency);
         public AudioOutputMetrics Metrics => default;
@@ -30,6 +36,7 @@ namespace YARG.Audio.BASS
         public BassDeviceOutputBackend()
         {
             _idleTimer = new Timer(OnIdleTimer, null, Timeout.Infinite, Timeout.Infinite);
+            _diagnosticInstance = this;
         }
 
         public bool Initialize(BassOutputDevice device)
@@ -89,9 +96,57 @@ namespace YARG.Audio.BASS
         public int PlaySong(int tempoStreamHandle, bool restart)
         {
             int mixerHandle = SongMixerHandle(tempoStreamHandle);
+            _lastAvailableBeforeRestart = GetAvailableBytes(mixerHandle);
+
+            // A restart is preceded by ResetSongAfterSeek(), so resetting here would clear the
+            // buffer a second time. Fill the playback buffer before resuming, then play without
+            // another reset so a managed GC has more than the initial startup fill to absorb.
             Bass.ChannelUpdate(mixerHandle, 0);
-            return Bass.ChannelPlay(mixerHandle, Restart: restart) ? 0 : (int) Bass.LastError;
+            _lastAvailableAfterUpdate = GetAvailableBytes(mixerHandle);
+            if (!Bass.ChannelPlay(mixerHandle, Restart: false))
+            {
+                return (int) Bass.LastError;
+            }
+            _lastAvailableAfterPlay = GetAvailableBytes(mixerHandle);
+            return 0;
         }
+
+        public static string GetDiagnostics()
+        {
+            BassDeviceOutputBackend? backend = _diagnosticInstance;
+            if (backend == null || backend._disposed)
+            {
+                return "not active";
+            }
+
+            var diagnostics = new StringBuilder();
+            diagnostics.AppendFormat(
+                "last-play available B: before={0}, updated={1}, playing={2}",
+                backend._lastAvailableBeforeRestart,
+                backend._lastAvailableAfterUpdate,
+                backend._lastAvailableAfterPlay);
+
+            foreach (int mixerHandle in backend._songMixers.Values)
+            {
+                int availableBytes = GetAvailableBytes(mixerHandle);
+                double availableSeconds = availableBytes >= 0
+                    ? Bass.ChannelBytes2Seconds(mixerHandle, availableBytes)
+                    : -1;
+                Bass.ChannelGetAttribute(mixerHandle, ChannelAttribute.Buffer,
+                    out float bufferSeconds);
+                diagnostics.AppendFormat(
+                    "; mixer={0}, state={1}, available={2} B/{3:0.###} ms, target={4:0.###} ms",
+                    mixerHandle,
+                    Bass.ChannelIsActive(mixerHandle),
+                    availableBytes,
+                    availableSeconds * 1000,
+                    bufferSeconds * 1000);
+            }
+            return diagnostics.ToString();
+        }
+
+        private static int GetAvailableBytes(int mixerHandle) =>
+            Bass.ChannelGetData(mixerHandle, IntPtr.Zero, (int) DataFlags.Available);
 
         public int PauseSong(int tempoStreamHandle)
         {
@@ -359,6 +414,10 @@ namespace YARG.Audio.BASS
                 return;
             }
             _disposed = true;
+            if (ReferenceEquals(_diagnosticInstance, this))
+            {
+                _diagnosticInstance = null;
+            }
             _idleTimer.Change(Timeout.Infinite, Timeout.Infinite);
             foreach (int tempoStreamHandle in new List<int>(_songMixers.Keys))
             {
