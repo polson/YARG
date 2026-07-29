@@ -197,9 +197,23 @@ namespace YARG.Audio.BASS
 
         internal void SetPaused(bool paused)
         {
-            // Mixer pause controls consumption. Keeping queue full makes resume immediate.
-            if (!paused)
+            lock (_lifecycleLock)
             {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                lock (_renderLock)
+                {
+                    Volatile.Write(ref _context->Paused, paused ? 1 : 0);
+                    if (!Bass.ChannelSetPosition(_streamHandle, 0, PositionFlags.Bytes))
+                    {
+                        YargLogger.LogFormatError("Failed to flush paused one-shot stream: {0}",
+                            Bass.LastError);
+                    }
+                    FillQueue();
+                }
                 _renderWake.Set();
             }
         }

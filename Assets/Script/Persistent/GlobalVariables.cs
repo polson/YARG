@@ -134,6 +134,10 @@ namespace YARG
                 YargLogger.LogFormatInfo("Standard output before GC: {0}",
                     BassDeviceOutputBackend.GetDiagnostics());
                 GC.Collect();
+                // A full collection can drain a one-shot push stream while the native song
+                // output continues consuming buffered audio. Re-anchor scheduled effects to
+                // the song mixer so the metronome does not retain that underrun as an offset.
+                BassOneShotChannel.ResynchronizeAll();
                 YargLogger.LogFormatInfo("Garbage Collection complete; reads after: {0}",
                     BassStreamProcedures.GetDiagnostics());
                 YargLogger.LogFormatInfo("Standard output after GC: {0}",
