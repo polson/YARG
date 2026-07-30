@@ -30,6 +30,9 @@ public:
         return static_cast<int>(frames);
     }
     int lastError() const noexcept override { return 0; }
+    std::int64_t position(std::uint32_t, std::uint32_t delayBytes) noexcept override {
+        return static_cast<std::int64_t>(delayBytes);
+    }
     bool prepared() const noexcept { return prepared_.load(); }
 private:
     std::size_t channels_;
@@ -42,6 +45,7 @@ public:
     bool prepareThread() noexcept override { return true; }
     int read(float*, std::size_t) noexcept override { return -1; }
     int lastError() const noexcept override { return 37; }
+    std::int64_t position(std::uint32_t, std::uint32_t) noexcept override { return -1; }
 };
 
 } // namespace
@@ -66,6 +70,14 @@ void runRenderAheadMixerTests() {
                std::chrono::steady_clock::now() < deadline) {
             std::this_thread::sleep_for(1ms);
         }
+        REQUIRE(renderer.queuedFrames() >= renderer.targetFrames());
+        REQUIRE(renderer.sourcePosition(1, 42) == 42);
+
+        REQUIRE(renderer.clear());
+        REQUIRE(renderer.queuedFrames() == 0);
+        std::this_thread::sleep_for(5ms);
+        REQUIRE(renderer.queuedFrames() == 0);
+        REQUIRE(renderer.prefill(2s));
         REQUIRE(renderer.queuedFrames() >= renderer.targetFrames());
         renderer.stop();
     }

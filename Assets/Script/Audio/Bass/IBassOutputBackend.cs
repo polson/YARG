@@ -17,6 +17,7 @@ namespace YARG.Audio.BASS
         bool IsSongPlaying(int tempoStreamHandle);
         int PlaySong(int tempoStreamHandle, bool restart);
         int PauseSong(int tempoStreamHandle);
+        void PrepareSongForSeek(int tempoStreamHandle);
         void ResetSongAfterSeek(int tempoStreamHandle);
         void FadeSong(int tempoStreamHandle, double volume, int durationMilliseconds);
         double GetSongVolume(int tempoStreamHandle);

@@ -25,6 +25,10 @@ public:
     }
 
     int lastError() const noexcept override { return bass_.bassError(); }
+    std::int64_t position(std::uint32_t sourceHandle,
+        std::uint32_t delayBytes) noexcept override {
+        return bass_.mixerGetPosition(sourceHandle, delayBytes);
+    }
 
 private:
     BassBindings& bass_;
@@ -36,6 +40,8 @@ private:
 AsioMixerRouter::AsioMixerRouter(const yarg_asio_router_config& config)
     : config_(config), directScratch_(
         static_cast<std::size_t>(config.callback_frames) * config.channels) {
+    LARGE_INTEGER frequency{};
+    if (QueryPerformanceFrequency(&frequency)) performanceFrequency_ = frequency.QuadPart;
 }
 
 AsioMixerRouter::~AsioMixerRouter() {
@@ -87,7 +93,9 @@ int AsioMixerRouter::attach(std::uint32_t mixer,
 
 int AsioMixerRouter::prefill(std::uint32_t mixer,
     std::uint32_t timeoutMilliseconds) noexcept {
-    if (!buffered_ || mixer != bufferedHandle_ || outputEnabled_.load())
+    // Refill while ASIO runs after flush. Song gate stays closed until target is ready;
+    // direct live audio continues through callback.
+    if (!buffered_ || mixer != bufferedHandle_)
         return YARG_AUDIO_ERROR_INVALID_STATE;
 
     state_.store(YARG_ASIO_ROUTER_PREFILLING, std::memory_order_release);
@@ -101,6 +109,7 @@ int AsioMixerRouter::prefill(std::uint32_t mixer,
         return YARG_AUDIO_ERROR_TIMEOUT;
     }
     state_.store(YARG_ASIO_ROUTER_READY, std::memory_order_release);
+    songEnabled_.store(true, std::memory_order_release);
     return YARG_AUDIO_OK;
 }
 
@@ -129,10 +138,45 @@ int AsioMixerRouter::enableOutput(std::uint32_t firstChannel) noexcept {
 
 int AsioMixerRouter::flush(std::uint32_t mixer) noexcept {
     if (!buffered_ || mixer != bufferedHandle_) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
-    if (outputEnabled_.load()) return YARG_AUDIO_ERROR_INVALID_STATE;
+    songEnabled_.store(false, std::memory_order_release);
+    while (activeSongConsumers_.load(std::memory_order_acquire) != 0) {
+        std::this_thread::yield();
+    }
     if (!buffered_->clear()) return YARG_AUDIO_ERROR_INTERNAL;
     state_.store(YARG_ASIO_ROUTER_ATTACHED, std::memory_order_release);
     return YARG_AUDIO_OK;
+}
+
+int64_t AsioMixerRouter::getSourcePosition(std::uint32_t source,
+    std::uint32_t outputLatencyFrames, int& error) noexcept {
+    if (!buffered_ || source == 0) {
+        error = YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+        return -1;
+    }
+
+    std::uint64_t elapsedFrames = 0;
+    const auto callbackTimestamp = callbackTimestamp_.load(std::memory_order_acquire);
+    if (callbackTimestamp > 0 && performanceFrequency_ > 0) {
+        LARGE_INTEGER now{};
+        QueryPerformanceCounter(&now);
+        const auto elapsed = std::max<std::int64_t>(0, now.QuadPart - callbackTimestamp);
+        elapsedFrames = static_cast<std::uint64_t>(elapsed) * config_.sample_rate /
+            static_cast<std::uint64_t>(performanceFrequency_);
+    }
+
+    const auto queued = static_cast<std::uint64_t>(buffered_->queuedFrames());
+    const auto hardwareDelay = outputLatencyFrames > elapsedFrames
+        ? outputLatencyFrames - elapsedFrames : 0;
+    const auto delayFrames = std::min<std::uint64_t>(
+        queued + hardwareDelay, UINT32_MAX / (config_.channels * sizeof(float)));
+    const auto delayBytes = static_cast<std::uint32_t>(
+        delayFrames * config_.channels * sizeof(float));
+    auto position = buffered_->sourcePosition(source, delayBytes);
+    if (position < 0 && bass_.bassError() == 37) {
+        position = buffered_->sourcePosition(source, 0);
+    }
+    error = position < 0 ? YARG_AUDIO_ERROR_BASS : YARG_AUDIO_OK;
+    return position;
 }
 
 int AsioMixerRouter::getStats(yarg_asio_router_stats& stats) const noexcept {
@@ -177,8 +221,20 @@ std::uint32_t AsioMixerRouter::processOutput(void* buffer, std::uint32_t length)
         bytesPerFrame == 0 || length % bytesPerFrame != 0) return length;
 
     const auto frames = length / bytesPerFrame;
+    LARGE_INTEGER timestamp{};
+    if (QueryPerformanceCounter(&timestamp)) {
+        callbackTimestamp_.store(timestamp.QuadPart, std::memory_order_release);
+    }
     requestedOutputFrames_.fetch_add(frames, std::memory_order_relaxed);
-    const auto consumed = buffered_->consume(output, frames);
+    std::size_t consumed = 0;
+    const bool songRequested = songEnabled_.load(std::memory_order_acquire);
+    if (songRequested) {
+        activeSongConsumers_.fetch_add(1, std::memory_order_acq_rel);
+        if (songEnabled_.load(std::memory_order_acquire)) {
+            consumed = buffered_->consume(output, frames);
+        }
+        activeSongConsumers_.fetch_sub(1, std::memory_order_acq_rel);
+    }
     consumedSongFrames_.fetch_add(consumed, std::memory_order_relaxed);
     const auto queued = static_cast<std::uint32_t>(buffered_->queuedFrames());
     updateMinimum(queued);
@@ -186,11 +242,11 @@ std::uint32_t AsioMixerRouter::processOutput(void* buffer, std::uint32_t length)
     if (buffered_->failed()) {
         lastError_.store(buffered_->lastError(), std::memory_order_relaxed);
         state_.store(YARG_ASIO_ROUTER_SOURCE_FAILED, std::memory_order_release);
-    } else if (consumed < frames) {
+    } else if (songRequested && consumed < frames) {
         underrunFrames_.fetch_add(frames - consumed, std::memory_order_relaxed);
         underrunEvents_.fetch_add(1, std::memory_order_relaxed);
         state_.store(YARG_ASIO_ROUTER_STARVED, std::memory_order_release);
-    } else if (!buffered_->failed()) {
+    } else if (songRequested) {
         state_.store(YARG_ASIO_ROUTER_RUNNING, std::memory_order_release);
     }
 

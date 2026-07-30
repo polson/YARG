@@ -110,22 +110,24 @@ namespace YARG.Audio.BASS
         public bool AttachMixer(int mixerHandle, int bufferMilliseconds)
         {
             ThrowIfDisposed();
-            if (mixerHandle <= 0 || bufferMilliseconds < 0)
+            // BASS handles are DWORDs exposed by ManagedBass as signed ints. High-bit handles
+            // are valid and must be passed to native code without numeric conversion checks.
+            if (mixerHandle == 0 || bufferMilliseconds < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(mixerHandle));
             }
-            return Native.AttachMixer(_handle, checked((uint) mixerHandle),
+            return Native.AttachMixer(_handle, unchecked((uint) mixerHandle),
                 checked((uint) bufferMilliseconds)) == 0;
         }
 
         public bool Prefill(int mixerHandle, int timeoutMilliseconds)
         {
             ThrowIfDisposed();
-            if (mixerHandle <= 0 || timeoutMilliseconds < 0)
+            if (mixerHandle == 0 || timeoutMilliseconds < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(mixerHandle));
             }
-            return Native.Prefill(_handle, checked((uint) mixerHandle),
+            return Native.Prefill(_handle, unchecked((uint) mixerHandle),
                 checked((uint) timeoutMilliseconds)) == 0;
         }
 
@@ -142,13 +144,21 @@ namespace YARG.Audio.BASS
         public bool FlushMixer(int mixerHandle)
         {
             ThrowIfDisposed();
-            return Native.FlushMixer(_handle, checked((uint) mixerHandle)) == 0;
+            if (mixerHandle == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(mixerHandle));
+            }
+            return Native.FlushMixer(_handle, unchecked((uint) mixerHandle)) == 0;
         }
 
         public long GetSourcePosition(int sourceHandle, int hardwareLatencyFrames)
         {
             ThrowIfDisposed();
-            long position = Native.GetSourcePosition(_handle, checked((uint) sourceHandle),
+            if (sourceHandle == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(sourceHandle));
+            }
+            long position = Native.GetSourcePosition(_handle, unchecked((uint) sourceHandle),
                 checked((uint) Math.Max(0, hardwareLatencyFrames)), out int error);
             return error == 0 ? position : -1;
         }

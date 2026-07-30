@@ -20,6 +20,8 @@ public:
     bool load() noexcept;
     bool setDevice(int device) const noexcept;
     int getData(std::uint32_t channel, void* buffer, std::uint32_t bytes) const noexcept;
+    std::int64_t mixerGetPosition(std::uint32_t channel,
+        std::uint32_t delayBytes) const noexcept;
     int bassError() const noexcept;
 
     bool asioEnable(std::uint32_t channel, AsioProc proc, void* user) const noexcept;
@@ -32,12 +34,16 @@ public:
 private:
     HMODULE bass_ = nullptr;
     HMODULE asio_ = nullptr;
+    HMODULE mix_ = nullptr;
     bool ownsBass_ = false;
     bool ownsAsio_ = false;
+    bool ownsMix_ = false;
 
     int (WINAPI* setDevice_)(std::uint32_t) = nullptr;
     std::uint32_t (WINAPI* getData_)(std::uint32_t, void*, std::uint32_t) = nullptr;
     int (WINAPI* bassError_)() = nullptr;
+    std::uint64_t (WINAPI* mixerGetPosition_)(
+        std::uint32_t, std::uint32_t, std::uint32_t) = nullptr;
     int (WINAPI* asioEnable_)(int, std::uint32_t, AsioProc, void*) = nullptr;
     int (WINAPI* asioJoin_)(int, std::uint32_t, std::uint32_t) = nullptr;
     int (WINAPI* asioSetFormat_)(int, std::uint32_t, std::uint32_t) = nullptr;

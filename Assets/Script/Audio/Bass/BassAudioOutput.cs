@@ -171,6 +171,8 @@ namespace YARG.Audio.BASS
         internal int PlaySong(int tempoStreamHandle, bool restart) =>
             _backend?.PlaySong(tempoStreamHandle, restart) ?? -1;
         internal int PauseSong(int tempoStreamHandle) => _backend?.PauseSong(tempoStreamHandle) ?? -1;
+        internal void PrepareSongForSeek(int tempoStreamHandle) =>
+            _backend?.PrepareSongForSeek(tempoStreamHandle);
         internal void ResetSongAfterSeek(int tempoStreamHandle) => _backend?.ResetSongAfterSeek(tempoStreamHandle);
         internal void FadeSong(int tempoStreamHandle, double volume, int durationMilliseconds) =>
             _backend?.FadeSong(tempoStreamHandle, volume, durationMilliseconds);

@@ -2,7 +2,9 @@
 
 ## Status
 
-Design plan only. API names and signatures below are provisional. First implementation should be a Windows x64 spike behind a fallback switch.
+Phases 0-5 implemented as Windows x64 spike. Native build/unit tests pass; backend now
+selects native router with managed fallback. ASIO hardware, driver-reset, seek/position,
+and long-running stress validation remain Phase 6 work.
 
 ## Objective
 

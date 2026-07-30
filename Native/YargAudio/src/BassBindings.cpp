@@ -22,22 +22,32 @@ HMODULE acquire(const wchar_t* name, bool& owned) noexcept {
 
 BassBindings::~BassBindings() {
     if (ownsAsio_ && asio_) FreeLibrary(asio_);
+    if (ownsMix_ && mix_) FreeLibrary(mix_);
     if (ownsBass_ && bass_) FreeLibrary(bass_);
 }
 
 bool BassBindings::load() noexcept {
     bass_ = acquire(L"bass.dll", ownsBass_);
     asio_ = acquire(L"bassasio.dll", ownsAsio_);
-    return bass_ && asio_ &&
+    mix_ = acquire(L"bassmix.dll", ownsMix_);
+    return bass_ && asio_ && mix_ &&
         bind(bass_, "BASS_SetDevice", setDevice_) &&
         bind(bass_, "BASS_ChannelGetData", getData_) &&
         bind(bass_, "BASS_ErrorGetCode", bassError_) &&
+        bind(mix_, "BASS_Mixer_ChannelGetPosition", mixerGetPosition_) &&
         bind(asio_, "BASS_ASIO_ChannelEnable", asioEnable_) &&
         bind(asio_, "BASS_ASIO_ChannelJoin", asioJoin_) &&
         bind(asio_, "BASS_ASIO_ChannelSetFormat", asioSetFormat_) &&
         bind(asio_, "BASS_ASIO_ChannelSetRate", asioSetRate_) &&
         bind(asio_, "BASS_ASIO_ChannelReset", asioReset_) &&
         bind(asio_, "BASS_ASIO_ErrorGetCode", asioError_);
+}
+
+std::int64_t BassBindings::mixerGetPosition(std::uint32_t channel,
+    std::uint32_t delayBytes) const noexcept {
+    constexpr std::uint64_t Error = UINT64_MAX;
+    const auto result = mixerGetPosition_(channel, 0, delayBytes);
+    return result == Error ? -1 : static_cast<std::int64_t>(result);
 }
 
 bool BassBindings::setDevice(int device) const noexcept {

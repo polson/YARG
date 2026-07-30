@@ -103,6 +103,8 @@ namespace YARG.Audio.BASS
             return Bass.ChannelPause(SongMixerHandle(tempoStreamHandle)) ? 0 : (int) Bass.LastError;
         }
 
+        public void PrepareSongForSeek(int tempoStreamHandle) { }
+
         public void ResetSongAfterSeek(int tempoStreamHandle)
         {
             if (!Bass.ChannelSetPosition(SongMixerHandle(tempoStreamHandle), 0, PositionFlags.Bytes))

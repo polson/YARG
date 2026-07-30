@@ -184,6 +184,16 @@ int32_t YARG_AUDIO_CALL yarg_one_shot_stream_set_gain(
     return stream->value->setGain(gain);
 }
 
+int64_t YARG_AUDIO_CALL yarg_asio_router_get_source_position(yarg_asio_router* router,
+    uint32_t source, uint32_t outputLatencyFrames, int32_t* error) {
+    if (!router || !error) return -1;
+    int result = YARG_AUDIO_OK;
+    const auto position = router->value.getSourcePosition(
+        source, outputLatencyFrames, result);
+    *error = result;
+    return position;
+}
+
 int32_t YARG_AUDIO_CALL yarg_one_shot_stream_detach(
     yarg_one_shot_stream* stream, int32_t* bassError) {
     if (bassError) *bassError = 0;

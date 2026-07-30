@@ -91,6 +91,7 @@ namespace YARG.Audio.BASS
 
         public void PrepareForSeek()
         {
+            _audioOutput.PrepareSongForSeek(TempoStreamHandle);
             foreach (var channel in _oneShotChannels)
             {
                 channel.PrepareForSeek();

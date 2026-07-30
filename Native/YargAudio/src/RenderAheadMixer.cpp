@@ -49,6 +49,7 @@ bool RenderAheadMixer::start() {
 }
 
 bool RenderAheadMixer::prefill(std::chrono::milliseconds timeout) {
+    if (!start()) return false;
     std::unique_lock lock(mutex_);
     wake_.notify_one();
     return prefilled_.wait_for(lock, timeout, [this] {
@@ -74,7 +75,13 @@ bool RenderAheadMixer::clear() {
     // Stop serializes with any in-flight source pull before indices move.
     stop();
     ring_.clear();
-    return start();
+    return true;
+}
+
+std::int64_t RenderAheadMixer::sourcePosition(std::uint32_t sourceHandle,
+    std::uint32_t delayBytes) noexcept {
+    std::lock_guard lock(sourceMutex_);
+    return source_->position(sourceHandle, delayBytes);
 }
 
 std::size_t RenderAheadMixer::consume(float* samples, std::size_t frames) noexcept {
@@ -110,7 +117,11 @@ void RenderAheadMixer::run() noexcept {
         const auto freeFrames = ring_.freeSpace();
         const auto requested = std::min(RenderChunkFrames, freeFrames);
         const auto started = std::chrono::steady_clock::now();
-        const int rendered = source_->read(scratch_.data(), requested);
+        int rendered;
+        {
+            std::lock_guard sourceLock(sourceMutex_);
+            rendered = source_->read(scratch_.data(), requested);
+        }
         const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - started).count();
         updateMaximum(static_cast<std::uint64_t>(elapsed));

@@ -20,6 +20,8 @@ public:
     virtual bool prepareThread() noexcept = 0;
     virtual int read(float* samples, std::size_t frames) noexcept = 0;
     virtual int lastError() const noexcept = 0;
+    virtual std::int64_t position(std::uint32_t sourceHandle,
+        std::uint32_t delayBytes) noexcept = 0;
 };
 
 class RenderAheadMixer {
@@ -38,6 +40,8 @@ public:
     void stop() noexcept;
     bool clear();
     std::size_t consume(float* samples, std::size_t frames) noexcept;
+    std::int64_t sourcePosition(std::uint32_t sourceHandle,
+        std::uint32_t delayBytes) noexcept;
 
     std::size_t queuedFrames() const noexcept { return ring_.available(); }
     std::size_t targetFrames() const noexcept { return targetFrames_; }
@@ -57,6 +61,7 @@ private:
     AudioRingBuffer ring_;
     std::vector<float> scratch_;
     std::mutex mutex_;
+    std::mutex sourceMutex_;
     std::condition_variable wake_;
     std::condition_variable prefilled_;
     std::thread worker_;
