@@ -3,6 +3,7 @@ using System;
 using System.Threading;
 using ManagedBass;
 using ManagedBass.Mix;
+using YARG.Audio.BASS.Effects;
 using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
@@ -15,10 +16,9 @@ namespace YARG.Audio.BASS
         public string Name { get; }
         public int Group { get; }
         public int SampleRate { get; }
-        public int InputLatencyFrames { get; }
 
-        internal AsioInputDescriptor(string driverId, string driverName, int channelIndex,
-            string name, int group, int sampleRate, int inputLatencyFrames)
+        internal AsioInputDescriptor(string driverId, string driverName, int channelIndex, string name, int group,
+            int sampleRate)
         {
             DriverId = driverId;
             DriverName = driverName;
@@ -26,7 +26,6 @@ namespace YARG.Audio.BASS
             Name = name;
             Group = group;
             SampleRate = sampleRate;
-            InputLatencyFrames = inputLatencyFrames;
         }
 
         public override string ToString() => $"{ChannelIndex}: {Name}";
@@ -49,44 +48,41 @@ namespace YARG.Audio.BASS
         private readonly object _lock = new();
 
         private BassAsioInputLease? _lease;
-        private bool _valid = true;
-        private bool _monitorEnabled;
-        private bool _attached;
+        private bool _invalidated;
+        private bool _monitoringEnabled;
+        private bool _isAttached;
 
         private int _rootHandle;
         private int _monitorHandle;
         private int _analysisHandle;
         private BassFreeverbDsp? _reverb;
 
-        public int ChannelIndex { get; }
-        public AsioInputDescriptor Descriptor { get; private set; }
+        public int ChannelIndex => Descriptor.ChannelIndex;
+        public AsioInputDescriptor Descriptor { get; }
         internal int RootHandle => _rootHandle;
-        internal bool IsAttached => _attached;
+        internal bool IsAttached => _isAttached;
 
-        private BassAsioInput(string driverId, string driverName, int channelIndex,
-            string name, int group, int sampleRate, int rootHandle)
+        private BassAsioInput(AsioInputDescriptor descriptor, int rootHandle)
         {
-            ChannelIndex = channelIndex;
+            Descriptor = descriptor;
             _rootHandle = rootHandle;
-            Descriptor = new AsioInputDescriptor(driverId, driverName, channelIndex,
-                name, group, sampleRate, 0);
         }
 
-        public static BassAsioInput? Create(string driverId, string driverName,
-            int channelIndex, string name, int group, int sampleRate)
+        public static BassAsioInput? Create(string driverId, string driverName, int channelIndex, string name,
+            int group, int sampleRate)
         {
             int rootHandle = 0;
             try
             {
-                rootHandle = Bass.CreateStream(sampleRate, 1,
-                    BassFlags.Float | BassFlags.Decode, StreamProcedureType.Push);
+                rootHandle = Bass.CreateStream(sampleRate, 1, BassFlags.Float | BassFlags.Decode,
+                    StreamProcedureType.Push);
                 if (rootHandle == 0)
                 {
                     return null;
                 }
 
-                var input = new BassAsioInput(driverId, driverName, channelIndex, name, group,
-                    sampleRate, rootHandle);
+                var descriptor = new AsioInputDescriptor(driverId, driverName, channelIndex, name, group, sampleRate);
+                var input = new BassAsioInput(descriptor, rootHandle);
                 rootHandle = 0;
                 return input;
             }
@@ -101,7 +97,7 @@ namespace YARG.Audio.BASS
 
         internal bool AttachToOutputMixer(int outputMixerHandle)
         {
-            if (_attached)
+            if (_isAttached)
             {
                 return true;
             }
@@ -123,8 +119,7 @@ namespace YARG.Audio.BASS
                 // the realtime output has already pulled, so it cannot stall monitoring.
                 analysisHandle = BassMix.CreateSplitStream(_rootHandle,
                     BassFlags.Decode | BassFlags.SplitPosition | BassFlags.SplitSlave, null);
-                if (analysisHandle == 0 ||
-                    !Bass.ChannelSetAttribute(monitorHandle, ChannelAttribute.Volume, 0))
+                if (analysisHandle == 0 || !Bass.ChannelSetAttribute(monitorHandle, ChannelAttribute.Volume, 0))
                 {
                     return false;
                 }
@@ -144,7 +139,7 @@ namespace YARG.Audio.BASS
                 _monitorHandle = monitorHandle;
                 _analysisHandle = analysisHandle;
                 _reverb = reverb;
-                _attached = true;
+                _isAttached = true;
 
                 monitorHandle = 0;
                 analysisHandle = 0;
@@ -158,6 +153,7 @@ namespace YARG.Audio.BASS
                 {
                     Bass.StreamFree(analysisHandle);
                 }
+
                 if (monitorHandle != 0)
                 {
                     Bass.StreamFree(monitorHandle);
@@ -165,28 +161,22 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public void SetInputLatency(int frames)
-        {
-            Descriptor = new AsioInputDescriptor(Descriptor.DriverId, Descriptor.DriverName,
-                Descriptor.ChannelIndex, Descriptor.Name, Descriptor.Group,
-                Descriptor.SampleRate, Math.Max(0, frames));
-        }
-
         public AsioInputAcquireResult TryAcquire(out BassAsioInputLease? lease)
         {
             lock (_lock)
             {
                 lease = null;
-                if (!_valid)
+                if (_invalidated)
                 {
                     return AsioInputAcquireResult.UnavailableChannel;
                 }
+
                 if (_lease != null)
                 {
                     return AsioInputAcquireResult.AlreadyInUse;
                 }
 
-                _lease = lease = new BassAsioInputLease(this, Descriptor);
+                _lease = lease = new BassAsioInputLease(this);
                 return AsioInputAcquireResult.Success;
             }
         }
@@ -195,12 +185,12 @@ namespace YARG.Audio.BASS
         {
             lock (_lock)
             {
-                if (!_valid || !ReferenceEquals(_lease, lease))
+                if (!OwnsLease(lease))
                 {
                     return -1;
                 }
-                return Bass.ChannelGetData(_analysisHandle, buffer,
-                    checked(buffer.Length * sizeof(float)));
+
+                return Bass.ChannelGetData(_analysisHandle, buffer, checked(buffer.Length * sizeof(float)));
             }
         }
 
@@ -208,7 +198,8 @@ namespace YARG.Audio.BASS
         {
             lock (_lock)
             {
-                if (!_valid || !ReferenceEquals(_lease, lease) || _analysisHandle == 0)
+                bool canReset = OwnsLease(lease) && _analysisHandle != 0;
+                if (!canReset)
                 {
                     return false;
                 }
@@ -219,11 +210,11 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public bool Owns(BassAsioInputLease lease)
+        public bool IsLeaseActive(BassAsioInputLease lease)
         {
             lock (_lock)
             {
-                return _valid && ReferenceEquals(_lease, lease);
+                return OwnsLease(lease);
             }
         }
 
@@ -231,17 +222,18 @@ namespace YARG.Audio.BASS
         {
             lock (_lock)
             {
-                if (!_valid || !ReferenceEquals(_lease, lease))
+                if (!OwnsLease(lease))
                 {
                     return false;
                 }
+
                 if (!Bass.ChannelSetAttribute(_monitorHandle, ChannelAttribute.Volume, volume))
                 {
-                    YargLogger.LogFormatError("Failed to monitor ASIO input {0}: {1}",
-                        ChannelIndex, Bass.LastError);
+                    YargLogger.LogFormatError("Failed to monitor ASIO input {0}: {1}", ChannelIndex, Bass.LastError);
                     return false;
                 }
-                _monitorEnabled = true;
+
+                _monitoringEnabled = true;
                 return true;
             }
         }
@@ -250,7 +242,7 @@ namespace YARG.Audio.BASS
         {
             lock (_lock)
             {
-                if (_valid && _monitorEnabled && ReferenceEquals(_lease, lease))
+                if (OwnsLease(lease) && _monitoringEnabled)
                 {
                     Bass.ChannelSetAttribute(_monitorHandle, ChannelAttribute.Volume, volume);
                 }
@@ -285,53 +277,64 @@ namespace YARG.Audio.BASS
             BassAsioInputLease? lease;
             lock (_lock)
             {
-                if (!_valid)
+                if (_invalidated)
                 {
                     return;
                 }
-                _valid = false;
+
+                _invalidated = true;
                 DisableMonitor();
                 lease = _lease;
                 _lease = null;
             }
-            lease?.InvalidateFromBackend();
+
+            lease?.Invalidate();
         }
 
         public void FreeNativeStreams()
         {
-            if (_rootHandle != 0)
+            if (_rootHandle == 0)
             {
-                if (_attached)
-                {
-                    BassMix.MixerRemoveChannel(_monitorHandle);
-                    _attached = false;
-                }
-
-                _reverb?.Dispose();
-                _reverb = null;
-                if (_analysisHandle != 0)
-                {
-                    Bass.StreamFree(_analysisHandle);
-                    _analysisHandle = 0;
-                }
-                if (_monitorHandle != 0)
-                {
-                    Bass.StreamFree(_monitorHandle);
-                    _monitorHandle = 0;
-                }
-                Bass.StreamFree(_rootHandle);
-                _rootHandle = 0;
+                return;
             }
+
+            if (_isAttached)
+            {
+                BassMix.MixerRemoveChannel(_monitorHandle);
+                _isAttached = false;
+            }
+
+            _reverb?.Dispose();
+            _reverb = null;
+            if (_analysisHandle != 0)
+            {
+                Bass.StreamFree(_analysisHandle);
+                _analysisHandle = 0;
+            }
+
+            if (_monitorHandle != 0)
+            {
+                Bass.StreamFree(_monitorHandle);
+                _monitorHandle = 0;
+            }
+
+            Bass.StreamFree(_rootHandle);
+            _rootHandle = 0;
         }
 
         private void DisableMonitor()
         {
-            if (_monitorEnabled)
+            if (!_monitoringEnabled)
             {
-                Bass.ChannelSetAttribute(_monitorHandle, ChannelAttribute.Volume, 0);
-                _monitorEnabled = false;
+                return;
             }
+
+            Bass.ChannelSetAttribute(_monitorHandle, ChannelAttribute.Volume, 0);
+            _monitoringEnabled = false;
         }
+
+        private bool OwnsLease(BassAsioInputLease lease) =>
+            !_invalidated && ReferenceEquals(_lease, lease);
     }
 
     /// <summary>
@@ -340,15 +343,17 @@ namespace YARG.Audio.BASS
     internal sealed class BassAsioInputLease : IDisposable
     {
         private readonly BassAsioInput _input;
-        private int _valid = 1;
+        private int _released;
 
         public AsioInputDescriptor Descriptor { get; }
-        public bool IsValid => Volatile.Read(ref _valid) != 0 && _input.Owns(this);
+        public bool IsValid => !IsReleased && _input.IsLeaseActive(this);
 
-        internal BassAsioInputLease(BassAsioInput input, AsioInputDescriptor descriptor)
+        private bool IsReleased => Volatile.Read(ref _released) != 0;
+
+        internal BassAsioInputLease(BassAsioInput input)
         {
             _input = input;
-            Descriptor = descriptor;
+            Descriptor = input.Descriptor;
         }
 
         public int Read(float[] buffer)
@@ -357,46 +362,59 @@ namespace YARG.Audio.BASS
             {
                 throw new ArgumentNullException(nameof(buffer));
             }
-            return Volatile.Read(ref _valid) != 0 ? _input.Read(this, buffer) : -1;
+
+            if (IsReleased)
+            {
+                return -1;
+            }
+
+            return _input.Read(this, buffer);
         }
 
-        public bool Reset() =>
-            Volatile.Read(ref _valid) != 0 && _input.Reset(this);
+        public bool Reset() => !IsReleased && _input.Reset(this);
 
         public bool EnableMonitoring(double volume)
         {
             ValidateVolume(volume);
-            return IsValid && _input.EnableMonitoring(this, volume);
+            return !IsReleased && _input.EnableMonitoring(this, volume);
         }
 
         public void SetMonitoringLevel(double volume)
         {
             ValidateVolume(volume);
-            if (Volatile.Read(ref _valid) != 0)
+            if (!IsReleased)
             {
                 _input.SetMonitoringLevel(this, volume);
             }
         }
 
-        public void DisableMonitoring() => _input.DisableMonitoring(this);
+        public void DisableMonitoring()
+        {
+            if (!IsReleased)
+            {
+                _input.DisableMonitoring(this);
+            }
+        }
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref _valid, 0) == 0)
+            if (Interlocked.Exchange(ref _released, 1) != 0)
             {
                 return;
             }
+
             _input.Release(this);
         }
 
-        internal void InvalidateFromBackend()
+        internal void Invalidate()
         {
-            Interlocked.Exchange(ref _valid, 0);
+            Interlocked.Exchange(ref _released, 1);
         }
 
         private static void ValidateVolume(double volume)
         {
-            if (double.IsNaN(volume) || double.IsInfinity(volume) || volume < 0)
+            bool isInvalid = double.IsNaN(volume) || double.IsInfinity(volume) || volume < 0;
+            if (isInvalid)
             {
                 throw new ArgumentOutOfRangeException(nameof(volume));
             }

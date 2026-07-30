@@ -1,12 +1,12 @@
-using System;
 using System.Runtime.InteropServices;
 using System.Threading;
 using AOT;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
+using Unity.Mathematics;
 
-namespace YARG.Audio.BASS
+namespace YARG.Audio.BASS.Effects
 {
     [StructLayout(LayoutKind.Sequential)]
     internal struct GainNativeContext
@@ -41,14 +41,12 @@ namespace YARG.Audio.BASS
 
         public static void SetGain(GainNativeContext* context, float gain)
         {
-            int bits = *(int*) &gain;
-            Interlocked.Exchange(ref context->GainBits, bits);
+            Interlocked.Exchange(ref context->GainBits, math.asint(gain));
         }
 
         [BurstCompile(CompileSynchronously = true)]
         [MonoPInvokeCallback(typeof(BassNativeDspProcedure))]
-        public static void ProcessAudio(
-            int dspHandle, int channelHandle, void* buffer, int length, void* user)
+        public static void ProcessAudio(int dspHandle, int channelHandle, void* buffer, int length, void* user)
         {
             var context = (GainNativeContext*) user;
             if (context == null || buffer == null || length <= 0)
@@ -57,7 +55,7 @@ namespace YARG.Audio.BASS
             }
 
             int gainBits = Interlocked.CompareExchange(ref context->GainBits, 0, 0);
-            float gain = *(float*) &gainBits;
+            float gain = math.asfloat(gainBits);
             Process((float*) buffer, length / sizeof(float), gain);
         }
 

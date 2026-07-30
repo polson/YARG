@@ -4,7 +4,7 @@ using ManagedBass;
 using ManagedBass.Mix;
 using YARG.Core.Logging;
 
-namespace YARG.Audio.BASS
+namespace YARG.Audio.BASS.Effects
 {
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal unsafe delegate int BassNativeStreamProcedure(int streamHandle, void* buffer, int length, void* user);

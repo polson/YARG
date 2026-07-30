@@ -13,8 +13,10 @@ namespace YARG.Audio.BASS
     /// </summary>
     internal sealed class BassMonitorSource
     {
+        private const BassFlags RequiredStreamFlags = BassFlags.Float | BassFlags.Decode;
+
         private readonly ResetKind _resetKind;
-        private readonly Action? _resetEffects;
+        private readonly Action?   _resetEffects;
 
         public int Handle { get; }
 
@@ -31,29 +33,18 @@ namespace YARG.Audio.BASS
         public static BassMonitorSource? CreateSplit(int handle, Action? resetEffects = null) =>
             Create(handle, ResetKind.Split, resetEffects);
 
-        private static BassMonitorSource? Create(int handle, ResetKind resetKind,
-            Action? resetEffects)
+        private static BassMonitorSource? Create(int handle, ResetKind resetKind, Action? resetEffects)
         {
-            var info = Bass.ChannelGetInfo(handle);
-            const BassFlags requiredFlags = BassFlags.Float | BassFlags.Decode;
-            if (handle == 0 || (info.Flags & requiredFlags) != requiredFlags)
+            var streamInfo = Bass.ChannelGetInfo(handle);
+            if (handle == 0 || !HasRequiredStreamFlags(streamInfo.Flags))
             {
-                YargLogger.LogFormatError(
-                    "Monitor source {0} must be a float decoding stream (flags: {1})",
-                    handle, info.Flags);
+                YargLogger.LogFormatError("Monitor source {0} must be a float decoding stream (flags: {1})", handle,
+                    streamInfo.Flags);
                 return null;
             }
 
-            if (resetKind == ResetKind.Push && Bass.StreamPutData(handle, IntPtr.Zero, 0) < 0)
+            if (!SupportsResetKind(handle, resetKind))
             {
-                YargLogger.LogFormatError("Monitor source {0} is not a push stream: {1}",
-                    handle, Bass.LastError);
-                return null;
-            }
-            if (resetKind == ResetKind.Split && BassMix.SplitStreamGetSource(handle) == 0)
-            {
-                YargLogger.LogFormatError("Monitor source {0} is not a splitter stream: {1}",
-                    handle, Bass.LastError);
                 return null;
             }
 
@@ -64,40 +55,86 @@ namespace YARG.Audio.BASS
 
         public bool MoveToDevice(int deviceId)
         {
-            int currentDevice = GetDevice();
-            if (currentDevice < 0)
+            int sourceDevice = GetDevice();
+            if (sourceDevice < 0)
             {
                 YargLogger.LogFormatError("Failed to get monitor source device: {0}", Bass.LastError);
                 return false;
             }
-            if (currentDevice == deviceId)
+
+            if (sourceDevice == deviceId)
             {
                 return true;
             }
+
             if (Bass.ChannelSetDevice(Handle, deviceId))
             {
                 return true;
             }
 
-            YargLogger.LogFormatError("Failed to move monitor source to BASS device {0}: {1}",
-                deviceId, Bass.LastError);
+            YargLogger.LogFormatError("Failed to move monitor source to BASS device {0}: {1}", deviceId,
+                Bass.LastError);
             return false;
         }
 
         public bool ResetToLive()
         {
-            bool reset = _resetKind switch
+            if (!ResetStream())
             {
-                ResetKind.Push => Bass.ChannelSetPosition(Handle, 0, PositionFlags.Bytes),
-                ResetKind.Split => BassMix.SplitStreamReset(Handle, 0),
-                _ => false,
-            };
-            if (!reset)
-            {
-                YargLogger.LogFormatError("Failed to reset monitor source: {0}", Bass.LastError);
                 return false;
             }
 
+            return ResetEffects();
+        }
+
+        private static bool HasRequiredStreamFlags(BassFlags flags) =>
+            (flags & RequiredStreamFlags) == RequiredStreamFlags;
+
+        private static bool SupportsResetKind(int handle, ResetKind resetKind)
+        {
+            switch (resetKind)
+            {
+                case ResetKind.Push:
+                    if (Bass.StreamPutData(handle, IntPtr.Zero, 0) >= 0)
+                    {
+                        return true;
+                    }
+
+                    YargLogger.LogFormatError("Monitor source {0} is not a push stream: {1}", handle, Bass.LastError);
+                    return false;
+                case ResetKind.Split:
+                    if (BassMix.SplitStreamGetSource(handle) != 0)
+                    {
+                        return true;
+                    }
+
+                    YargLogger.LogFormatError("Monitor source {0} is not a splitter stream: {1}", handle,
+                        Bass.LastError);
+                    return false;
+                default:
+                    return false;
+            }
+        }
+
+        private bool ResetStream()
+        {
+            bool succeeded = _resetKind switch
+            {
+                ResetKind.Push  => Bass.ChannelSetPosition(Handle, 0, PositionFlags.Bytes),
+                ResetKind.Split => BassMix.SplitStreamReset(Handle, 0),
+                _               => false,
+            };
+            if (succeeded)
+            {
+                return true;
+            }
+
+            YargLogger.LogFormatError("Failed to reset monitor source: {0}", Bass.LastError);
+            return false;
+        }
+
+        private bool ResetEffects()
+        {
             try
             {
                 _resetEffects?.Invoke();
@@ -124,9 +161,9 @@ namespace YARG.Audio.BASS
     {
         private BassAudioOutput? _owner;
 
-        internal BassMonitorSource Source { get; }
-        internal bool IsAttached { get; set; }
-        public double Volume { get; private set; }
+        internal BassMonitorSource Source     { get; }
+        internal bool              IsAttached { get; set; }
+        public   double            Volume     { get; private set; }
 
         internal BassMonitorRoute(BassAudioOutput owner, BassMonitorSource source, double volume)
         {

@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using ManagedBass;
 using ManagedBass.Fx;
 using UnityEngine;
+using YARG.Audio.BASS.Effects;
 using YARG.Audio.PitchDetection;
 using YARG.Core.Logging;
 using YARG.Core.Audio;

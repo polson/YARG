@@ -4,7 +4,7 @@ using ManagedBass;
 using Unity.Burst;
 using YARG.Core.Logging;
 
-namespace YARG.Audio.BASS
+namespace YARG.Audio.BASS.Effects
 {
     /// <summary>Owns one Burst-generated source attached to a BASS mixer.</summary>
     internal sealed unsafe class BassOneShotStream : IDisposable
@@ -66,7 +66,7 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                bool locked = Bass.ChannelLock(_mixerHandle, true);
+                bool locked = Bass.ChannelLock(_mixerHandle);
                 if (locked)
                 {
                     try
@@ -120,7 +120,7 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                Volatile.Write(ref _context->Paused, paused ? 1 : 0);
+                Volatile.Write(ref _context->IsPaused, paused ? 1 : 0);
             }
         }
 
@@ -133,11 +133,12 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                int pending = Volatile.Read(ref _context->PendingPlays);
-                while (pending < OneShotProcessor.MaxActive &&
-                    Interlocked.CompareExchange(ref _context->PendingPlays, pending + 1, pending) != pending)
+                int pending = Volatile.Read(ref _context->PendingPlaybackCount);
+                while (pending < OneShotProcessor.MAX_ACTIVE_PLAYBACKS &&
+                    Interlocked.CompareExchange(
+                        ref _context->PendingPlaybackCount, pending + 1, pending) != pending)
                 {
-                    pending = Volatile.Read(ref _context->PendingPlays);
+                    pending = Volatile.Read(ref _context->PendingPlaybackCount);
                 }
             }
         }
@@ -167,7 +168,7 @@ namespace YARG.Audio.BASS
 
                 if (_mixerHandle != 0)
                 {
-                    bool locked = Bass.ChannelLock(_mixerHandle, true);
+                    bool locked = Bass.ChannelLock(_mixerHandle);
                     if (locked)
                     {
                         try

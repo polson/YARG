@@ -6,12 +6,11 @@ namespace YARG.Settings.Types
 {
     public sealed class OutputBufferSizeSetting : DropdownSetting<int>
     {
-        private int _preferredLength;
-        private int _sampleRate;
+        private int  _preferredLength;
+        private int  _sampleRate;
         private bool _isDriverControlled;
 
-        public OutputBufferSizeSetting(int value, Action<int> onChange = null)
-            : base(value, onChange, localizable: false)
+        public OutputBufferSizeSetting(int value, Action<int> onChange = null) : base(value, onChange, false)
         {
         }
 

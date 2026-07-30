@@ -18,26 +18,30 @@ namespace YARG.Audio.BASS
     internal sealed class BassAsioMicDevice : MicDevice
     {
         private const float MIC_HIT_INPUT_THRESHOLD = 25f;
-        private const int IDLE_POLL_INTERVAL_MS = 1;
+        private const float MIN_AMPLITUDE           = -160f;
+        private const float AMPLITUDE_CALIBRATION   = 180f;
+        private const float UNUSED_FRAME_VALUE      = -1f;
 
-        private readonly BassAsioInputLease _lease;
-        private readonly object _processingLock = new();
-        private readonly ConcurrentQueue<MicOutputFrame> _frameQueue = new();
-        private readonly Thread _worker;
-        private readonly float[] _analysisBuffer;
-        private readonly float[] _outputFrameBuffer;
-        private readonly PitchTracker _pitchDetector;
+        private const int AMPLITUDE_SAMPLE_STRIDE = 4;
+        private const int IDLE_POLL_INTERVAL_MS   = 1;
 
-        private volatile bool _stopping;
-        private float? _lastPitch;
-        private float? _lastAmplitude;
-        private int _outputFrameSamples;
+        private readonly BassAsioInputLease              _lease;
+        private readonly object                          _processingLock = new();
+        private readonly ConcurrentQueue<MicOutputFrame> _frameQueue     = new();
+        private readonly Thread                          _readThread;
+        private readonly float[]                         _readBuffer;
+        private readonly float[]                         _frameBuffer;
+        private readonly PitchTracker                    _pitchDetector;
 
-        internal static BassAsioMicDevice? Create(BassAudioManager manager,
-            AsioInputDescriptor descriptor, string displayName)
+        private volatile bool   _stopRequested;
+        private          float? _lastPitch;
+        private          float? _lastAmplitude;
+        private          int    _frameSampleCount;
+
+        internal static BassAsioMicDevice? Create(BassAudioManager manager, AsioInputDescriptor descriptor,
+            string displayName)
         {
-            var result = manager.TryAcquireAsioInput(descriptor.DriverId,
-                descriptor.ChannelIndex, out var lease);
+            var result = manager.TryAcquireAsioInput(descriptor.DriverId, descriptor.ChannelIndex, out var lease);
             if (result != AsioInputAcquireResult.Success || lease == null)
             {
                 YargLogger.LogWarning($"Failed to acquire ASIO microphone '{displayName}': {result}");
@@ -57,46 +61,40 @@ namespace YARG.Audio.BASS
             }
         }
 
-        private BassAsioMicDevice(BassAsioInputLease lease, string displayName)
-            : base(displayName)
+        private BassAsioMicDevice(BassAsioInputLease lease, string displayName) : base(displayName)
         {
             _lease = lease;
-            int frameSamples = Math.Max(1,
-                lease.Descriptor.SampleRate * RECORD_PERIOD_MS / 1000);
-            _analysisBuffer = new float[frameSamples];
-            _outputFrameBuffer = new float[frameSamples];
+            int frameSamples = Math.Max(1, lease.Descriptor.SampleRate * RECORD_PERIOD_MS / 1000);
+            _readBuffer = new float[frameSamples];
+            _frameBuffer = new float[frameSamples];
             _pitchDetector = new PitchTracker(lease.Descriptor.SampleRate);
-            _worker = new Thread(ReadLoop)
+            _readThread = new Thread(ReadLoop)
             {
                 IsBackground = true,
                 Name = $"ASIO mic {lease.Descriptor.ChannelIndex}",
             };
-            _worker.Start();
+            _readThread.Start();
         }
 
         private void ReadLoop()
         {
-            while (!_stopping && _lease.IsValid)
+            while (!_stopRequested && _lease.IsValid)
             {
-                int bytesRead = _lease.Read(_analysisBuffer);
-                if (bytesRead <= 0)
-                {
-                    Thread.Sleep(IDLE_POLL_INTERVAL_MS);
-                    continue;
-                }
-
-                int samplesRead = Math.Min(bytesRead / sizeof(float), _analysisBuffer.Length);
+                int bytesRead;
                 lock (_processingLock)
                 {
-                    if (IsRecordingOutput && samplesRead > 0)
+                    bytesRead = _lease.Read(_readBuffer);
+                    if (bytesRead > 0 && IsRecordingOutput)
                     {
-                        ProcessSamples(new ReadOnlySpan<float>(_analysisBuffer, 0, samplesRead));
+                        int sampleCount = Math.Min(bytesRead / sizeof(float), _readBuffer.Length);
+                        ProcessSamples(_readBuffer.AsSpan(0, sampleCount));
                     }
                 }
 
                 // A full read may mean more buffered input is waiting. Drain it immediately so
                 // analysis does not fall behind; only yield when the split stream is caught up.
-                if (bytesRead < _analysisBuffer.Length * sizeof(float))
+                bool inputCaughtUp = bytesRead < _readBuffer.Length * sizeof(float);
+                if (inputCaughtUp)
                 {
                     Thread.Sleep(IDLE_POLL_INTERVAL_MS);
                 }
@@ -105,56 +103,90 @@ namespace YARG.Audio.BASS
 
         private void ProcessSamples(ReadOnlySpan<float> samples)
         {
-            var pitch = _pitchDetector.ProcessBuffer(samples);
+            float? pitch = _pitchDetector.ProcessBuffer(samples);
             if (pitch.HasValue)
             {
                 _lastPitch = pitch.Value;
             }
 
-            int samplesProcessed = 0;
-            while (samplesProcessed < samples.Length)
-            {
-                int samplesToCopy = Math.Min(
-                    samples.Length - samplesProcessed,
-                    _outputFrameBuffer.Length - _outputFrameSamples);
-                samples.Slice(samplesProcessed, samplesToCopy).CopyTo(
-                    _outputFrameBuffer.AsSpan(_outputFrameSamples));
-                samplesProcessed += samplesToCopy;
-                _outputFrameSamples += samplesToCopy;
+            AppendSamplesToFrame(samples);
+        }
 
-                if (_outputFrameSamples == _outputFrameBuffer.Length)
+        private void AppendSamplesToFrame(ReadOnlySpan<float> samples)
+        {
+            while (!samples.IsEmpty)
+            {
+                int frameSpace = _frameBuffer.Length - _frameSampleCount;
+                int samplesToCopy = Math.Min(samples.Length, frameSpace);
+
+                var destination = _frameBuffer.AsSpan(_frameSampleCount, samplesToCopy);
+                samples[..samplesToCopy].CopyTo(destination);
+
+                _frameSampleCount += samplesToCopy;
+                samples = samples[samplesToCopy..];
+
+                if (_frameSampleCount == _frameBuffer.Length)
                 {
-                    ProcessOutputFrame(_outputFrameBuffer);
-                    _outputFrameSamples = 0;
+                    AnalyzeFrame(_frameBuffer);
+                    _frameSampleCount = 0;
                 }
             }
         }
 
-        private void ProcessOutputFrame(ReadOnlySpan<float> samples)
+        private void AnalyzeFrame(ReadOnlySpan<float> samples)
         {
-            float sum = 0;
-            int count = 0;
-            for (int i = 0; i < samples.Length; i += 4, count++)
-            {
-                sum += samples[i] * samples[i];
-            }
-
-            float amplitude = count > 0 ? 20f * Mathf.Log10(Mathf.Sqrt(sum / count) * 180f) : -160f;
-            if (amplitude < -160f || float.IsNaN(amplitude))
-            {
-                amplitude = -160f;
-            }
-
-            if (_lastAmplitude.HasValue && amplitude > _lastAmplitude.Value &&
-                Mathf.Abs(amplitude - _lastAmplitude.Value) >= MIC_HIT_INPUT_THRESHOLD)
-            {
-                double windowMidpoint = InputManager.CurrentInputTime -
-                    RECORD_PERIOD_MS / 2000.0;
-                _frameQueue.Enqueue(new MicOutputFrame(windowMidpoint,
-                    true, -1f, -1f));
-            }
+            float amplitude = CalculateAmplitude(samples);
+            QueueHitIfDetected(amplitude);
             _lastAmplitude = amplitude;
+            QueuePitchIfDetected(amplitude);
+        }
 
+        private static float CalculateAmplitude(ReadOnlySpan<float> samples)
+        {
+            float squareSum = 0f;
+            int sampledCount = 0;
+            for (int i = 0; i < samples.Length; i += AMPLITUDE_SAMPLE_STRIDE)
+            {
+                squareSum += samples[i] * samples[i];
+                sampledCount++;
+            }
+
+            if (sampledCount == 0)
+            {
+                return MIN_AMPLITUDE;
+            }
+
+            float rootMeanSquare = Mathf.Sqrt(squareSum / sampledCount);
+            float amplitude = 20f * Mathf.Log10(rootMeanSquare * AMPLITUDE_CALIBRATION);
+            if (amplitude < MIN_AMPLITUDE || float.IsNaN(amplitude))
+            {
+                return MIN_AMPLITUDE;
+            }
+
+            return amplitude;
+        }
+
+        private void QueueHitIfDetected(float amplitude)
+        {
+            if (!_lastAmplitude.HasValue)
+            {
+                return;
+            }
+
+            float amplitudeIncrease = amplitude - _lastAmplitude.Value;
+            if (amplitudeIncrease < MIC_HIT_INPUT_THRESHOLD)
+            {
+                return;
+            }
+
+            // Current input time marks the end of the frame; hits belong at its midpoint.
+            double frameMidpoint = InputManager.CurrentInputTime - RECORD_PERIOD_MS / 2000.0;
+            var frame = new MicOutputFrame(frameMidpoint, true, UNUSED_FRAME_VALUE, UNUSED_FRAME_VALUE);
+            _frameQueue.Enqueue(frame);
+        }
+
+        private void QueuePitchIfDetected(float amplitude)
+        {
             if (amplitude < SettingsManager.Settings.MicrophoneSensitivity.Value)
             {
                 _lastPitch = null;
@@ -163,8 +195,8 @@ namespace YARG.Audio.BASS
 
             if (_lastPitch.HasValue)
             {
-                _frameQueue.Enqueue(new MicOutputFrame(InputManager.CurrentInputTime,
-                    false, _lastPitch.Value, amplitude));
+                var frame = new MicOutputFrame(InputManager.CurrentInputTime, false, _lastPitch.Value, amplitude);
+                _frameQueue.Enqueue(frame);
             }
         }
 
@@ -172,18 +204,23 @@ namespace YARG.Audio.BASS
         {
             lock (_processingLock)
             {
-                _lastPitch = null;
-                _lastAmplitude = null;
-                _outputFrameSamples = 0;
-                Array.Clear(_outputFrameBuffer, 0, _outputFrameBuffer.Length);
-                _pitchDetector.Reset();
-                _frameQueue.Clear();
+                bool resetSucceeded = _lease.Reset();
+                ResetProcessingState();
+                return resetSucceeded ? 0 : -1;
             }
-            return _lease.Reset() ? 0 : -1;
         }
 
-        public override bool DequeueOutputFrame(out MicOutputFrame frame) =>
-            _frameQueue.TryDequeue(out frame);
+        private void ResetProcessingState()
+        {
+            _lastPitch = null;
+            _lastAmplitude = null;
+            _frameSampleCount = 0;
+            Array.Clear(_frameBuffer, 0, _frameBuffer.Length);
+            _pitchDetector.Reset();
+            _frameQueue.Clear();
+        }
+
+        public override bool DequeueOutputFrame(out MicOutputFrame frame) => _frameQueue.TryDequeue(out frame);
 
         public override void ClearOutputQueue() => _frameQueue.Clear();
 
@@ -199,11 +236,12 @@ namespace YARG.Audio.BASS
 
         protected override void DisposeUnmanagedResources()
         {
-            _stopping = true;
-            if (Thread.CurrentThread != _worker)
+            _stopRequested = true;
+            if (Thread.CurrentThread != _readThread)
             {
-                _worker.Join(250);
+                _readThread.Join(250);
             }
+
             _lease.Dispose();
         }
     }

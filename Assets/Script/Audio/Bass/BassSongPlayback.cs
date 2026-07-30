@@ -12,21 +12,21 @@ namespace YARG.Audio.BASS
     /// </summary>
     internal sealed class BassSongPlayback : IDisposable
     {
-        private readonly BassAudioOutput _audioOutput;
+        private readonly BassAudioOutput             _audioOutput;
         private readonly HashSet<BassOneShotChannel> _oneShotChannels = new();
-        private bool _isValid;
-        private bool _resumeAfterOutputChange;
-        private double _volume = 1;
-        private int _bufferLength;
+        private          bool                        _isValid;
+        private          bool                        _resumeAfterOutputChange;
+        private          double                      _outputVolume = 1;
+        private          int                         _bufferLengthMilliseconds;
 #nullable enable
         private OutputChannel? _outputChannel;
 #nullable disable
 
         internal event Action OutputChanged;
 
-        internal int TempoStreamHandle { get; }
-        public bool IsValid => _isValid;
-        public bool IsPlaying => _isValid && _audioOutput.IsSongPlaying(TempoStreamHandle);
+        internal int  TempoStreamHandle { get; }
+        public   bool IsValid           => _isValid;
+        public   bool IsPlaying         => _isValid && _audioOutput.IsSongPlaying(TempoStreamHandle);
 
         internal BassSongPlayback(int tempoStreamHandle, BassAudioOutput audioOutput)
         {
@@ -40,28 +40,20 @@ namespace YARG.Audio.BASS
         internal void PrepareForOutputChange()
         {
             _resumeAfterOutputChange = IsPlaying;
-            foreach (var channel in _oneShotChannels)
-            {
-                channel.DetachOutput();
-            }
+            DetachOneShotChannels();
         }
 
         internal void RestoreAfterOutputChange()
         {
             _isValid = true;
-            _audioOutput.SetSongVolume(TempoStreamHandle, _volume);
-            _audioOutput.SetSongBufferLength(TempoStreamHandle, _bufferLength);
-            _audioOutput.SetSongOutputChannel(TempoStreamHandle, _outputChannel);
-            foreach (var channel in _oneShotChannels)
-            {
-                channel.AttachOutput(
-                    _audioOutput.GetSongMixerHandle(TempoStreamHandle),
-                    _audioOutput.OneShotStartsPaused(TempoStreamHandle));
-            }
+            RestoreOutputSettings();
+            AttachOneShotChannels();
+
             if (_resumeAfterOutputChange)
             {
-                Play(restart: false);
+                Play(false);
             }
+
             OutputChanged?.Invoke();
         }
 
@@ -75,11 +67,9 @@ namespace YARG.Audio.BASS
             int result = _audioOutput.PlaySong(TempoStreamHandle, restart);
             if (result == 0)
             {
-                foreach (var channel in _oneShotChannels)
-                {
-                    channel.SetPlaybackPaused(false);
-                }
+                SetOneShotPlaybackPaused(false);
             }
+
             return result;
         }
 
@@ -93,12 +83,18 @@ namespace YARG.Audio.BASS
             int result = _audioOutput.PauseSong(TempoStreamHandle);
             if (result == 0)
             {
-                foreach (var channel in _oneShotChannels)
-                {
-                    channel.SetPlaybackPaused(true);
-                }
+                SetOneShotPlaybackPaused(true);
             }
+
             return result;
+        }
+
+        public void PrepareForSeek()
+        {
+            foreach (var channel in _oneShotChannels)
+            {
+                channel.PrepareForSeek();
+            }
         }
 
         public void ResetAfterSeek()
@@ -107,14 +103,6 @@ namespace YARG.Audio.BASS
             foreach (var channel in _oneShotChannels)
             {
                 channel.ResetAfterSeek();
-            }
-        }
-
-        public void PrepareForSeek()
-        {
-            foreach (var channel in _oneShotChannels)
-            {
-                channel.PrepareForSeek();
             }
         }
 
@@ -128,31 +116,42 @@ namespace YARG.Audio.BASS
 
         public void FadeIn(double maxVolume, double duration)
         {
-            _audioOutput.FadeSong(TempoStreamHandle,
-                BassAudioManager.ExponentialVolume(maxVolume),
+            _audioOutput.FadeSong(TempoStreamHandle, BassAudioManager.ExponentialVolume(maxVolume),
                 (int) (duration * SongMetadata.MILLISECOND_FACTOR));
         }
 
         public void FadeOut(double duration)
         {
-            _audioOutput.FadeSong(TempoStreamHandle, 0,
-                (int) (duration * SongMetadata.MILLISECOND_FACTOR));
+            _audioOutput.FadeSong(TempoStreamHandle, 0, (int) (duration * SongMetadata.MILLISECOND_FACTOR));
         }
 
-        public double GetVolume()
-        {
-            return BassAudioManager.LogarithmicVolume(_audioOutput.GetSongVolume(TempoStreamHandle));
-        }
+        public double GetVolume() => BassAudioManager.LogarithmicVolume(_audioOutput.GetSongVolume(TempoStreamHandle));
 
         public void SetVolume(double volume)
         {
-            _volume = BassAudioManager.ExponentialVolume(volume);
-            _audioOutput.SetSongVolume(TempoStreamHandle, _volume);
+            _outputVolume = BassAudioManager.ExponentialVolume(volume);
+            _audioOutput.SetSongVolume(TempoStreamHandle, _outputVolume);
         }
 
         public int GetFFTData(float[] buffer, int fftSize, bool complex)
         {
-            int flags = (1 << fftSize) switch
+            int flags = GetFFTDataFlags(fftSize);
+            if (flags < 0)
+            {
+                return -1;
+            }
+
+            if (complex)
+            {
+                flags |= (int) DataFlags.FFTComplex;
+            }
+
+            return GetData(buffer, flags);
+        }
+
+        private static int GetFFTDataFlags(int fftSize)
+        {
+            return (1 << fftSize) switch
             {
                 256  => (int) DataFlags.FFT256,
                 512  => (int) DataFlags.FFT512,
@@ -161,21 +160,10 @@ namespace YARG.Audio.BASS
                 4096 => (int) DataFlags.FFT4096,
                 _    => -1,
             };
-            if (flags < 0)
-            {
-                return -1;
-            }
-            if (complex)
-            {
-                flags |= (int) DataFlags.FFTComplex;
-            }
-            return GetData(buffer, flags);
         }
 
-        public int GetSampleData(float[] buffer)
-        {
-            return GetData(buffer, buffer.Length * sizeof(float) | (int) DataFlags.Float);
-        }
+        public int GetSampleData(float[] buffer) =>
+            GetData(buffer, (buffer.Length * sizeof(float)) | (int) DataFlags.Float);
 
         private int GetData(float[] buffer, int flags)
         {
@@ -187,9 +175,10 @@ namespace YARG.Audio.BASS
         public long GetPosition() => _audioOutput.GetSongPosition(TempoStreamHandle);
         public double GetLatency() => _audioOutput.GetTempoCommandDelay(TempoStreamHandle);
         public double GetPlaybackStartDelay() => _audioOutput.GetPlaybackStartDelay();
+
         public void SetBufferLength(int length)
         {
-            _bufferLength = length;
+            _bufferLengthMilliseconds = length;
             _audioOutput.SetSongBufferLength(TempoStreamHandle, length);
         }
 
@@ -201,18 +190,11 @@ namespace YARG.Audio.BASS
         }
 #nullable disable
 
-        public OneShotChannel CreateOneShotChannel(int sampleStream,
-            IReadOnlyList<double> scheduledPlays, Func<long, double> getSongPosition,
-            Func<float> getSpeed, double outputLeadTime)
+        public OneShotChannel CreateOneShotChannel(int sampleStream, IReadOnlyList<double> scheduledPlays,
+            Func<long, double> getSongPosition, Func<float> getSpeed, double outputLeadTime)
         {
-            var channel = new BassOneShotChannel(
-                _audioOutput.GetSongMixerHandle(TempoStreamHandle),
-                TempoStreamHandle,
-                sampleStream,
-                scheduledPlays,
-                getSongPosition,
-                getSpeed,
-                outputLeadTime,
+            var channel = new BassOneShotChannel(_audioOutput.GetSongMixerHandle(TempoStreamHandle), TempoStreamHandle,
+                sampleStream, scheduledPlays, getSongPosition, getSpeed, outputLeadTime,
                 _audioOutput.OneShotStartsPaused(TempoStreamHandle));
             channel.Disposed += OnOneShotDisposed;
             _oneShotChannels.Add(channel);
@@ -221,12 +203,45 @@ namespace YARG.Audio.BASS
 
         private void OnOneShotDisposed(BassOneShotChannel channel) => _oneShotChannels.Remove(channel);
 
+        private void RestoreOutputSettings()
+        {
+            _audioOutput.SetSongVolume(TempoStreamHandle, _outputVolume);
+            _audioOutput.SetSongBufferLength(TempoStreamHandle, _bufferLengthMilliseconds);
+            _audioOutput.SetSongOutputChannel(TempoStreamHandle, _outputChannel);
+        }
+
+        private void DetachOneShotChannels()
+        {
+            foreach (var channel in _oneShotChannels)
+            {
+                channel.DetachOutput();
+            }
+        }
+
+        private void AttachOneShotChannels()
+        {
+            foreach (var channel in _oneShotChannels)
+            {
+                channel.AttachOutput(_audioOutput.GetSongMixerHandle(TempoStreamHandle),
+                    _audioOutput.OneShotStartsPaused(TempoStreamHandle));
+            }
+        }
+
+        private void SetOneShotPlaybackPaused(bool paused)
+        {
+            foreach (var channel in _oneShotChannels)
+            {
+                channel.SetPlaybackPaused(paused);
+            }
+        }
+
         public void Dispose()
         {
             foreach (var channel in _oneShotChannels.ToArray())
             {
                 channel.Dispose();
             }
+
             _oneShotChannels.Clear();
             _audioOutput.Remove(this);
             OutputChanged = null;

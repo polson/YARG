@@ -5,206 +5,368 @@ using AOT;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
+using Unity.Mathematics;
 
-namespace YARG.Audio.BASS
+namespace YARG.Audio.BASS.Effects
 {
     [StructLayout(LayoutKind.Sequential)]
     internal unsafe struct OneShotNativeContext
     {
-        public float* Sample;
-        public double* Schedule;
-        public int* Active;
-        public int SampleFrames;
-        public int ScheduleCount;
-        public int Channels;
-        public int SampleRate;
-        public int ActiveCount;
-        public int NextSchedule;
-        public int PendingPlays;
-        public int Enabled;
-        public int Paused;
+        // Immutable sample and schedule data owned by this context.
+        public float*  SampleData;
+        public double* ScheduledSongPositions;
+        public int*    ActivePlaybackFrames;
+        public int     SampleFrameCount;
+        public int     ScheduledPlaybackCount;
+        public int     ChannelCount;
+        public int     SampleRate;
+        public double  LeadTime;
+
+        // Audio-thread state.
+        public int    ActivePlaybackCount;
+        public int    NextScheduledPlayback;
+        public int    AppliedAnchorVersion;
+        public long   TimelineAnchorFrame;
+        public long   CursorFrame;
+        public double TimelineAnchorSongPosition;
+        public float  PlaybackSpeed;
+
+        // Atomic values shared by control and audio threads.
+        public int PendingPlaybackCount;
+        public int IsEnabled;
+        public int IsPaused;
         public int VolumeBits;
-        public int AnchorGeneration;
-        public int AppliedGeneration;
-        public long AnchorFrame;
-        public long CursorFrame;
-        public int ClearActive;
-        public double AnchorSongPosition;
-        public float Speed;
-        public double LeadTime;
+
+        // AnchorVersion guards this control-thread snapshot. Odd versions are being
+        // written; even versions are safe for the audio thread to consume.
+        public int    AnchorVersion;
+        public long   PendingAnchorFrame;
+        public double PendingAnchorSongPosition;
+        public float  PendingPlaybackSpeed;
+        public int    PendingClearActivePlaybacks;
     }
 
+    /// <summary>
+    /// Burst-compatible source which mixes overlapping copies of one sample. Playback
+    /// can be requested directly or scheduled against an anchored song timeline.
+    /// </summary>
     [BurstCompile]
     internal static unsafe class OneShotProcessor
     {
-        internal const int MaxActive = 64;
+        internal const int MAX_ACTIVE_PLAYBACKS = 64;
 
-        public static OneShotNativeContext* Create(float[] sample, double[] schedule,
-            int sampleRate, int channels, double leadTime)
+        public static OneShotNativeContext* Create(float[] sampleData, double[] scheduledSongPositions, int sampleRate,
+            int channelCount, double leadTime)
         {
-            if (sample == null || sample.Length == 0 || channels <= 0 || sample.Length % channels != 0)
+            bool hasInvalidSample = sampleData == null || sampleData.Length == 0 || channelCount <= 0 ||
+                sampleData.Length % channelCount != 0;
+            if (hasInvalidSample || sampleRate <= 0)
+            {
                 return null;
+            }
 
-            var context = (OneShotNativeContext*)UnsafeUtility.Malloc(
+            var context = (OneShotNativeContext*) UnsafeUtility.Malloc(
                 sizeof(OneShotNativeContext), 16, Allocator.Persistent);
-            if (context == null) return null;
+            if (context == null)
+            {
+                return null;
+            }
+
             UnsafeUtility.MemClear(context, sizeof(OneShotNativeContext));
 
-            context->SampleFrames = sample.Length / channels;
-            context->ScheduleCount = schedule?.Length ?? 0;
-            context->Channels = channels;
+            context->SampleFrameCount = sampleData.Length / channelCount;
+            context->ScheduledPlaybackCount = scheduledSongPositions?.Length ?? 0;
+            context->ChannelCount = channelCount;
             context->SampleRate = sampleRate;
             context->LeadTime = Math.Max(0, leadTime);
-            context->Speed = 1;
-            context->Enabled = 1;
-            float initialVolume = 1;
-            context->VolumeBits = *(int*) &initialVolume;
-            context->AppliedGeneration = -1;
+            context->PlaybackSpeed = 1;
+            context->PendingPlaybackSpeed = 1;
+            context->IsEnabled = 1;
+            context->VolumeBits = math.asint(1f);
+            context->AppliedAnchorVersion = -1;
 
-            context->Sample = (float*)UnsafeUtility.Malloc(
-                (long)sample.Length * sizeof(float), 16, Allocator.Persistent);
-            context->Active = (int*)UnsafeUtility.Malloc(
-                MaxActive * sizeof(int), 16, Allocator.Persistent);
-            if (context->ScheduleCount > 0)
-                context->Schedule = (double*)UnsafeUtility.Malloc(
-                    (long)context->ScheduleCount * sizeof(double), 16, Allocator.Persistent);
+            context->SampleData = (float*) UnsafeUtility.Malloc(
+                (long) sampleData.Length * sizeof(float), 16, Allocator.Persistent);
+            context->ActivePlaybackFrames = (int*) UnsafeUtility.Malloc(
+                MAX_ACTIVE_PLAYBACKS * sizeof(int), 16, Allocator.Persistent);
+            if (context->ScheduledPlaybackCount > 0)
+            {
+                context->ScheduledSongPositions = (double*) UnsafeUtility.Malloc(
+                    (long) context->ScheduledPlaybackCount * sizeof(double), 16, Allocator.Persistent);
+            }
 
-            if (context->Sample == null || context->Active == null ||
-                (context->ScheduleCount > 0 && context->Schedule == null))
+            bool allocationFailed = context->SampleData == null || context->ActivePlaybackFrames == null ||
+                (context->ScheduledPlaybackCount > 0 && context->ScheduledSongPositions == null);
+            if (allocationFailed)
             {
                 Destroy(context);
                 return null;
             }
 
-            fixed (float* source = sample)
-                UnsafeUtility.MemCpy(context->Sample, source, (long)sample.Length * sizeof(float));
-            if (context->ScheduleCount > 0)
+            fixed (float* source = sampleData)
             {
-                fixed (double* source = schedule)
-                    UnsafeUtility.MemCpy(context->Schedule, source,
-                        (long)context->ScheduleCount * sizeof(double));
+                long sampleBytes = (long) sampleData.Length * sizeof(float);
+                UnsafeUtility.MemCpy(context->SampleData, source, sampleBytes);
             }
+
+            if (context->ScheduledPlaybackCount > 0)
+            {
+                fixed (double* source = scheduledSongPositions)
+                {
+                    long scheduleBytes = (long) context->ScheduledPlaybackCount * sizeof(double);
+                    UnsafeUtility.MemCpy(context->ScheduledSongPositions, source, scheduleBytes);
+                }
+            }
+
             return context;
         }
 
         public static void Destroy(OneShotNativeContext* context)
         {
-            if (context == null) return;
-            if (context->Sample != null) UnsafeUtility.Free(context->Sample, Allocator.Persistent);
-            if (context->Schedule != null) UnsafeUtility.Free(context->Schedule, Allocator.Persistent);
-            if (context->Active != null) UnsafeUtility.Free(context->Active, Allocator.Persistent);
+            if (context == null)
+            {
+                return;
+            }
+
+            if (context->SampleData != null)
+            {
+                UnsafeUtility.Free(context->SampleData, Allocator.Persistent);
+            }
+
+            if (context->ScheduledSongPositions != null)
+            {
+                UnsafeUtility.Free(context->ScheduledSongPositions, Allocator.Persistent);
+            }
+
+            if (context->ActivePlaybackFrames != null)
+            {
+                UnsafeUtility.Free(context->ActivePlaybackFrames, Allocator.Persistent);
+            }
+
             UnsafeUtility.Free(context, Allocator.Persistent);
         }
 
-        public static void SetAnchor(OneShotNativeContext* c, long outputFrame,
-            double songPosition, float speed, bool clearActive)
+        public static void SetAnchor(OneShotNativeContext* context, long outputFrame, double songPosition, float speed,
+            bool clearActivePlaybacks)
         {
-            c->AnchorFrame = outputFrame;
-            c->AnchorSongPosition = songPosition;
-            c->Speed = Math.Max(0.0001f, speed);
-            c->ClearActive = clearActive ? 1 : 0;
-            if (clearActive) c->PendingPlays = 0;
-            Interlocked.Exchange(ref c->AnchorGeneration, c->AnchorGeneration + 1);
+            // Publish anchor as a seqlock snapshot. Audio thread never reads fields while
+            // control thread is partway through changing them.
+            Interlocked.Increment(ref context->AnchorVersion);
+            context->PendingAnchorFrame = outputFrame;
+            context->PendingAnchorSongPosition = songPosition;
+            context->PendingPlaybackSpeed = Math.Max(0.0001f, speed);
+            context->PendingClearActivePlaybacks = clearActivePlaybacks ? 1 : 0;
+            Interlocked.Increment(ref context->AnchorVersion);
+
+            if (clearActivePlaybacks)
+            {
+                Interlocked.Exchange(ref context->PendingPlaybackCount, 0);
+            }
         }
 
-        public static void SetVolume(OneShotNativeContext* c, float volume)
+        public static void SetVolume(OneShotNativeContext* context, float volume)
         {
-            int bits = *(int*) &volume;
-            Interlocked.Exchange(ref c->VolumeBits, bits);
+            Interlocked.Exchange(ref context->VolumeBits, math.asint(volume));
         }
 
-        public static void SetEnabled(OneShotNativeContext* c, bool enabled)
+        public static void SetEnabled(OneShotNativeContext* context, bool enabled)
         {
-            Interlocked.Exchange(ref c->Enabled, enabled ? 1 : 0);
+            Interlocked.Exchange(ref context->IsEnabled, enabled ? 1 : 0);
         }
 
         [BurstCompile(CompileSynchronously = true)]
         [MonoPInvokeCallback(typeof(BassNativeStreamProcedure))]
-        public static int ProcessStream(int stream, void* buffer, int length, void* user)
+        public static int ProcessStream(int streamHandle, void* buffer, int byteCount, void* user)
         {
-            var c = (OneShotNativeContext*)user;
-            if (c == null || buffer == null || length <= 0) return 0;
-            int frames = length / (sizeof(float) * c->Channels);
-            if (frames <= 0) return length;
-            float* output = (float*)buffer;
-            for (int i = 0; i < frames * c->Channels; i++) output[i] = 0;
-            if (c->Paused != 0) return length;
-
-            int generation = Interlocked.CompareExchange(ref c->AnchorGeneration, 0, 0);
-            if (generation != c->AppliedGeneration)
+            var context = (OneShotNativeContext*) user;
+            if (context == null || buffer == null || byteCount <= 0)
             {
-                c->AppliedGeneration = generation;
-                c->NextSchedule = FindFirst(c);
-                c->CursorFrame = c->AnchorFrame;
-                if (c->ClearActive != 0) c->ActiveCount = 0;
+                return 0;
             }
 
-            long start = c->CursorFrame;
-            c->CursorFrame += frames;
-            int volumeBits = Interlocked.CompareExchange(ref c->VolumeBits, 0, 0);
-            float volume = c->Enabled != 0 ? *(float*) &volumeBits : 0;
-            MixActive(c, output, frames, volume);
-            int pending = Interlocked.Exchange(ref c->PendingPlays, 0);
-            for (int i = 0; i < pending && c->ActiveCount < MaxActive; i++)
-                Start(c, output, frames, 0, volume);
-
-            while (c->NextSchedule < c->ScheduleCount)
+            int outputFrameCount = byteCount / (sizeof(float) * context->ChannelCount);
+            if (outputFrameCount <= 0)
             {
-                long target = TargetFrame(c, c->Schedule[c->NextSchedule]);
-                if (target >= start + frames) break;
-                c->NextSchedule++;
-                if (target >= start) Start(c, output, frames, (int)(target - start), volume);
+                return byteCount;
             }
-            return length;
-        }
 
-        private static int FindFirst(OneShotNativeContext* c)
-        {
-            double first = c->AnchorSongPosition + c->LeadTime * c->Speed;
-            int i = 0;
-            while (i < c->ScheduleCount &&
-                   (c->LeadTime > 0 ? c->Schedule[i] <= first : c->Schedule[i] < first)) i++;
-            return i;
-        }
+            float* output = (float*) buffer;
+            ClearOutput(output, outputFrameCount, context->ChannelCount);
 
-        private static long TargetFrame(OneShotNativeContext* c, double song)
-        {
-            double seconds = (song - c->AnchorSongPosition) / c->Speed - c->LeadTime;
-            return c->AnchorFrame + (long)Math.Round(seconds * c->SampleRate);
-        }
-
-        private static void MixActive(OneShotNativeContext* c, float* output, int frames, float volume)
-        {
-            int write = 0;
-            for (int i = 0; i < c->ActiveCount; i++)
+            if (AtomicRead(ref context->IsPaused) != 0)
             {
-                int frame = c->Active[i];
-                Mix(c, output, frames, 0, ref frame, volume);
-                if (frame < c->SampleFrames) c->Active[write++] = frame;
+                return byteCount;
             }
-            c->ActiveCount = write;
+
+            ApplyPendingAnchor(context);
+
+            long bufferStartFrame = context->CursorFrame;
+            long bufferEndFrame = bufferStartFrame + outputFrameCount;
+            context->CursorFrame = bufferEndFrame;
+
+            float volume = ReadOutputVolume(context);
+            MixActivePlaybacks(context, output, outputFrameCount, volume);
+            StartPendingPlaybacks(context, output, outputFrameCount, volume);
+            StartScheduledPlaybacks(context, output, outputFrameCount, bufferStartFrame, bufferEndFrame, volume);
+
+            return byteCount;
         }
 
-        private static void Start(OneShotNativeContext* c, float* output, int frames,
-            int offset, float volume)
+        private static void ClearOutput(float* output, int frameCount, int channelCount)
         {
-            int frame = 0;
-            Mix(c, output, frames, offset, ref frame, volume);
-            if (frame < c->SampleFrames && c->ActiveCount < MaxActive) c->Active[c->ActiveCount++] = frame;
+            long byteCount = (long) frameCount * channelCount * sizeof(float);
+            UnsafeUtility.MemClear(output, byteCount);
         }
 
-        private static void Mix(OneShotNativeContext* c, float* output, int frames,
-            int offset, ref int sourceFrame, float volume)
+        private static void ApplyPendingAnchor(OneShotNativeContext* context)
         {
-            int count = Math.Min(frames - offset, c->SampleFrames - sourceFrame);
-            int source = sourceFrame * c->Channels;
-            int dest = offset * c->Channels;
-            for (int i = 0; i < count * c->Channels; i++)
+            int version = AtomicRead(ref context->AnchorVersion);
+            bool isWriteInProgress = (version & 1) != 0;
+            if (isWriteInProgress || version == context->AppliedAnchorVersion)
             {
-                output[dest++] += c->Sample[source] * volume;
-                source++;
+                return;
             }
-            sourceFrame += count;
+
+            long anchorFrame = context->PendingAnchorFrame;
+            double songPosition = context->PendingAnchorSongPosition;
+            float speed = context->PendingPlaybackSpeed;
+            int clearActivePlaybacks = context->PendingClearActivePlaybacks;
+
+            if (version != AtomicRead(ref context->AnchorVersion))
+            {
+                return;
+            }
+
+            context->AppliedAnchorVersion = version;
+            context->TimelineAnchorFrame = anchorFrame;
+            context->TimelineAnchorSongPosition = songPosition;
+            context->PlaybackSpeed = speed;
+            context->CursorFrame = anchorFrame;
+            context->NextScheduledPlayback = FindNextScheduledPlayback(context);
+
+            if (clearActivePlaybacks != 0)
+            {
+                context->ActivePlaybackCount = 0;
+            }
         }
+
+        private static float ReadOutputVolume(OneShotNativeContext* context)
+        {
+            bool isEnabled = AtomicRead(ref context->IsEnabled) != 0;
+            int volumeBits = AtomicRead(ref context->VolumeBits);
+            return isEnabled ? math.asfloat(volumeBits) : 0;
+        }
+
+        private static void MixActivePlaybacks(OneShotNativeContext* context, float* output, int outputFrameCount,
+            float volume)
+        {
+            int activeWriteIndex = 0;
+            for (int i = 0; i < context->ActivePlaybackCount; i++)
+            {
+                int sampleFrame = context->ActivePlaybackFrames[i];
+                MixPlayback(context, output, outputFrameCount, 0, ref sampleFrame, volume);
+
+                if (sampleFrame < context->SampleFrameCount)
+                {
+                    context->ActivePlaybackFrames[activeWriteIndex++] = sampleFrame;
+                }
+            }
+
+            context->ActivePlaybackCount = activeWriteIndex;
+        }
+
+        private static void StartPendingPlaybacks(OneShotNativeContext* context, float* output, int outputFrameCount,
+            float volume)
+        {
+            int pendingCount = Interlocked.Exchange(ref context->PendingPlaybackCount, 0);
+            for (int i = 0; i < pendingCount && context->ActivePlaybackCount < MAX_ACTIVE_PLAYBACKS; i++)
+            {
+                StartPlayback(context, output, outputFrameCount, 0, volume);
+            }
+        }
+
+        private static void StartScheduledPlaybacks(OneShotNativeContext* context, float* output, int outputFrameCount,
+            long bufferStartFrame, long bufferEndFrame, float volume)
+        {
+            while (context->NextScheduledPlayback < context->ScheduledPlaybackCount)
+            {
+                double songPosition = context->ScheduledSongPositions[context->NextScheduledPlayback];
+                long targetFrame = SongPositionToOutputFrame(context, songPosition);
+                if (targetFrame >= bufferEndFrame)
+                {
+                    break;
+                }
+
+                context->NextScheduledPlayback++;
+                if (targetFrame >= bufferStartFrame)
+                {
+                    int outputFrameOffset = (int) (targetFrame - bufferStartFrame);
+                    StartPlayback(context, output, outputFrameCount, outputFrameOffset, volume);
+                }
+            }
+        }
+
+        private static int FindNextScheduledPlayback(OneShotNativeContext* context)
+        {
+            double scheduleBoundary = context->TimelineAnchorSongPosition + context->LeadTime * context->PlaybackSpeed;
+            int scheduleIndex = 0;
+
+            while (scheduleIndex < context->ScheduledPlaybackCount)
+            {
+                double scheduledPosition = context->ScheduledSongPositions[scheduleIndex];
+                bool isBeforeBoundary = context->LeadTime > 0
+                    ? scheduledPosition <= scheduleBoundary
+                    : scheduledPosition < scheduleBoundary;
+                if (!isBeforeBoundary)
+                {
+                    break;
+                }
+
+                scheduleIndex++;
+            }
+
+            return scheduleIndex;
+        }
+
+        private static long SongPositionToOutputFrame(OneShotNativeContext* context, double songPosition)
+        {
+            double secondsFromAnchor = (songPosition - context->TimelineAnchorSongPosition) / context->PlaybackSpeed;
+            double outputSecondsFromAnchor = secondsFromAnchor - context->LeadTime;
+            long frameOffset = (long) Math.Round(outputSecondsFromAnchor * context->SampleRate);
+            return context->TimelineAnchorFrame + frameOffset;
+        }
+
+        private static void StartPlayback(OneShotNativeContext* context, float* output, int outputFrameCount,
+            int outputFrameOffset, float volume)
+        {
+            int sampleFrame = 0;
+            MixPlayback(context, output, outputFrameCount, outputFrameOffset, ref sampleFrame, volume);
+
+            bool playbackContinues = sampleFrame < context->SampleFrameCount;
+            if (playbackContinues && context->ActivePlaybackCount < MAX_ACTIVE_PLAYBACKS)
+            {
+                context->ActivePlaybackFrames[context->ActivePlaybackCount++] = sampleFrame;
+            }
+        }
+
+        private static void MixPlayback(OneShotNativeContext* context, float* output, int outputFrameCount,
+            int outputFrameOffset, ref int sampleFrame, float volume)
+        {
+            int availableOutputFrames = outputFrameCount - outputFrameOffset;
+            int remainingSampleFrames = context->SampleFrameCount - sampleFrame;
+            int framesToMix = Math.Min(availableOutputFrames, remainingSampleFrames);
+            int samplesToMix = framesToMix * context->ChannelCount;
+            int sourceSample = sampleFrame * context->ChannelCount;
+            int outputSample = outputFrameOffset * context->ChannelCount;
+
+            for (int i = 0; i < samplesToMix; i++)
+            {
+                output[outputSample++] += context->SampleData[sourceSample++] * volume;
+            }
+
+            sampleFrame += framesToMix;
+        }
+
+        private static int AtomicRead(ref int value) => Interlocked.CompareExchange(ref value, 0, 0);
     }
 }

@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using ManagedBass;
 using YARG.Core.Logging;
 
-namespace YARG.Audio.BASS
+namespace YARG.Audio.BASS.Effects
 {
     /// <summary>
     /// Native callback signature used by BASS DSP procedures compiled with Burst.
@@ -15,7 +15,7 @@ namespace YARG.Audio.BASS
     /// <summary>
     /// Owns a native BASS DSP registration and its unmanaged callback context.
     /// </summary>
-    public abstract unsafe class BassNativeDsp : IDisposable
+    public abstract class BassNativeDsp : IDisposable
     {
         [DllImport("bass", EntryPoint = "BASS_ChannelSetDSP",
             CallingConvention = CallingConvention.Winapi)]
@@ -96,7 +96,7 @@ namespace YARG.Audio.BASS
 
                 // Locking waits for current processing and prevents another callback from starting
                 // while its unmanaged context is detached and freed.
-                if (!Bass.ChannelLock(_channelHandle, true))
+                if (!Bass.ChannelLock(_channelHandle))
                 {
                     YargLogger.LogFormatError(
                         "Failed to lock channel while removing {0}: {1}", _effectName, Bass.LastError);
