@@ -1,7 +1,6 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Threading;
 using ManagedBass;
 using ManagedBass.Asio;
@@ -17,28 +16,22 @@ namespace YARG.Audio.BASS
     internal sealed class BassAsioOutputBackend : IBassOutputBackend
     {
         private const int OUTPUT_CHANNELS = 2;
-        private const int BYTES_PER_FRAME = OUTPUT_CHANNELS * sizeof(float);
         private const int ASIO_PROCESSING_THREADS = 1;
         private const int RENDER_AHEAD_MILLISECONDS = 30;
         private const int PREFILL_TIMEOUT_MILLISECONDS = 2000;
-        private const bool USE_NATIVE_ASIO_MIXER_ROUTER = true;
-        // Native pull keeps Unity GC and managed thread suspension out of the hardware callback.
-        private const bool USE_NATIVE_ASIO_OUTPUT = true;
 
         private readonly int _bufferLength;
         private readonly Action _asioReinitializeRequested;
         private readonly HashSet<int> _songs = new();
-        private readonly HashSet<int> _nativeStartedSongs = new();
+        private readonly HashSet<int> _startedSongs = new();
         private readonly HashSet<int> _samples = new();
         private readonly HashSet<int> _monitors = new();
         private readonly Dictionary<int, BassAsioInput> _inputs = new();
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
-        private readonly AsioProcedure _outputCallback;
         private readonly AsioNotifyProcedure _notifyCallback;
 #endif
 
         private AsioInputDescriptor[] _inputDescriptors = Array.Empty<AsioInputDescriptor>();
-        private BassRenderAheadStream? _renderAheadStream;
         private BassAsioMixerRouter? _mixerRouter;
         private int _songMixerHandle;
         private int _liveMixerHandle;
@@ -55,8 +48,7 @@ namespace YARG.Audio.BASS
         private int _notificationQueued;
         private double _volume = 1;
         private int _callbackFrames;
-        private bool _usingNativeRouter;
-        private bool _nativeSongNeedsPrefill;
+        private bool _songNeedsPrefill;
 
         public int HeardLatencyMilliseconds => (int) Math.Round(
             FramesToMilliseconds(_latencyFrames + QueuedFrames));
@@ -64,16 +56,13 @@ namespace YARG.Audio.BASS
         public bool SongMixerRunsContinuously => true;
         public double PlaybackStartDelay => GetCommandDelay();
 
-        private int QueuedFrames => _usingNativeRouter
-            ? checked((int) (_mixerRouter?.GetStats().QueuedFrames ?? 0))
-            : _renderAheadStream?.QueuedFrames ?? 0;
+        private int QueuedFrames => checked((int) (_mixerRouter?.GetStats().QueuedFrames ?? 0));
 
         public BassAsioOutputBackend(int bufferLength, Action asioReinitializeRequested)
         {
             _bufferLength = bufferLength;
             _asioReinitializeRequested = asioReinitializeRequested;
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
-            _outputCallback = FillOutputBuffer;
             _notifyCallback = OnAsioNotification;
 #endif
         }
@@ -119,7 +108,7 @@ namespace YARG.Audio.BASS
             {
                 return;
             }
-            _nativeStartedSongs.Remove(tempoStreamHandle);
+            _startedSongs.Remove(tempoStreamHandle);
 
             if (!BassMix.MixerRemoveChannel(tempoStreamHandle) && Bass.LastError != Errors.Handle)
             {
@@ -145,19 +134,16 @@ namespace YARG.Audio.BASS
                 return (int) Bass.LastError;
             }
 
-            if (_usingNativeRouter && _nativeSongNeedsPrefill)
+            if (_songNeedsPrefill)
             {
                 if (!_mixerRouter!.Prefill(_songMixerHandle, PREFILL_TIMEOUT_MILLISECONDS))
                 {
                     YargLogger.LogError("Failed to prefill native ASIO song buffer");
                     return -1;
                 }
-                _nativeSongNeedsPrefill = false;
+                _songNeedsPrefill = false;
             }
-            if (_usingNativeRouter)
-            {
-                _nativeStartedSongs.Add(tempoStreamHandle);
-            }
+            _startedSongs.Add(tempoStreamHandle);
             return 0;
         }
 
@@ -171,19 +157,13 @@ namespace YARG.Audio.BASS
         {
             // A newly loaded preview seeks before its first Play. It has contributed no audio to
             // the shared ring, so flushing here would punch silence into the song fading out.
-            if (_usingNativeRouter && _nativeStartedSongs.Contains(tempoStreamHandle))
+            if (_startedSongs.Contains(tempoStreamHandle))
             {
-                _nativeSongNeedsPrefill = FlushNativeSongBuffer();
+                _songNeedsPrefill = FlushSongBuffer();
             }
         }
 
-        public void ResetSongAfterSeek(int tempoStreamHandle)
-        {
-            if (!_usingNativeRouter)
-            {
-                _renderAheadStream?.Flush();
-            }
-        }
+        public void ResetSongAfterSeek(int tempoStreamHandle) { }
 
         public void FadeSong(int tempoStreamHandle, double volume, int durationMilliseconds)
         {
@@ -220,17 +200,7 @@ namespace YARG.Audio.BASS
 
         public long GetSongPosition(int tempoStreamHandle)
         {
-            if (_usingNativeRouter && _mixerRouter != null)
-            {
-                return _mixerRouter.GetSourcePosition(tempoStreamHandle, _latencyFrames);
-            }
-            if (_renderAheadStream != null)
-            {
-                return _renderAheadStream.GetSourcePosition(tempoStreamHandle, _latencyFrames);
-            }
-
-            return BassMix.ChannelGetPosition(tempoStreamHandle, PositionFlags.Bytes,
-                FramesToBytes(_latencyFrames));
+            return _mixerRouter?.GetSourcePosition(tempoStreamHandle, _latencyFrames) ?? -1;
         }
 
         public double GetTempoCommandDelay(int tempoStreamHandle) => GetCommandDelay();
@@ -331,24 +301,18 @@ namespace YARG.Audio.BASS
         public void SetVolume(double volume)
         {
             _volume = volume;
-            if (_usingNativeRouter && _mixerRouter != null)
+            if (_mixerRouter != null)
             {
                 if (!_mixerRouter.SetVolume(volume))
                 {
                     YargLogger.LogError("Failed to set native ASIO output volume");
                 }
             }
-            else if (_liveMixerHandle != 0 &&
-                !Bass.ChannelSetAttribute(_liveMixerHandle, ChannelAttribute.Volume, volume))
-            {
-                YargLogger.LogFormatError("Failed to set ASIO output volume: {0}", Bass.LastError);
-            }
         }
 
         private bool CreateOutputMixers(int frequency)
         {
-            // Song mixer -> render-ahead push stream -> output mixer -> ASIO.
-            // Monitors and samples join output mixer directly, avoiding render-ahead latency.
+            // Native worker buffers song mixer. ASIO callback pulls live mixer directly.
             _songMixerHandle = BassMix.CreateMixerStream(frequency, OUTPUT_CHANNELS,
                 BassFlags.Float | BassFlags.MixerNonStop | BassFlags.Decode |
                 BassFlags.MixerPositionEx);
@@ -440,86 +404,25 @@ namespace YARG.Audio.BASS
             return ConfigureOutputLatency();
         }
 
-        private bool CreateRenderAheadStream()
-        {
-            _renderAheadStream = BassRenderAheadStream.Create(
-                _songMixerHandle, _bassDeviceId, _sampleRate, OUTPUT_CHANNELS, _callbackFrames,
-                outputRequestsReported: !USE_NATIVE_ASIO_OUTPUT);
-            return _renderAheadStream != null;
-        }
-
-        private bool AttachRenderAheadStream()
-        {
-            if (BassMix.MixerAddChannel(_liveMixerHandle, _renderAheadStream!.Handle,
-                    BassFlags.MixerChanNoRampin))
-            {
-                return true;
-            }
-
-            YargLogger.LogFormatError("Failed to attach ASIO render-ahead stream: {0}",
-                Bass.LastError);
-            return false;
-        }
-
         private bool ConfigureOutputTransport()
         {
-            if (USE_NATIVE_ASIO_MIXER_ROUTER && TryConfigureNativeMixerRouter())
+            _mixerRouter = BassAsioMixerRouter.Create(_bassDeviceId, _sampleRate,
+                OUTPUT_CHANNELS, _callbackFrames);
+            if (_mixerRouter != null &&
+                _mixerRouter.AttachMixer(_songMixerHandle, RENDER_AHEAD_MILLISECONDS) &&
+                _mixerRouter.AttachMixer(_liveMixerHandle, 0) &&
+                _mixerRouter.SetVolume(_volume) &&
+                _mixerRouter.Prefill(_songMixerHandle, PREFILL_TIMEOUT_MILLISECONDS) &&
+                _mixerRouter.EnableOutput(0))
             {
-                _usingNativeRouter = true;
                 YargLogger.LogInfo("ASIO output transport: native YargAudio mixer router");
                 return true;
             }
 
             _mixerRouter?.Dispose();
             _mixerRouter = null;
-            _usingNativeRouter = false;
-            if (!CreateRenderAheadStream() || !AttachRenderAheadStream())
-            {
-                return false;
-            }
-            Bass.ChannelSetAttribute(_liveMixerHandle, ChannelAttribute.Volume, _volume);
-            if (USE_NATIVE_ASIO_MIXER_ROUTER)
-            {
-                YargLogger.LogWarning("Native ASIO mixer router unavailable; using managed fallback");
-            }
-
-            if (USE_NATIVE_ASIO_OUTPUT)
-            {
-                if (!BassAsio.ChannelEnableBass(false, 0, _liveMixerHandle, Join: true))
-                {
-                    YargLogger.LogFormatError("Failed to configure native ASIO output: {0}",
-                        BassAsio.LastError);
-                    return false;
-                }
-                YargLogger.LogInfo("ASIO output transport: native BASS channel");
-            }
-            else
-            {
-                if (!BassAsio.ChannelEnable(false, 0, _outputCallback, IntPtr.Zero) ||
-                    !BassAsio.ChannelJoin(false, 1, 0) ||
-                    !BassAsio.ChannelSetFormat(false, 0, AsioSampleFormat.Float) ||
-                    !BassAsio.ChannelSetRate(false, 0, _sampleRate))
-                {
-                    YargLogger.LogFormatError("Failed to configure managed ASIO output: {0}",
-                        BassAsio.LastError);
-                    return false;
-                }
-                YargLogger.LogInfo("ASIO output transport: managed callback");
-            }
-
-            return true;
-        }
-
-        private bool TryConfigureNativeMixerRouter()
-        {
-            _mixerRouter = BassAsioMixerRouter.Create(_bassDeviceId, _sampleRate,
-                OUTPUT_CHANNELS, _callbackFrames);
-            return _mixerRouter != null &&
-                _mixerRouter.AttachMixer(_songMixerHandle, RENDER_AHEAD_MILLISECONDS) &&
-                _mixerRouter.AttachMixer(_liveMixerHandle, 0) &&
-                _mixerRouter.SetVolume(_volume) &&
-                _mixerRouter.Prefill(_songMixerHandle, PREFILL_TIMEOUT_MILLISECONDS) &&
-                _mixerRouter.EnableOutput(0);
+            YargLogger.LogError("Failed to configure native ASIO mixer router");
+            return false;
         }
 
         private bool StartAsioProcessing()
@@ -670,15 +573,6 @@ namespace YARG.Audio.BASS
             _asioReinitializeRequested();
         }
 
-        private int FillOutputBuffer(bool input, int channel, IntPtr buffer, int length, IntPtr user)
-        {
-            long timestamp = Stopwatch.GetTimestamp();
-            int callbackFrames = length / BYTES_PER_FRAME;
-            _renderAheadStream?.OnOutputRequested(callbackFrames, timestamp);
-
-            int bytesRead = Bass.ChannelGetData(_liveMixerHandle, buffer, length);
-            return bytesRead >= 0 ? bytesRead : 0;
-        }
 #endif
 
         internal IReadOnlyList<AsioInputDescriptor> GetInputDescriptors() =>
@@ -732,13 +626,11 @@ namespace YARG.Audio.BASS
                 return 0;
             }
 
-            int queuedFrames = _usingNativeRouter
-                ? checked((int) (_mixerRouter?.GetStats().QueuedFrames ?? 0))
-                : _renderAheadStream?.SnapshotQueuedFrames() ?? 0;
+            int queuedFrames = checked((int) (_mixerRouter?.GetStats().QueuedFrames ?? 0));
             return (_latencyFrames + queuedFrames) / (double) _sampleRate;
         }
 
-        private bool FlushNativeSongBuffer()
+        private bool FlushSongBuffer()
         {
             if (_mixerRouter?.FlushMixer(_songMixerHandle) == true)
             {
@@ -747,12 +639,6 @@ namespace YARG.Audio.BASS
 
             YargLogger.LogError("Failed to flush native ASIO song buffer");
             return false;
-        }
-
-        private int FramesToBytes(int frames)
-        {
-            long bytes = Math.Max(0, frames) * (long) BYTES_PER_FRAME;
-            return (int) Math.Min(bytes, int.MaxValue);
         }
 
         private double FramesToMilliseconds(long frames) => _sampleRate > 0
@@ -772,11 +658,9 @@ namespace YARG.Audio.BASS
 #endif
 
             InvalidateInputs();
+            LogRouterSummary();
             _mixerRouter?.Dispose();
             _mixerRouter = null;
-            _usingNativeRouter = false;
-            _renderAheadStream?.Dispose();
-            _renderAheadStream = null;
 
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
             if (_ownsAsio)
@@ -789,6 +673,22 @@ namespace YARG.Audio.BASS
             FreeInputs();
             DetachTrackedChannels();
             FreeMixers();
+        }
+
+        private void LogRouterSummary()
+        {
+            if (_mixerRouter == null)
+            {
+                return;
+            }
+
+            AsioMixerRouterStats stats = _mixerRouter.GetStats();
+            YargLogger.LogFormatInfo(
+                "ASIO router stopped: state={0}, queued={1}, produced={2}, consumed={3}, " +
+                "requested={4}, underruns={5} ({6} frames), max render={7} ns, error={8}",
+                stats.State, stats.QueuedFrames, stats.ProducedFrames, stats.ConsumedSongFrames,
+                stats.RequestedOutputFrames, stats.UnderrunEvents, stats.UnderrunFrames,
+                stats.MaximumRenderNanoseconds, stats.LastError);
         }
 
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN

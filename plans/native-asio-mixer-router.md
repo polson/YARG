@@ -2,9 +2,9 @@
 
 ## Status
 
-Phases 0-5 implemented as Windows x64 spike. Native build/unit tests pass; backend now
-selects native router with managed fallback. ASIO hardware, driver-reset, seek/position,
-and long-running stress validation remain Phase 6 work.
+Phases 0-6 implemented for Windows x64. Native build/unit tests pass, hardware validation
+is complete, native build verification runs in CI, and managed ASIO render-ahead fallback
+has been removed.
 
 ## Objective
 
@@ -812,23 +812,16 @@ Log summary on ASIO stop or when underrun count changes. Do not log every callba
 
 ## Rollout
 
-Keep both implementations temporarily:
+Native router is now required for ASIO output:
 
 ```csharp
-private const bool USE_NATIVE_ASIO_MIXER_ROUTER = false;
+BassAsioMixerRouter.Create(...)
 ```
 
-Stages:
+Rollout completed after native loading, synthetic tests, hardware validation, and gameplay
+soak. `BassRenderAheadStream.cs` and managed callback fallback were removed.
 
-1. Native DLL loads and reports ABI.
-2. Synthetic test scene/harness passes.
-3. Router enabled manually for development.
-4. Collect telemetry across several ASIO drivers and buffer sizes.
-5. Make native router default on Windows x64.
-6. Retain managed fallback for one release cycle.
-7. Remove `BassRenderAheadStream.cs` after parity and soak period.
-
-Fallback should be explicit and logged. ABI mismatch or DLL load failure should either select managed path or fail ASIO initialization with a clear message; never crash later in callback.
+ABI mismatch or DLL load failure fails ASIO initialization with a clear message.
 
 ## Implementation Phases
 

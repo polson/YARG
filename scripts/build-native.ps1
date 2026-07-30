@@ -1,7 +1,8 @@
 param(
     [ValidateSet("Debug", "Release", "RelWithDebInfo")]
     [string] $Configuration = "Release",
-    [switch] $NoCopy
+    [switch] $NoCopy,
+    [switch] $VerifyCommittedPlugin
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,8 +23,19 @@ try {
 
     if (!$NoCopy) {
         New-Item -ItemType Directory -Force $plugin | Out-Null
-        Copy-Item "build/windows-x64/$Configuration/yarg_audio.dll" $plugin -Force
-        Write-Host "Copied yarg_audio.dll to $plugin"
+        $builtDll = Join-Path $native "build/windows-x64/$Configuration/yarg_audio.dll"
+        $committedDll = Join-Path $plugin "yarg_audio.dll"
+        if ($VerifyCommittedPlugin) {
+            if (!(Test-Path $committedDll) -or
+                (Get-FileHash $builtDll).Hash -ne (Get-FileHash $committedDll).Hash) {
+                throw "Committed yarg_audio.dll does not match native source. Run scripts/build-native.ps1 and commit the DLL."
+            }
+            Write-Host "Committed yarg_audio.dll matches native build"
+        }
+        else {
+            Copy-Item $builtDll $plugin -Force
+            Write-Host "Copied yarg_audio.dll to $plugin"
+        }
     }
 }
 finally {
