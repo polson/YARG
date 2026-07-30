@@ -3,13 +3,11 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using ManagedBass;
-using ManagedBass.Fx;
 using ManagedBass.Mix;
 using UnityEngine;
 using YARG.Audio.BASS.Effects;
 using YARG.Core.Audio;
 using YARG.Core.Logging;
-using YARG.Core.Song;
 using YARG.Helpers;
 using YARG.Settings;
 
@@ -17,49 +15,56 @@ namespace YARG.Audio.BASS
 {
     public sealed class BassStemMixer : StemMixer
     {
-        #nullable enable
-        private struct StemData
-        {
-            public readonly SongStem     Stem;
-            public readonly float[,]?    VolumeMatrix;
-            public readonly StreamHandle StreamHandles;
-            public readonly StreamHandle ReverbHandles;
-            public readonly double       PitchFxDelay;
-
-            public StemData(SongStem stem, float[,]? volumeMatrix, StreamHandle streamHandles,
-                StreamHandle reverbHandles, double pitchFxDelay)
-            {
-                Stem = stem;
-                VolumeMatrix = volumeMatrix;
-                StreamHandles = streamHandles;
-                ReverbHandles = reverbHandles;
-                PitchFxDelay = pitchFxDelay;
-            }
-        }
-        #nullable disable
-
         private const    float WHAMMY_SYNC_INTERVAL_SECONDS = 1f;
-        private const    float MIN_PLAYBACK_SPEED            = 0.05f;
-        private const    float MAX_PLAYBACK_SPEED            = 51f;
+        private const    float MIN_PLAYBACK_SPEED           = 0.05f;
+        private const    float MAX_PLAYBACK_SPEED           = 51f;
+        private readonly int   _mixerHandle;
+
+        private readonly BassNormalizer           _normalizer;
+        private readonly BassSongPlayback         _playback;
+        private readonly BufferedPlaybackTimeline _playbackTimeline;
+        private readonly SongPositionTracker      _songPositionTracker;
+        private readonly List<int>                _sourceHandles = new();
+        private readonly List<StemData>           _stemDatas     = new();
+        private readonly int                      _tempoStreamHandle;
+        private          bool                     _didSeek;
+        private          BassGainDsp              _gainDsp;
+        private          int                      _longestHandle;
+        private          bool                     _shouldNormalize;
+        private          int                      _songEndHandle;
+        private          float                    _songSpeed = 1.0f;
+        private          float                    _speed     = 1.0f;
+        private          Timer                    _whammySyncTimer;
+
+#nullable enable
+        private BassStemMixer(string name, BassAudioManager manager, float speed, double volume, int mixerHandle,
+            int tempoStreamHandle, BassSongPlayback playback, bool clampStemVolume, bool normalize,
+            OutputChannel? outputChannel) : base(name, manager, clampStemVolume)
+#nullable disable
+        {
+            _normalizer = new BassNormalizer(gain => _gainDsp?.SetGain(gain));
+            _mixerHandle = mixerHandle;
+            _tempoStreamHandle = tempoStreamHandle;
+            _playback = playback;
+
+            _songPositionTracker = new SongPositionTracker(_tempoStreamHandle, _playback);
+            _playbackTimeline = new BufferedPlaybackTimeline(speed);
+            _playback.OutputChanged += OnOutputChanged;
+            _shouldNormalize = normalize && SettingsManager.Settings.EnableNormalization.Value;
+
+            if (_shouldNormalize)
+            {
+                AddGainDSP();
+            }
+
+            _whammySyncTimer = new Timer();
+            SetOutputChannel_Internal(outputChannel);
+            SetVolume_Internal(volume);
+            SetPlaybackSpeed_Internal(speed, 0f, true);
+            _playback.SetBufferLength(SettingsManager.Settings.PlaybackBufferLength.Value);
+        }
 
         private static bool IsWhammyEnabled => SettingsManager.Settings.UseWhammyFx.Value;
-        private readonly int                         _mixerHandle;
-        private readonly List<int>                   _sourceHandles = new();
-        private readonly int                         _tempoStreamHandle;
-        private readonly BassSongPlayback            _playback;
-        private readonly SongPositionTracker         _songPositionTracker;
-        private readonly BufferedPlaybackTimeline    _playbackTimeline;
-        private          bool                        _didSeek;
-        private          int                         _songEndHandle;
-        private          float                       _songSpeed = 1.0f;
-        private          float                       _speed     = 1.0f;
-        private          Timer                       _whammySyncTimer;
-        private readonly List<StemData>              _stemDatas       = new();
-        private          int                         _longestHandle;
-
-        private readonly BassNormalizer _normalizer = new();
-        private          bool           _shouldNormalize;
-        private          BassGainDsp   _gainDsp;
 
         public override event Action SongEnd
         {
@@ -76,72 +81,55 @@ namespace YARG.Audio.BASS
                             UnityMainThreadCallback.QueueEvent(end.Invoke);
                         }
                     }
+
                     _songEndHandle = BassMix.ChannelSetSync(_longestHandle, SyncFlags.End, 0, sync);
                 }
 
                 _songEnd += value;
             }
-            remove
-            {
-                _songEnd -= value;
-            }
+            remove => _songEnd -= value;
         }
 
 #nullable enable
-        internal BassStemMixer(string name, BassAudioManager manager, float speed, double volume, int handle,
-            bool clampStemVolume, bool normalize, OutputChannel? outputChannel)
-            : base(name, manager, clampStemVolume)
-#nullable disable
+        internal static BassStemMixer? Create(string name, BassAudioManager manager, float speed, double volume,
+            int mixerHandle, bool clampStemVolume, bool normalize, OutputChannel? outputChannel)
         {
-            _mixerHandle = handle;
-            _tempoStreamHandle = BassFx.TempoCreate(handle,
-                BassFlags.Decode | BassFlags.FxFreeSource);
-            if (_tempoStreamHandle == 0)
+            int tempoStreamHandle;
+            try
             {
-                YargLogger.LogFormatError("Failed to create tempo stream: {0}", Bass.LastError);
-                return;
+                tempoStreamHandle = BassX.Fx.CreateTempo(mixerHandle, BassFlags.Decode | BassFlags.FxFreeSource);
+            }
+            catch (BassX.BassOperationException exception)
+            {
+                YargLogger.LogError(exception.Message);
+                BassX.Stream.Free(mixerHandle, "mixer stream");
+                return null;
             }
 
-            _playback = manager.CreateSongPlayback(_tempoStreamHandle);
-            if (!_playback.IsValid)
+            var playback = manager.CreateSongPlayback(tempoStreamHandle);
+            if (!playback.IsValid)
             {
-                return;
+                playback.Dispose();
+                // Tempo stream owns and frees its source mixer via BassFlags.FxFreeSource.
+                BassX.Stream.Free(tempoStreamHandle, "tempo stream");
+                return null;
             }
 
-            _songPositionTracker = new SongPositionTracker(_tempoStreamHandle, _playback);
-            _playbackTimeline = new BufferedPlaybackTimeline(speed);
-            _playback.OutputChanged += OnOutputChanged;
-            _shouldNormalize = normalize && SettingsManager.Settings.EnableNormalization.Value;
-            if (_shouldNormalize)
-            {
-                AddGainDSP();
-            }
-
-            _whammySyncTimer = new Timer();
-            SetOutputChannel_Internal(outputChannel);
-            SetVolume_Internal(volume);
-            SetPlaybackSpeed_Internal(speed, 0f, true);
-            _playback.SetBufferLength(SettingsManager.Settings.PlaybackBufferLength.Value);
+            return new BassStemMixer(name, manager, speed, volume, mixerHandle, tempoStreamHandle, playback,
+                clampStemVolume, normalize, outputChannel);
         }
+#nullable disable
 
         private void AddGainDSP()
         {
-            _gainDsp = BassGainDsp.Attach(_mixerHandle, 1f);
-            if (_gainDsp == null)
-            {
-                // Native attach logs diagnostics. Do not restore GC-sensitive managed DSP.
-                _shouldNormalize = false;
-            }
+            _gainDsp = BassGainDsp.Create(_mixerHandle, 1f);
         }
-
 
         protected override int Play_Internal()
         {
             if (_shouldNormalize)
             {
                 _gainDsp?.SetGain(_normalizer.Gain);
-                _normalizer.OnGainAdjusted -= OnGainAdjusted;
-                _normalizer.OnGainAdjusted += OnGainAdjusted;
             }
 
             if (!_playback.IsPlaying)
@@ -154,15 +142,8 @@ namespace YARG.Audio.BASS
 
                 // Start control-rate tracking after ChannelPlay returns so mixer startup work is not
                 // counted as song progress.
-                _playbackTimeline.Play(
-                    _songPositionTracker.GetSongPosition(),
-                    _playback.GetPlaybackStartDelay()
-                );
+                _playbackTimeline.Play(_songPositionTracker.GetSongPosition(), _playback.GetPlaybackStartDelay());
                 _didSeek = false;
-                foreach (var channel in _oneShotChannels)
-                {
-                    channel.SetPlaybackPaused(false);
-                }
             }
 
             if (IsWhammyEnabled)
@@ -173,10 +154,11 @@ namespace YARG.Audio.BASS
             return 0;
         }
 
-        /// <summary>.
-        /// The BASS PitchShift effect causes the stem playback to drift over time.
-        /// It was discovered that we can correct the drift by setting the whammy pitch
-        /// to 0% when no pitch shift is applied.
+        /// <summary>
+        ///     .
+        ///     The BASS PitchShift effect causes the stem playback to drift over time.
+        ///     It was discovered that we can correct the drift by setting the whammy pitch
+        ///     to 0% when no pitch shift is applied.
         /// </summary>
         private void SyncWhammyDrift()
         {
@@ -184,14 +166,9 @@ namespace YARG.Audio.BASS
             {
                 if (Mathf.Approximately(channel.GetWhammyPitch(), 1.0f))
                 {
-                    channel.SetWhammyPitch(percent: 0.0f);
+                    channel.SetWhammyPitch(0.0f);
                 }
             }
-        }
-
-        private void OnGainAdjusted(float adjustedGain)
-        {
-            _gainDsp?.SetGain(adjustedGain);
         }
 
         protected override void FadeIn_Internal(double maxVolume, double duration)
@@ -208,10 +185,6 @@ namespace YARG.Audio.BASS
         {
             if (!_playback.IsPlaying)
             {
-                foreach (var channel in _oneShotChannels)
-                {
-                    channel.SetPlaybackPaused(true);
-                }
                 _playbackTimeline.Pause();
                 return 0;
             }
@@ -223,22 +196,15 @@ namespace YARG.Audio.BASS
             }
 
             _playbackTimeline.Pause();
-            foreach (var channel in _oneShotChannels)
-            {
-                channel.SetPlaybackPaused(true);
-            }
 
             return 0;
         }
 
-        protected override double GetPosition_Internal()
-        {
-            return _songPositionTracker.GetSongPosition();
-        }
+        protected override double GetPosition_Internal() => _songPositionTracker.GetSongPosition();
 
         /// <summary>
-        /// Samples BASS playback once, then derives heard and predictive control positions from that
-        /// same sample. BASSmix already compensates this position for mixer playback buffering.
+        ///     Samples BASS playback once, then derives heard and predictive control positions from that
+        ///     same sample. BASSmix already compensates this position for mixer playback buffering.
         /// </summary>
         protected override SyncPosition GetSyncPosition_Internal()
         {
@@ -246,30 +212,18 @@ namespace YARG.Audio.BASS
             return _playbackTimeline.GetSyncPosition(bassPosition);
         }
 
-        protected override double GetControlPosition_Internal()
-        {
-            return GetSyncPosition_Internal().Control;
-        }
+        protected override double GetControlPosition_Internal() => GetSyncPosition_Internal().Control;
 
-        protected override double GetTempoStreamLatency_Internal()
-        {
-            return _playback.GetLatency();
-        }
+        protected override double GetTempoStreamLatency_Internal() => _playback.GetLatency();
 
         // The total delay between playback command and when audio is heard
-        public double GetPlaybackStartOffset()
-        {
-            return _playbackTimeline.OutputLatency + _songPositionTracker.AlignmentDelay;
-        }
+        public double GetPlaybackStartOffset() => _playbackTimeline.OutputLatency + _songPositionTracker.AlignmentDelay;
 
-        protected override double GetVolume_Internal()
-        {
-            return _playback.GetVolume();
-        }
+        protected override double GetVolume_Internal() => _playback.GetVolume();
 
         protected override void SetPosition_Internal(double position)
         {
-            var wasPlaying = _playback.IsPlaying;
+            bool wasPlaying = _playback.IsPlaying;
             Pause_Internal();
 
             double playbackOffset = GetPlaybackStartOffset() * _songSpeed;
@@ -278,18 +232,18 @@ namespace YARG.Audio.BASS
             double playbackDelay = Math.Max(0, -preparedPosition);
 
             RemoveChannelsFromMixer();
-            if (AddChannelsToMixer(_stemDatas, playbackDelay, out double alignmentDelay))
+            bool channelsAdded = AddChannelsToMixer(_stemDatas, playbackDelay, out double alignmentDelay);
+
+            if (channelsAdded)
             {
                 foreach (var channel in _channels)
                 {
                     channel.SetPosition(seekPosition);
                 }
+
                 _didSeek = true;
                 _songPositionTracker.Reset(seekPosition, alignmentDelay, playbackDelay);
-                if (!BassMix.ChannelSetPosition(_tempoStreamHandle, 0, PositionFlags.Bytes))
-                {
-                    YargLogger.LogFormatError("Failed to reset tempo stream position: {0}!", Bass.LastError);
-                }
+                BassX.Mix.SetPosition(_tempoStreamHandle, 0, PositionFlags.Bytes);
 
                 _playback.ResetAfterSeek();
                 _playbackTimeline.ResetAfterSeek(_songPositionTracker.GetSongPosition(), position);
@@ -306,30 +260,18 @@ namespace YARG.Audio.BASS
             _playback.SetVolume(volume);
         }
 
-        protected override int GetFFTData_Internal(float[] buffer, int fftSize, bool complex)
-        {
-            return _playback.GetFFTData(buffer, fftSize, complex);
-        }
+        protected override int GetFFTData_Internal(float[] buffer, int fftSize, bool complex) =>
+            _playback.GetFFTData(buffer, fftSize, complex);
 
-        protected override int GetSampleData_Internal(float[] buffer)
-        {
-            return _playback.GetSampleData(buffer);
-        }
+        protected override int GetSampleData_Internal(float[] buffer) => _playback.GetSampleData(buffer);
 
-        protected override int GetLevel_Internal(float[] level)
-        {
-            return _playback.GetLevel(level);
-        }
+        protected override int GetLevel_Internal(float[] level) => _playback.GetLevel(level);
 
         protected override void SetPlaybackSpeed_Internal(float songSpeed, float syncAdjustment, bool shiftPitch)
         {
             // SongRunner clamps requested song speed, but the temporary synchronization adjustment can
             // push the effective speed outside BASS_FX's supported 5%-5100% tempo range.
-            float effectiveSpeed = Math.Clamp(
-                songSpeed + syncAdjustment,
-                MIN_PLAYBACK_SPEED,
-                MAX_PLAYBACK_SPEED
-            );
+            float effectiveSpeed = Math.Clamp(songSpeed + syncAdjustment, MIN_PLAYBACK_SPEED, MAX_PLAYBACK_SPEED);
 
             // Model the speed BASS actually receives. This can differ from the requested adjustment
             // when the effective speed reaches one of the limits above.
@@ -351,6 +293,7 @@ namespace YARG.Audio.BASS
             {
                 return;
             }
+
             _playback.ResetAfterSpeedChange();
         }
 
@@ -394,16 +337,13 @@ namespace YARG.Audio.BASS
                 _stemDatas.RemoveAll(stemDatas.Contains);
                 return false;
             }
+
             _songPositionTracker.SetAlignmentDelay(delay);
 
             foreach (var stemStreamData in stemDatas)
             {
-                CreateChannel(
-                    stem: stemStreamData.Stem,
-                    sourceHandle: sourceStream,
-                    streamHandles: stemStreamData.StreamHandles,
-                    reverbHandles: stemStreamData.ReverbHandles
-                );
+                CreateChannel(stemStreamData.Stem, sourceStream, stemStreamData.StreamHandles,
+                    stemStreamData.ReverbHandles);
             }
 
             return true;
@@ -428,63 +368,47 @@ namespace YARG.Audio.BASS
             // current gain remains applied; a new mixer will create a new normalizer.
             StopNormalization();
 
-            foreach (StemData stemData in _stemDatas)
+            foreach (var stemData in _stemDatas)
             {
-                if (!Bass.ChannelSetDevice(stemData.ReverbHandles.Stream, bassDevice.DeviceId))
-                {
-                    YargLogger.LogFormatError("Failed to change device for reverb handle: {0}", Bass.LastError);
-                }
-
-                if (!Bass.ChannelSetDevice(stemData.StreamHandles.Stream, bassDevice.DeviceId))
-                {
-                    YargLogger.LogFormatError("Failed to change device for stream handle: {0}", Bass.LastError);
-                }
+                BassX.Channel.SetDevice(stemData.ReverbHandles.Stream, bassDevice.DeviceId);
+                BassX.Channel.SetDevice(stemData.StreamHandles.Stream, bassDevice.DeviceId);
             }
 
             foreach (int handle in _sourceHandles)
             {
-                if (!Bass.ChannelSetDevice(handle, bassDevice.DeviceId))
-                {
-                    YargLogger.LogFormatError("Failed to change device for source handle: {0}", Bass.LastError);
-                }
+                BassX.Channel.SetDevice(handle, bassDevice.DeviceId);
             }
 
-            if (_mixerHandle != 0 && !Bass.ChannelSetDevice(_mixerHandle, bassDevice.DeviceId))
+            if (_mixerHandle != 0)
             {
-                YargLogger.LogFormatError("Failed to change device for mixer handle: {0}", Bass.LastError);
+                BassX.Channel.SetDevice(_mixerHandle, bassDevice.DeviceId);
             }
 
-            if (_tempoStreamHandle != 0 && !Bass.ChannelSetDevice(_tempoStreamHandle, bassDevice.DeviceId))
+            if (_tempoStreamHandle != 0)
             {
-                YargLogger.LogFormatError("Failed to change device for tempo stream handle: {0}", Bass.LastError);
+                BassX.Channel.SetDevice(_tempoStreamHandle, bassDevice.DeviceId);
             }
-
         }
 
         private void StopNormalization()
         {
             _shouldNormalize = false;
-            _normalizer.OnGainAdjusted -= OnGainAdjusted;
             _normalizer.Dispose();
         }
 
         private void OnOutputChanged()
         {
-            _playbackTimeline.ResetAfterOutputChange(
-                _songPositionTracker.GetSongPosition(),
-                _playback.GetPlaybackStartDelay()
-            );
+            _playbackTimeline.ResetAfterOutputChange(_songPositionTracker.GetSongPosition(),
+                _playback.GetPlaybackStartDelay());
         }
 
         private void RemoveChannelsFromMixer()
         {
             foreach (int channel in BassMix.MixerGetChannels(_mixerHandle))
             {
-                if (!BassMix.MixerRemoveChannel(channel))
-                {
-                    YargLogger.LogDebug("Failed to remove channel from mixer");
-                }
+                BassX.Mix.RemoveChannel(channel);
             }
+
             _playback.PrepareForSeek();
         }
 
@@ -496,10 +420,7 @@ namespace YARG.Audio.BASS
             foreach (var group in stemInfos.GroupBy(info => info.Stem))
             {
                 var stem = group.Key;
-                var allIndices = group
-                    .Where(info => info.Indices != null)
-                    .SelectMany(info => info.Indices)
-                    .ToArray();
+                int[] allIndices = group.Where(info => info.Indices != null).SelectMany(info => info.Indices).ToArray();
 
                 var handles = BassAudioManager.CreateSplitStreams(sourceStream, allIndices);
                 if (handles == null)
@@ -512,12 +433,9 @@ namespace YARG.Audio.BASS
                 double pitchFxDelay = 0;
                 if (GlobalAudioHandler.UseWhammyFx && AudioHelpers.PitchBendAllowedStems.Contains(stem))
                 {
-                    if (!Bass.ChannelGetAttribute(streamHandle.Stream, ChannelAttribute.Frequency,
+                    if (!BassX.Channel.GetAttribute(streamHandle.Stream, ChannelAttribute.Frequency,
                         out float frequency))
                     {
-                        YargLogger.LogFormatError(
-                            "Failed to get frequency for stem {0}: {1}!", stem, Bass.LastError
-                        );
                         return false;
                     }
 
@@ -544,45 +462,53 @@ namespace YARG.Audio.BASS
             out double alignmentDelay)
         {
             var stemData = stemStreamDataList.ToArray();
+            var addedChannels = new List<int>(stemData.Length * 2);
 
             // Align every stem with the largest pitch fx latency.  Latencies per stem can differ due to sample rate
-            alignmentDelay = stemData.Max(data => data.PitchFxDelay);
+            double requiredAlignmentDelay = stemData.Max(data => data.PitchFxDelay);
+            alignmentDelay = requiredAlignmentDelay;
 
-            foreach (var data in stemData)
+            try
             {
-                var stem = data.Stem;
-                var streamHandles = data.StreamHandles;
-                var reverbHandles = data.ReverbHandles;
-                var volumeMatrix = data.VolumeMatrix;
-
-                // Each stem already incurs its own processing delay. Add the difference from the maximum so every
-                // stem has the same total delay.
-                double addedDelay = playbackDelay + alignmentDelay - data.PitchFxDelay;
-                long delayBytes = Bass.ChannelSeconds2Bytes(_mixerHandle, addedDelay);
-
-                var flags = volumeMatrix != null ? BassFlags.MixerChanMatrix : BassFlags.Default;
-                if (!BassMix.MixerAddChannel(_mixerHandle, streamHandles.Stream, flags, delayBytes, 0) ||
-                    !BassMix.MixerAddChannel(_mixerHandle, reverbHandles.Stream, flags, delayBytes, 0))
+                foreach (var data in stemData)
                 {
-                    YargLogger.LogFormatError("Failed to add channel {0} to mixer: {1}!", stem, Bass.LastError);
-                    return false;
+                    var streamHandles = data.StreamHandles;
+                    var reverbHandles = data.ReverbHandles;
+                    float[,] volumeMatrix = data.VolumeMatrix;
+
+                    // Each stem already incurs its own processing delay. Add the difference from the maximum so every
+                    // stem has the same total delay.
+                    double addedDelay = playbackDelay + requiredAlignmentDelay - data.PitchFxDelay;
+                    long delayBytes = Bass.ChannelSeconds2Bytes(_mixerHandle, addedDelay);
+
+                    var flags = volumeMatrix != null ? BassFlags.MixerChanMatrix : BassFlags.Default;
+                    BassX.Mix.AddChannel(_mixerHandle, streamHandles.Stream, flags, delayBytes, 0);
+                    addedChannels.Add(streamHandles.Stream);
+                    BassX.Mix.AddChannel(_mixerHandle, reverbHandles.Stream, flags, delayBytes, 0);
+                    addedChannels.Add(reverbHandles.Stream);
+
+                    if (volumeMatrix == null)
+                    {
+                        continue;
+                    }
+
+                    BassX.Mix.SetMatrix(streamHandles.Stream, volumeMatrix);
+                    BassX.Mix.SetMatrix(reverbHandles.Stream, volumeMatrix);
                 }
 
-                if (volumeMatrix == null)
-                {
-                    continue;
-                }
-
-                if (!BassMix.ChannelSetMatrix(streamHandles.Stream, volumeMatrix) || !BassMix.ChannelSetMatrix(reverbHandles.Stream, volumeMatrix))
-                {
-                    YargLogger.LogFormatError("Failed to set {0} matrices: {1}!", stem, Bass.LastError);
-                    return false;
-                }
+                return true;
             }
-            return true;
+            catch (BassX.BassOperationException exception)
+            {
+                YargLogger.LogError(exception.Message);
+                foreach (int channel in addedChannels)
+                {
+                    BassX.Mix.RemoveChannel(channel);
+                }
+
+                return false;
+            }
         }
-
-
 
         internal static float[,] BuildVolumeMatrix(StemInfo info)
         {
@@ -590,7 +516,11 @@ namespace YARG.Audio.BASS
             {
                 return null;
             }
-            return BuildVolumeMatrix(new[] { info }, info.Indices.Length);
+
+            return BuildVolumeMatrix(new[]
+            {
+                info,
+            }, info.Indices.Length);
         }
 
 #nullable enable
@@ -609,7 +539,7 @@ namespace YARG.Audio.BASS
             int channelIndex = 0;
             foreach (var info in infos)
             {
-                var panning = info.Panning;
+                float[] panning = info.Panning;
                 for (int i = 0; i < info.Indices.Length; ++i)
                 {
                     volumeMatrix[leftPan, channelIndex] = panning[2 * i];
@@ -617,6 +547,7 @@ namespace YARG.Audio.BASS
                     channelIndex++;
                 }
             }
+
             return volumeMatrix;
         }
 
@@ -627,6 +558,7 @@ namespace YARG.Audio.BASS
             {
                 return false;
             }
+
             _channels[index].Dispose();
             _channels.RemoveAt(index);
             _stemDatas.RemoveAll(stem => stem.Stem == stemToRemove);
@@ -644,23 +576,23 @@ namespace YARG.Audio.BASS
             _whammySyncTimer.Stop();
             _whammySyncTimer = null;
             _stemDatas.Clear();
-            _gainDsp?.Dispose();
-            _gainDsp = null;
 
             StopNormalization();
+
+            _gainDsp?.Dispose();
+            _gainDsp = null;
 
             foreach (var channel in Channels)
             {
                 channel.Dispose();
             }
 
-            foreach (var sourceHandle in _sourceHandles)
+            foreach (int sourceHandle in _sourceHandles)
             {
-                if (!Bass.StreamFree(sourceHandle))
-                {
-                    YargLogger.LogFormatError("Failed to free source stream (THIS WILL LEAK MEMORY!): {0}!", Bass.LastError);
-                }
+                BassX.Stream.Free(sourceHandle, "source stream (THIS WILL LEAK MEMORY!)");
             }
+
+            _sourceHandles.Clear();
         }
 
         protected override void DisposeUnmanagedResources()
@@ -669,28 +601,29 @@ namespace YARG.Audio.BASS
             {
                 _playback.OutputChanged -= OnOutputChanged;
             }
+
             _playback?.Dispose();
 
             // Tempo stream owns and frees its source mixer via BassFlags.FxFreeSource.
             if (_tempoStreamHandle != 0)
             {
-                if (!Bass.StreamFree(_tempoStreamHandle))
-                {
-                    YargLogger.LogFormatError("Failed to free tempo stream: {0}!", Bass.LastError);
-                }
+                BassX.Stream.Free(_tempoStreamHandle, "tempo stream");
             }
         }
 
-        private void CreateChannel(SongStem stem, int sourceHandle, StreamHandle streamHandles, StreamHandle reverbHandles)
+        private void CreateChannel(SongStem stem, int sourceHandle, StreamHandle streamHandles,
+            StreamHandle reverbHandles)
         {
             var pitchparams = BassAudioManager.SetPitchParams(stem, _speed, streamHandles, reverbHandles);
-            var stemchannel = new BassStemChannel(_manager, stem, _clampStemVolume, sourceHandle, pitchparams, streamHandles, reverbHandles);
+            var stemchannel = new BassStemChannel(_manager, stem, _clampStemVolume, sourceHandle, pitchparams,
+                streamHandles, reverbHandles);
             double length = BassAudioManager.GetLengthInSeconds(streamHandles.Stream);
             if (length > _length)
             {
                 _longestHandle = streamHandles.Stream;
                 _length = length;
             }
+
             _channels.Add(stemchannel);
             UpdateThreading();
         }
@@ -699,51 +632,56 @@ namespace YARG.Audio.BASS
         {
             if (0 < _channels.Count && _channels.Count <= GlobalAudioHandler.MAX_THREADS)
             {
-                // Mixer processing threads (for some reason this attribute is undocumented in ManagedBass?)
-                // https://www.un4seen.com/forum/?topic=19491.msg136328#msg136328
-                if (!Bass.ChannelSetAttribute(_mixerHandle, (ChannelAttribute) 86017, _channels.Count))
-                {
-                    YargLogger.LogFormatError("Failed to set mixer processing threads: {0}!", Bass.LastError);
-                }
+                BassX.Mix.SetProcessingThreads(_mixerHandle, _channels.Count);
             }
         }
 
-        public override OneShotChannel CreateOneShotChannel(int sampleStream,
-            IReadOnlyList<double> scheduledPlays, double outputLeadTime = 0)
+        public override OneShotChannel CreateOneShotChannel(int sampleStream, IReadOnlyList<double> scheduledPlays,
+            double outputLeadTime = 0)
         {
-            return _playback.CreateOneShotChannel(
-                sampleStream,
-                scheduledPlays,
-                _songPositionTracker.GetSongPosition,
-                () => _speed,
-                outputLeadTime,
-                playbackPaused: !IsPlaying
-            );
+            return _playback.CreateOneShotChannel(sampleStream, scheduledPlays, _songPositionTracker.GetSongPosition,
+                () => _speed, outputLeadTime);
         }
+#nullable enable
+        private struct StemData
+        {
+            public readonly SongStem     Stem;
+            public readonly float[,]?    VolumeMatrix;
+            public readonly StreamHandle StreamHandles;
+            public readonly StreamHandle ReverbHandles;
+            public readonly double       PitchFxDelay;
+
+            public StemData(SongStem stem, float[,]? volumeMatrix, StreamHandle streamHandles,
+                StreamHandle reverbHandles, double pitchFxDelay)
+            {
+                Stem = stem;
+                VolumeMatrix = volumeMatrix;
+                StreamHandles = streamHandles;
+                ReverbHandles = reverbHandles;
+                PitchFxDelay = pitchFxDelay;
+            }
+        }
+#nullable disable
 
         /// <summary>
-        /// Gets actual song position from tempo stream.
-        /// <para>
-        /// Calculated as: tempo stream position + last seek position - alignment delay.
-        /// </para>
-        /// <para>
-        /// Tempo stream position advances continuously during playback and resets to zero after each seek.
-        /// Last seek position is the position of the most recent seek in the song. Alignment delay is applied
-        /// to all stems to keep them synchronized when using whammy FX and varies based on sample rate.
-        /// </para>
+        ///     Gets actual song position from tempo stream.
+        ///     <para>
+        ///         Calculated as: tempo stream position + last seek position - alignment delay.
+        ///     </para>
+        ///     <para>
+        ///         Tempo stream position advances continuously during playback and resets to zero after each seek.
+        ///         Last seek position is the position of the most recent seek in the song. Alignment delay is applied
+        ///         to all stems to keep them synchronized when using whammy FX and varies based on sample rate.
+        ///     </para>
         /// </summary>
         private sealed class SongPositionTracker
         {
-            private readonly int    _tempoStreamHandle;
             private readonly BassSongPlayback _playback;
-            private          double _songStart;
-            private          double _playbackDelay;
-            private          long   _positionBeforeSeek;
-            private          bool   _seekPending;
-
-            public  double AlignmentDelay { get; private set; }
-
-            private double TotalDelay     => AlignmentDelay + _playbackDelay;
+            private readonly int              _tempoStreamHandle;
+            private          double           _playbackDelay;
+            private          long             _positionBeforeSeek;
+            private          bool             _seekPending;
+            private          double           _songStart;
 
             public SongPositionTracker(int tempoStreamHandle, BassSongPlayback playback)
             {
@@ -751,8 +689,12 @@ namespace YARG.Audio.BASS
                 _playback = playback;
             }
 
+            public double AlignmentDelay { get; private set; }
+
+            private double TotalDelay => AlignmentDelay + _playbackDelay;
+
             /// <summary>
-            /// Gets the current position in the song, in seconds.
+            ///     Gets the current position in the song, in seconds.
             /// </summary>
             public double GetSongPosition()
             {
@@ -761,6 +703,7 @@ namespace YARG.Audio.BASS
                 {
                     return 0;
                 }
+
                 return position - TotalDelay + _songStart;
             }
 
@@ -771,17 +714,18 @@ namespace YARG.Audio.BASS
                 double position = GetPositionSeconds(tempoStreamPosition);
                 return position - TotalDelay + _songStart;
             }
+
             /// <summary>
-            /// Starts tracking from the requested song position after a seek
+            ///     Starts tracking from the requested song position after a seek
             /// </summary>
             public void Reset(double songStart, double alignmentDelay, double playbackDelay)
             {
                 _positionBeforeSeek = _playback.GetPosition();
                 if (_positionBeforeSeek < 0)
                 {
-                    YargLogger.LogFormatError("Failed to capture position before seek: {0}!",
-                        Bass.LastError);
+                    YargLogger.LogFormatError("Failed to capture position before seek: {0}!", Bass.LastError);
                 }
+
                 _seekPending = _positionBeforeSeek > 0;
 
                 _songStart = songStart;
@@ -837,5 +781,4 @@ namespace YARG.Audio.BASS
             }
         }
     }
-
 }

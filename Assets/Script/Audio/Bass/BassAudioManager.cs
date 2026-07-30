@@ -487,7 +487,7 @@ namespace YARG.Audio.BASS
             {
                 return null;
             }
-            return new BassStemMixer(name, this, speed, mixerVolume, handle, clampStemVolume: clampStemVolume,
+            return BassStemMixer.Create(name, this, speed, mixerVolume, handle, clampStemVolume: clampStemVolume,
                 normalize: normalize, outputChannel: CreateOutputChannel(SettingsManager.Settings?.OutputChannelDefault.Value ?? 0));
         }
 
@@ -1055,13 +1055,7 @@ namespace YARG.Audio.BASS
 
         internal static bool CreateSourceStream(Stream stream, out int streamHandle)
         {
-            // Last flag is new BASS_SAMPLE_NOREORDER flag, which is not in the BassFlags enum,
-            // as it was made as part of an update to fix <= 8 channel oggs.
-            // https://www.un4seen.com/forum/?topic=20148.msg140872#msg140872
-            const BassFlags streamFlags = BassFlags.Prescan | BassFlags.Decode | BassFlags.AsyncFile | (BassFlags) 64;
-
-            streamHandle = Bass.CreateStream(StreamSystem.NoBuffer, streamFlags,
-                new BassStreamProcedures(stream));
+            streamHandle = BassX.Stream.CreateSourceUnchecked(stream);
             if (streamHandle == 0)
             {
                 YargLogger.LogFormatError("Failed to create source stream: {0}!", Bass.LastError);

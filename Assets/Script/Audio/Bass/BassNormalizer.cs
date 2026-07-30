@@ -2,57 +2,91 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ManagedBass;
-using ManagedBass.Fx;
-using ManagedBass.Mix;
 using YARG.Core.Audio;
 using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
 {
     /// <summary>
-    /// Calculates a normalization gain for songs by analyzing RMS levels.
-    /// Streams are cloned and mixed into a decode-only mixer for background analysis.
-    /// Gain is adjusted incrementally toward the target RMS using clamped relative updates,
-    /// ensuring smooth transitions rather than abrupt volume changes.
+    ///     Calculates a normalization gain for songs by analyzing RMS levels.
+    ///     Streams are cloned and mixed into a decode-only mixer for background analysis.
+    ///     Gain is adjusted incrementally toward the target RMS using clamped relative updates,
+    ///     ensuring smooth transitions rather than abrupt volume changes.
     /// </summary>
     public class BassNormalizer : IDisposable
     {
         // Target RMS to normalize to, typically results in around -14 LUFS
-        private const float TARGET_RMS         = 0.12f;
+        private const float TARGET_RMS = 0.12f;
 
         // Low initial gain so it typically ramps up instead of ramps down
-        private const float INITIAL_GAIN       = 0.3f;
+        private const float INITIAL_GAIN = 0.3f;
 
         // Maximum allowed gain to prevent excessive loudness
-        private const float MAX_GAIN           = 1.5f;
+        private const float MAX_GAIN = 1.5f;
 
         // The length in ms of the sliding window for RMS calculation
-        private const int   WINDOW_MS          = 100;
+        private const int WINDOW_MS = 100;
 
         //Maximum per-window gain update, but ensuring that we can still hit max gain in a 2 minute long song
-        private const float MAX_GAIN_STEP      = (MAX_GAIN - INITIAL_GAIN) / (TWO_MINUTES_MS / WINDOW_MS);
+        private const float MAX_GAIN_STEP  = (MAX_GAIN - INITIAL_GAIN) / (TWO_MINUTES_MS / WINDOW_MS);
         private const float TWO_MINUTES_MS = 2 * 60 * 1000f;
 
-        // Undocumented BASS attribute to set max processing threads for a mixer
-        private const int   MAX_THREADS_ATTRIB = 86017;
-        private const int   GAIN_CALC_SHUTDOWN_TIMEOUT_MS = 1000;
-
-        private          int                     _mixer;
-        private readonly List<Stream>            _streams = new();
+        private const    int                     GAIN_CALC_SHUTDOWN_TIMEOUT_MS = 1000;
+        private readonly Action<float>           _applyGain;
         private readonly List<int>               _handles = new();
+        private readonly List<Stream>            _streams = new();
+        private          float                   _gain    = INITIAL_GAIN;
         private          CancellationTokenSource _gainCalcCts;
         private          Task                    _gainCalcTask = Task.CompletedTask;
-        public float               Gain { get; private set; } = INITIAL_GAIN;
-        public event Action<float> OnGainAdjusted;
+
+        private int _mixer;
+
+        public BassNormalizer(Action<float> applyGain)
+        {
+            _applyGain = applyGain;
+        }
+
+        public float Gain => Volatile.Read(ref _gain);
+
+        public void Dispose()
+        {
+            // BASS calls cannot be interrupted mid-call. Do not free handles while the worker is still using them.
+            if (!StopGainCalculation())
+            {
+                return;
+            }
+
+            // Free dependent split/source streams before the mixer they were added to.
+            for (int i = _handles.Count - 1; i >= 0; i--)
+            {
+                int handle = _handles[i];
+                if (!Bass.StreamFree(handle))
+                {
+                    if (Bass.LastError != Errors.Handle)
+                    {
+                        YargLogger.LogFormatError("Failed to free stream (THIS WILL LEAK MEMORY!): {0}!",
+                            Bass.LastError);
+                    }
+                }
+            }
+
+            foreach (var stream in _streams)
+            {
+                stream.Dispose();
+            }
+
+            _mixer = 0;
+            _streams.Clear();
+            _handles.Clear();
+        }
 
         /// <summary>
-        /// Adds a stream to the normalization mixer and restarts the background gain calculation.
-        /// Restarting updates with each added stream provides a head start on normalization before playback begins,
-        /// which is especially useful for modes like Practice where the mixer does not play immediately.
+        ///     Adds a stream to the normalization mixer and restarts the background gain calculation.
+        ///     Restarting updates with each added stream provides a head start on normalization before playback begins,
+        ///     which is especially useful for modes like Practice where the mixer does not play immediately.
         /// </summary>
         public bool AddStream(Stream stream, params StemMixer.StemInfo[] stemInfos)
         {
@@ -62,95 +96,60 @@ namespace YARG.Audio.BASS
                 return false;
             }
 
-            if (_mixer == 0)
-            {
-                if (!CreateMixer(out _mixer))
-                {
-                    return false;
-                }
-            }
-
             if (!CloneStreamToMemory(stream, out var clonedStream))
             {
                 YargLogger.LogError("Failed to clone stream!");
                 return false;
             }
 
-            if (!BassAudioManager.CreateSourceStream(clonedStream, out int sourceStream))
+            try
             {
-                YargLogger.LogFormatError("Failed to load stem source stream: {0}!", Bass.LastError);
-                return false;
-            }
-            _handles.Add(sourceStream);
-
-            foreach (var stemInfo in stemInfos)
-            {
-                var volumeMatrix = BassStemMixer.BuildVolumeMatrix(stemInfo);
-                if (volumeMatrix != null)
+                if (_mixer == 0)
                 {
-                    int[] channelMap = stemInfo.Indices.Append(-1).ToArray();
-                    int streamSplit = BassMix.CreateSplitStream(sourceStream, BassFlags.Decode, channelMap);
-                    if (streamSplit == 0)
-                    {
-                        YargLogger.LogFormatError("Failed to create split stream: {0}!", Bass.LastError);
-                        return false;
-                    }
-                    _handles.Add(streamSplit);
+                    _mixer = BassX.Mix.CreateMixer(44100, 2, BassFlags.Decode, GlobalAudioHandler.MAX_THREADS);
+                    _handles.Add(_mixer);
+                }
 
-                    if (!BassMix.MixerAddChannel(_mixer, streamSplit, BassFlags.MixerChanMatrix))
-                    {
-                        Bass.StreamFree(streamSplit);
-                        YargLogger.LogFormatError("Failed to add channel {0} to mixer: {1}!", stemInfo.Stem,
-                            Bass.LastError);
-                        return false;
-                    }
+                int sourceStream = BassX.Stream.CreateSource(clonedStream);
+                _handles.Add(sourceStream);
 
-                    if (!BassMix.ChannelSetMatrix(streamSplit, volumeMatrix))
+                foreach (var stemInfo in stemInfos)
+                {
+                    float[,] volumeMatrix = BassStemMixer.BuildVolumeMatrix(stemInfo);
+                    if (volumeMatrix != null)
                     {
-                        YargLogger.LogFormatError("Failed to set {stem} matrices: {0}!", stemInfo.Stem, Bass.LastError);
-                        return false;
+                        int[] channelMap = stemInfo.Indices.Append(-1).ToArray();
+                        int streamSplit = BassX.Mix.CreateSplit(sourceStream, BassFlags.Decode, channelMap);
+                        _handles.Add(streamSplit);
+
+                        BassX.Mix.AddChannel(_mixer, streamSplit, BassFlags.MixerChanMatrix);
+                        BassX.Mix.SetMatrix(streamSplit, volumeMatrix);
+                    }
+                    else
+                    {
+                        BassX.Mix.AddChannel(_mixer, sourceStream, BassFlags.Default);
                     }
                 }
-                else
-                {
-                    if (!BassMix.MixerAddChannel(_mixer, sourceStream, BassFlags.Default))
-                    {
-                        YargLogger.LogFormatError("Failed to add channel {0} to mixer: {1}!", stemInfo.Stem,
-                            Bass.LastError);
-                        return false;
-                    }
-                }
+
+                StartGainCalculation();
+                return true;
             }
-
-            StartGainCalculation();
-            return true;
-        }
-
-        private bool CreateMixer(out int mixerHandle)
-        {
-            mixerHandle = BassMix.CreateMixerStream(44100, 2, BassFlags.Decode);
-            if (mixerHandle == 0)
+            catch (BassX.BassOperationException exception)
             {
-                YargLogger.LogFormatError("Failed to create mixer: {0}!", Bass.LastError);
+                YargLogger.LogError(exception.Message);
                 return false;
             }
-
-            if (!Bass.ChannelSetAttribute(mixerHandle, (ChannelAttribute) MAX_THREADS_ATTRIB, GlobalAudioHandler.MAX_THREADS))
-            {
-                YargLogger.LogFormatError("Failed to set mixer processing threads: {0}!", Bass.LastError);
-            }
-
-            _handles.Add(mixerHandle);
-            return true;
         }
 
         private bool CloneStreamToMemory(Stream original, out MemoryStream clonedStream)
         {
             clonedStream = null;
             if (!original.CanRead || !original.CanSeek)
+            {
                 return false;
+            }
 
-            var originalPosition = original.Position;
+            long originalPosition = original.Position;
             try
             {
                 original.Position = 0;
@@ -177,12 +176,24 @@ namespace YARG.Audio.BASS
             _gainCalcCts = new CancellationTokenSource();
             var token = _gainCalcCts.Token;
 
-            Action<double> progress = gain =>
-            {
-                OnGainAdjusted?.Invoke((float) gain);
-            };
+            _gainCalcTask = Task.Factory.StartNew(() => RunGainCalculation(token), CancellationToken.None,
+                TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        }
 
-            _gainCalcTask = Task.Run(() => CalculateRms(progress, token), token);
+        private void RunGainCalculation(CancellationToken token)
+        {
+            try
+            {
+                CalculateRms(token);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // Expected shutdown.
+            }
+            catch (Exception ex)
+            {
+                YargLogger.LogException(ex, "Gain calculation failed.");
+            }
         }
 
         private bool StopGainCalculation()
@@ -192,39 +203,22 @@ namespace YARG.Audio.BASS
                 return true;
             }
 
-            var cts = _gainCalcCts;
-            var task = _gainCalcTask;
-            cts.Cancel();
+            _gainCalcCts.Cancel();
 
-            bool stopped = false;
-            try
+            if (!_gainCalcTask.Wait(GAIN_CALC_SHUTDOWN_TIMEOUT_MS))
             {
-                stopped = task.Wait(GAIN_CALC_SHUTDOWN_TIMEOUT_MS);
-            }
-            catch (AggregateException)
-            {
-                // The worker has stopped; its exception must not abort Unity teardown.
-                stopped = true;
-            }
-            finally
-            {
-                if (stopped || task.IsCompleted)
-                {
-                    cts.Dispose();
-                    _gainCalcCts = null;
-                    _gainCalcTask = Task.CompletedTask;
-                }
+                YargLogger.LogError(
+                    "Gain calculation did not stop during audio teardown; leaving its BASS handles intact.");
+                return false;
             }
 
-            if (!stopped)
-            {
-                YargLogger.LogError("Gain calculation did not stop during audio teardown; leaving its BASS handles intact.");
-            }
-
-            return stopped;
+            _gainCalcCts.Dispose();
+            _gainCalcCts = null;
+            _gainCalcTask = Task.CompletedTask;
+            return true;
         }
 
-        private void CalculateRms(Action<double> progress, CancellationToken token)
+        private void CalculateRms(CancellationToken token)
         {
             double cumulativeSumSquares = 0.0;
             long totalSamples = 0;
@@ -249,7 +243,7 @@ namespace YARG.Audio.BASS
                     break;
                 }
 
-                var chunkedRms = level[0];
+                float chunkedRms = level[0];
                 if (chunkedRms > 0)
                 {
                     double sumSquares = chunkedRms * chunkedRms * samplesPerWindow;
@@ -258,39 +252,13 @@ namespace YARG.Audio.BASS
 
                     double rms = Math.Sqrt(cumulativeSumSquares / totalSamples);
                     float targetGain = (float) Math.Min(MAX_GAIN, TARGET_RMS / rms);
-                    float delta = Math.Clamp(targetGain - Gain, -MAX_GAIN_STEP, MAX_GAIN_STEP);
-                    Gain += delta;
-                    progress?.Invoke(Gain);
+                    float gain = Gain;
+                    float delta = Math.Clamp(targetGain - gain, -MAX_GAIN_STEP, MAX_GAIN_STEP);
+                    gain += delta;
+                    Volatile.Write(ref _gain, gain);
+                    _applyGain?.Invoke(gain);
                 }
             }
-        }
-
-        public void Dispose()
-        {
-            // BASS calls cannot be interrupted mid-call. Do not free handles while the worker is still using them.
-            if (!StopGainCalculation())
-            {
-                return;
-            }
-
-            foreach (var handle in _handles)
-            {
-                if (!Bass.StreamFree(handle))
-                {
-                    if (Bass.LastError != Errors.Handle)
-                    {
-                        YargLogger.LogFormatError("Failed to free stream (THIS WILL LEAK MEMORY!): {0}!",
-                            Bass.LastError);
-                    }
-                }
-            }
-            foreach (var stream in _streams)
-            {
-                stream.Dispose();
-            }
-            _mixer = 0;
-            _streams.Clear();
-            _handles.Clear();
         }
     }
 }
