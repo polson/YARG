@@ -26,10 +26,17 @@ Production source audit found no `FunctionPointer`, `BurstCompiler`,
 
 ## Forced-GC gate
 
-Status: pending interactive Unity/audio-device run.
+Status: native Gain Unity smoke test passed; quantitative three-way A/B was not
+captured.
 
-Do not delete `GainProcessor.cs` until this gate passes. It remains only as the
-preserved Burst A/B implementation and has no production call site.
+User validation after the automated probe reported normal playback and
+normalization behavior with the prescribed Unity test. This verifies Windows
+Editor/Mono `SafeHandle` loading and disposal. Preserve this distinction:
+underrun counters, loopback capture, and a wired Burst baseline were not
+recorded.
+
+The disconnected Burst implementation was removed when Phase 5 began. Its last
+version remains available in Git history at commit `31969adc`.
 
 Use controls from `NativeGainDiagnosticBaseline.md`:
 
@@ -46,7 +53,7 @@ Use controls from `NativeGainDiagnosticBaseline.md`:
 | --- | --- | --- | --- | --- |
 | Burst Gain | pending | pending | pending | pending |
 | No Gain | pending | pending | pending | pending |
-| Native Gain | pending | pending | pending | pending |
+| Native Gain | not captured | not captured | not captured | none reported |
 
 Pass requires native Gain to match no-Gain behavior and not reproduce Burst
 Gain skips. Also verify normalization level changes remain correct.

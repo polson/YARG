@@ -21,10 +21,11 @@ try {
     ctest --preset windows-x64-release -C $Configuration
     if ($LASTEXITCODE -ne 0) { throw "Native tests failed" }
 
-    dotnet run --project tests/WindowsGainIntegration/WindowsGainIntegration.csproj `
+    dotnet run --project tests/GainIntegration/GainIntegration.csproj `
         --configuration Release `
+        -p:YargAudioPlatform=Windows `
         -p:YargAudioNativeConfiguration=$Configuration
-    if ($LASTEXITCODE -ne 0) { throw "Windows Gain integration test failed" }
+    if ($LASTEXITCODE -ne 0) { throw "Gain integration test failed" }
 
     if (!$NoCopy) {
         New-Item -ItemType Directory -Force $plugin | Out-Null
