@@ -22,6 +22,17 @@ C++, but does not justify a general-purpose graph, callback SDK, or Freeverb
 migration. Quantitative Gain A/B results and Unix runtime results remain
 missing; see `WindowsGainProof.md` and `MultiplatformGain.md`.
 
+## Implementation status
+
+- Native one-shot backend is selected by the explicit managed backend switch.
+- Windows Unity smoke test passed with forced F8 GC and no audible hitch.
+- Native CTest covers renderer and mocked lifecycle behavior.
+- `GainIntegration` now covers real BASS one-shot attach, render, mute, pause,
+  resync, detach, mixer replacement, and repeated destruction. Windows passed
+  locally; Linux and macOS still require host/CI execution.
+- Burst one-shot code remains available for controlled A/B comparison. It is
+  not an automatic runtime fallback.
+
 ## Boundary
 
 Keep these operations in managed control-plane code:

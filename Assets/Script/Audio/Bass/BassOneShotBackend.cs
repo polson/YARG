@@ -8,7 +8,12 @@ namespace YARG.Audio.BASS
 
     internal static class BassOneShotBackendSelection
     {
-        // Native path active for controlled runtime testing; failures do not fall back.
+#if YARG_AUDIO_ONE_SHOT_BURST
+        // Explicit A/B or rollback build. Native failures never fall back here.
+        internal const BassOneShotBackend Current = BassOneShotBackend.Burst;
+#else
+        // Native path is default. Native failures never fall back to Burst.
         internal const BassOneShotBackend Current = BassOneShotBackend.Native;
+#endif
     }
 }
