@@ -1,6 +1,8 @@
 #pragma once
 
-#include "BassBindings.h"
+#include "BassAsioBindings.h"
+#include "BassCoreBindings.h"
+#include "BassMixBindings.h"
 #include "RenderAheadMixer.h"
 #include "yarg_audio.h"
 
@@ -31,14 +33,16 @@ public:
 
 private:
     class BassAudioSource;
-    static std::uint32_t CALLBACK outputCallback(int input, std::uint32_t channel,
+    static std::uint32_t YARG_BASS_CALLBACK outputCallback(int input, std::uint32_t channel,
         void* buffer, std::uint32_t length, void* user) noexcept;
     std::uint32_t processOutput(void* buffer, std::uint32_t length) noexcept;
     void disableOutput() noexcept;
     void updateMinimum(std::uint32_t queued) noexcept;
 
     const yarg_asio_router_config config_;
-    BassBindings bass_;
+    BassCoreBindings bass_;
+    BassMixBindings bassMix_;
+    BassAsioBindings bassAsio_;
     std::unique_ptr<RenderAheadMixer> buffered_;
     std::uint32_t bufferedHandle_ = 0;
     std::uint32_t directHandle_ = 0;

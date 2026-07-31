@@ -12,9 +12,10 @@ namespace yarg::audio {
 
 class AsioMixerRouter::BassAudioSource final : public IAudioSource {
 public:
-    BassAudioSource(BassBindings& bass, int device, std::uint32_t handle,
-        std::uint32_t channels)
-        : bass_(bass), device_(device), handle_(handle), channels_(channels) {}
+    BassAudioSource(BassCoreBindings& bass, BassMixBindings& bassMix,
+        int device, std::uint32_t handle, std::uint32_t channels)
+        : bass_(bass), bassMix_(bassMix), device_(device), handle_(handle),
+          channels_(channels) {}
 
     bool prepareThread() noexcept override { return bass_.setDevice(device_); }
 
@@ -24,14 +25,15 @@ public:
         return result < 0 ? -1 : result / static_cast<int>(channels_ * sizeof(float));
     }
 
-    int lastError() const noexcept override { return bass_.bassError(); }
+    int lastError() const noexcept override { return bass_.error(); }
     std::int64_t position(std::uint32_t sourceHandle,
         std::uint32_t delayBytes) noexcept override {
-        return bass_.mixerGetPosition(sourceHandle, delayBytes);
+        return bassMix_.getPosition(sourceHandle, delayBytes);
     }
 
 private:
-    BassBindings& bass_;
+    BassCoreBindings& bass_;
+    BassMixBindings& bassMix_;
     int device_;
     std::uint32_t handle_;
     std::uint32_t channels_;
@@ -52,7 +54,7 @@ AsioMixerRouter::~AsioMixerRouter() {
 }
 
 int AsioMixerRouter::initialize() noexcept {
-    if (!bass_.load()) {
+    if (!bass_.load() || !bassMix_.load() || !bassAsio_.load()) {
         lastError_.store(YARG_AUDIO_ERROR_DEPENDENCY);
         return YARG_AUDIO_ERROR_DEPENDENCY;
     }
@@ -70,7 +72,7 @@ int AsioMixerRouter::attach(std::uint32_t mixer,
         if (buffered_) return YARG_AUDIO_ERROR_UNSUPPORTED;
         try {
             auto source = std::make_unique<BassAudioSource>(
-                bass_, config_.bass_device_id, mixer, config_.channels);
+                bass_, bassMix_, config_.bass_device_id, mixer, config_.channels);
             buffered_ = std::make_unique<RenderAheadMixer>(std::move(source),
                 config_.sample_rate, config_.channels, config_.callback_frames,
                 bufferMilliseconds);
@@ -118,16 +120,16 @@ int AsioMixerRouter::enableOutput(std::uint32_t firstChannel) noexcept {
         return YARG_AUDIO_ERROR_INVALID_STATE;
 
     firstOutputChannel_ = firstChannel;
-    if (!bass_.asioSetFloat(firstChannel) ||
-        !bass_.asioSetRate(firstChannel, config_.sample_rate) ||
-        !bass_.asioEnable(firstChannel, &AsioMixerRouter::outputCallback, this)) {
-        lastError_.store(bass_.asioError());
+    if (!bassAsio_.setFloat(firstChannel) ||
+        !bassAsio_.setRate(firstChannel, config_.sample_rate) ||
+        !bassAsio_.enable(firstChannel, &AsioMixerRouter::outputCallback, this)) {
+        lastError_.store(bassAsio_.error());
         return YARG_AUDIO_ERROR_BASS_ASIO;
     }
 
     outputEnabled_.store(true, std::memory_order_release);
-    if (!bass_.asioJoin(firstChannel + 1, firstChannel)) {
-        lastError_.store(bass_.asioError());
+    if (!bassAsio_.join(firstChannel + 1, firstChannel)) {
+        lastError_.store(bassAsio_.error());
         disableOutput();
         return YARG_AUDIO_ERROR_BASS_ASIO;
     }
@@ -172,7 +174,7 @@ int64_t AsioMixerRouter::getSourcePosition(std::uint32_t source,
     const auto delayBytes = static_cast<std::uint32_t>(
         delayFrames * config_.channels * sizeof(float));
     auto position = buffered_->sourcePosition(source, delayBytes);
-    if (position < 0 && bass_.bassError() == 37) {
+    if (position < 0 && bass_.error() == 37) {
         position = buffered_->sourcePosition(source, 0);
     }
     error = position < 0 ? YARG_AUDIO_ERROR_BASS : YARG_AUDIO_OK;
@@ -201,7 +203,7 @@ int AsioMixerRouter::setVolume(float volume) noexcept {
     return YARG_AUDIO_OK;
 }
 
-std::uint32_t CALLBACK AsioMixerRouter::outputCallback(int input, std::uint32_t,
+std::uint32_t YARG_BASS_CALLBACK AsioMixerRouter::outputCallback(int input, std::uint32_t,
     void* buffer, std::uint32_t length, void* user) noexcept {
     if (input || !user || !buffer) return 0;
     return static_cast<AsioMixerRouter*>(user)->processOutput(buffer, length);
@@ -253,7 +255,7 @@ std::uint32_t AsioMixerRouter::processOutput(void* buffer, std::uint32_t length)
     if (frames <= config_.callback_frames && bass_.setDevice(config_.bass_device_id)) {
         const int directBytes = bass_.getData(directHandle_, directScratch_.data(), length);
         if (directBytes < 0) {
-            lastError_.store(bass_.bassError(), std::memory_order_relaxed);
+            lastError_.store(bass_.error(), std::memory_order_relaxed);
         } else {
             const auto directSamples = static_cast<std::size_t>(directBytes) / sizeof(float);
             mixAdd(output, directScratch_.data(), directSamples);
@@ -261,7 +263,7 @@ std::uint32_t AsioMixerRouter::processOutput(void* buffer, std::uint32_t length)
     } else if (frames > config_.callback_frames) {
         lastError_.store(YARG_AUDIO_ERROR_UNSUPPORTED, std::memory_order_relaxed);
     } else {
-        lastError_.store(bass_.bassError(), std::memory_order_relaxed);
+        lastError_.store(bass_.error(), std::memory_order_relaxed);
     }
 
     const float volume = volume_.load(std::memory_order_acquire);
@@ -272,7 +274,7 @@ std::uint32_t AsioMixerRouter::processOutput(void* buffer, std::uint32_t length)
 
 void AsioMixerRouter::disableOutput() noexcept {
     if (!outputEnabled_.exchange(false, std::memory_order_acq_rel)) return;
-    bass_.asioResetEnable(firstOutputChannel_);
+    bassAsio_.resetEnable(firstOutputChannel_);
     while (activeCallbacks_.load(std::memory_order_acquire) != 0) {
         std::this_thread::yield();
     }

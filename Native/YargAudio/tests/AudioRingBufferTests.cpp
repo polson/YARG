@@ -83,6 +83,8 @@ int main() {
     testEmptyFullAndPartial();
     testWraparound();
     testConcurrentSpsc();
+    runBassBindingTests();
+    runGainDspTests();
     runRenderAheadMixerTests();
     std::cout << "YargAudio native tests passed\n";
     return 0;
