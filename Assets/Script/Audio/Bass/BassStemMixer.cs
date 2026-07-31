@@ -122,7 +122,13 @@ namespace YARG.Audio.BASS
 
         private void AddGainDSP()
         {
-            _gainDsp = BassGainDsp.Create(_mixerHandle, 1f);
+            _gainDsp = BassGainDsp.Attach(_mixerHandle, 1f);
+            if (_gainDsp == null)
+            {
+                // BassGainDsp logs attachment diagnostics. Do not install Burst fallback: that
+                // would restore the GC-sensitive callback this native path replaces.
+                _shouldNormalize = false;
+            }
         }
 
         protected override int Play_Internal()
@@ -579,6 +585,8 @@ namespace YARG.Audio.BASS
 
             StopNormalization();
 
+            // Native Gain borrows the source mixer. Detach it before DisposeUnmanagedResources
+            // frees the tempo stream and its FxFreeSource-owned mixer.
             _gainDsp?.Dispose();
             _gainDsp = null;
 
