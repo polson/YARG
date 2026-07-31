@@ -153,7 +153,7 @@ namespace YARG.Audio.BASS
             if (route.IsAttached)
             {
                 _backend?.DetachMonitor(route.Source.Handle);
-                route.IsAttached = false;
+                route.MarkDetached();
             }
             _monitorRoutes.Remove(route);
         }
@@ -318,7 +318,7 @@ namespace YARG.Audio.BASS
                 _backend!.AttachMonitor(route.Source.Handle, route.Volume);
             if (attached)
             {
-                route.IsAttached = true;
+                route.MarkAttached();
                 return true;
             }
 
@@ -354,7 +354,7 @@ namespace YARG.Audio.BASS
                 {
                     break;
                 }
-                route.IsAttached = true;
+                route.MarkAttached();
                 attachedRouteCount++;
             }
 
@@ -393,7 +393,7 @@ namespace YARG.Audio.BASS
             {
                 var route = routes[i].Route;
                 _backend!.DetachMonitor(route.Source.Handle);
-                route.IsAttached = false;
+                route.MarkDetached();
             }
             for (int i = movedRouteCount - 1; i >= 0; i--)
             {
@@ -414,7 +414,7 @@ namespace YARG.Audio.BASS
                     continue;
                 }
                 _backend.DetachMonitor(route.Source.Handle);
-                route.IsAttached = false;
+                route.MarkDetached();
             }
         }
 

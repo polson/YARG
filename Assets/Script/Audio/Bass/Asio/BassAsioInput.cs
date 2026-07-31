@@ -181,7 +181,7 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public int Read(BassAsioInputLease lease, float[] buffer)
+        public unsafe int Read(BassAsioInputLease lease, Span<float> buffer)
         {
             lock (_lock)
             {
@@ -190,11 +190,35 @@ namespace YARG.Audio.BASS
                     return -1;
                 }
 
-                return Bass.ChannelGetData(_analysisHandle, buffer, checked(buffer.Length * sizeof(float)));
+                if (buffer.IsEmpty)
+                {
+                    return 0;
+                }
+
+                fixed (float* pointer = buffer)
+                {
+                    return Bass.ChannelGetData(_analysisHandle, (IntPtr) pointer,
+                        checked(buffer.Length * sizeof(float)));
+                }
             }
         }
 
-        public bool Reset(BassAsioInputLease lease)
+        public int GetBacklogBytes(BassAsioInputLease lease)
+        {
+            lock (_lock)
+            {
+                if (!OwnsLease(lease) || _analysisHandle == 0)
+                {
+                    return -1;
+                }
+
+                return BassMix.SplitStreamGetAvailable(_analysisHandle);
+            }
+        }
+
+        public int GetAnalysisBacklogBytes(BassAsioInputLease lease) => GetBacklogBytes(lease);
+
+        public bool Reset(BassAsioInputLease lease, bool resetMonitorEffects)
         {
             lock (_lock)
             {
@@ -205,7 +229,28 @@ namespace YARG.Audio.BASS
                 }
 
                 bool reset = BassMix.SplitStreamReset(_analysisHandle, 0);
-                _reverb?.RequestReset();
+                if (resetMonitorEffects)
+                {
+                    _reverb?.RequestReset();
+                }
+                return reset;
+            }
+        }
+
+        public bool ResetMonitorToLive(BassAsioInputLease lease)
+        {
+            lock (_lock)
+            {
+                if (!OwnsLease(lease) || _monitorHandle == 0)
+                {
+                    return false;
+                }
+
+                bool reset = BassMix.SplitStreamReset(_monitorHandle, 0);
+                if (reset)
+                {
+                    _reverb?.RequestReset();
+                }
                 return reset;
             }
         }
@@ -293,33 +338,36 @@ namespace YARG.Audio.BASS
 
         public void FreeNativeStreams()
         {
-            if (_rootHandle == 0)
+            lock (_lock)
             {
-                return;
-            }
+                if (_rootHandle == 0)
+                {
+                    return;
+                }
 
-            if (_isAttached)
-            {
-                BassMix.MixerRemoveChannel(_monitorHandle);
-                _isAttached = false;
-            }
+                if (_isAttached)
+                {
+                    BassMix.MixerRemoveChannel(_monitorHandle);
+                    _isAttached = false;
+                }
 
-            _reverb?.Dispose();
-            _reverb = null;
-            if (_analysisHandle != 0)
-            {
-                Bass.StreamFree(_analysisHandle);
-                _analysisHandle = 0;
-            }
+                _reverb?.Dispose();
+                _reverb = null;
+                if (_analysisHandle != 0)
+                {
+                    Bass.StreamFree(_analysisHandle);
+                    _analysisHandle = 0;
+                }
 
-            if (_monitorHandle != 0)
-            {
-                Bass.StreamFree(_monitorHandle);
-                _monitorHandle = 0;
-            }
+                if (_monitorHandle != 0)
+                {
+                    Bass.StreamFree(_monitorHandle);
+                    _monitorHandle = 0;
+                }
 
-            Bass.StreamFree(_rootHandle);
-            _rootHandle = 0;
+                Bass.StreamFree(_rootHandle);
+                _rootHandle = 0;
+            }
         }
 
         private void DisableMonitor()
@@ -340,13 +388,14 @@ namespace YARG.Audio.BASS
     /// <summary>
     /// Exclusive access to one pre-created ASIO input. Backend invalidates lease on shutdown.
     /// </summary>
-    internal sealed class BassAsioInputLease : IDisposable
+    internal sealed class BassAsioInputLease : IDisposable, IBassMicSampleSource
     {
         private readonly BassAsioInput _input;
         private int _released;
 
         public AsioInputDescriptor Descriptor { get; }
         public bool IsValid => !IsReleased && _input.IsLeaseActive(this);
+        public int SampleRate => Descriptor.SampleRate;
 
         private bool IsReleased => Volatile.Read(ref _released) != 0;
 
@@ -356,22 +405,28 @@ namespace YARG.Audio.BASS
             Descriptor = input.Descriptor;
         }
 
-        public int Read(float[] buffer)
+        public int Read(Span<float> buffer)
         {
-            if (buffer == null)
-            {
-                throw new ArgumentNullException(nameof(buffer));
-            }
-
             if (IsReleased)
             {
                 return -1;
             }
 
-            return _input.Read(this, buffer);
+            int bytesRead = _input.Read(this, buffer);
+            return bytesRead < 0 ? -1 : bytesRead / sizeof(float);
         }
 
-        public bool Reset() => !IsReleased && _input.Reset(this);
+        public int GetBacklogBytes() =>
+            !IsReleased ? _input.GetBacklogBytes(this) : -1;
+
+        public int GetAnalysisBacklogBytes() => GetBacklogBytes();
+
+        public bool ResetToLive() => !IsReleased && _input.Reset(this, resetMonitorEffects: false);
+
+        public bool Reset() => !IsReleased && _input.Reset(this, resetMonitorEffects: true);
+
+        public bool ResetMonitorToLive() =>
+            !IsReleased && _input.ResetMonitorToLive(this);
 
         public bool EnableMonitoring(double volume)
         {

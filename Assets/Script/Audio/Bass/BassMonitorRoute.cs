@@ -27,9 +27,6 @@ namespace YARG.Audio.BASS
             _resetEffects = resetEffects;
         }
 
-        public static BassMonitorSource? CreatePush(int handle, Action? resetEffects = null) =>
-            Create(handle, ResetKind.Push, resetEffects);
-
         public static BassMonitorSource? CreateSplit(int handle, Action? resetEffects = null) =>
             Create(handle, ResetKind.Split, resetEffects);
 
@@ -94,14 +91,6 @@ namespace YARG.Audio.BASS
         {
             switch (resetKind)
             {
-                case ResetKind.Push:
-                    if (Bass.StreamPutData(handle, IntPtr.Zero, 0) >= 0)
-                    {
-                        return true;
-                    }
-
-                    YargLogger.LogFormatError("Monitor source {0} is not a push stream: {1}", handle, Bass.LastError);
-                    return false;
                 case ResetKind.Split:
                     if (BassMix.SplitStreamGetSource(handle) != 0)
                     {
@@ -120,7 +109,6 @@ namespace YARG.Audio.BASS
         {
             bool succeeded = _resetKind switch
             {
-                ResetKind.Push  => Bass.ChannelSetPosition(Handle, 0, PositionFlags.Bytes),
                 ResetKind.Split => BassMix.SplitStreamReset(Handle, 0),
                 _               => false,
             };
@@ -149,7 +137,6 @@ namespace YARG.Audio.BASS
 
         private enum ResetKind
         {
-            Push,
             Split,
         }
     }
@@ -160,6 +147,8 @@ namespace YARG.Audio.BASS
     internal sealed class BassMonitorRoute : IDisposable
     {
         private BassAudioOutput? _owner;
+        private Action? _attached;
+        private Action? _detached;
 
         internal BassMonitorSource Source     { get; }
         internal bool              IsAttached { get; set; }
@@ -188,10 +177,45 @@ namespace YARG.Audio.BASS
             Interlocked.Exchange(ref _owner, null)?.Remove(this);
         }
 
+        internal void SetLifecycleCallbacks(Action? attached, Action? detached)
+        {
+            _attached = attached;
+            _detached = detached;
+        }
+
+        internal void MarkAttached()
+        {
+            IsAttached = true;
+            InvokeLifecycleCallback(_attached);
+        }
+
+        internal void MarkDetached()
+        {
+            if (!IsAttached)
+            {
+                return;
+            }
+
+            IsAttached = false;
+            InvokeLifecycleCallback(_detached);
+        }
+
         internal void InvalidateOwner()
         {
             Interlocked.Exchange(ref _owner, null);
-            IsAttached = false;
+            MarkDetached();
+        }
+
+        private static void InvokeLifecycleCallback(Action? callback)
+        {
+            try
+            {
+                callback?.Invoke();
+            }
+            catch (Exception exception)
+            {
+                YargLogger.LogException(exception, "Monitor route lifecycle callback failed");
+            }
         }
     }
 }
