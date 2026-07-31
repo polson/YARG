@@ -85,6 +85,7 @@ int main() {
     testConcurrentSpsc();
     runBassBindingTests();
     runGainDspTests();
+    runFreeverbDspTests();
     runRenderAheadMixerTests();
     std::cout << "YargAudio native tests passed\n";
     return 0;
