@@ -44,7 +44,7 @@ dotnet run --project tests/GainIntegration/GainIntegration.csproj \
     -p:YargAudioPlatform="$platform"
 
 if [[ "$platform" == "MacOS" ]]; then
-    lipo -verify_arch x86_64 arm64 "$built"
+    lipo "$built" -verify_arch x86_64 arm64
 fi
 
 if [[ "$no_copy" == false ]]; then
