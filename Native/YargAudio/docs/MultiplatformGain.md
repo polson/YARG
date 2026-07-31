@@ -15,14 +15,15 @@ keeps a consistent C export surface.
 ## CI evidence
 
 GitHub Actions run
-[`30657497104`](https://github.com/polson/YARG/actions/runs/30657497104)
+[`30670089826`](https://github.com/polson/YARG/actions/runs/30670089826)
 passed Windows x64, Ubuntu x64, and macOS universal jobs on 2026-07-31.
-Linux/macOS jobs built native code, passed unit and real-BASS integration tests,
-verified exports/architectures, and produced these packaged binaries:
+Linux/macOS jobs built current native one-shot code, passed unit and real-BASS
+Gain/Freeverb/one-shot integration tests, verified exports/architectures, and
+produced these committed plugin binaries:
 
 ```text
-Linux x64 SHA-256: 5e5a177649fd1e24f4b3c44224c743a411ec5d64bbb2cec63e54eed4ff74739e
-macOS universal SHA-256: dd08043a09941b83498c16f7eb7a24ef8083fa4b423686221536cee9090f3cc8
+Linux x64 SHA-256: 4820aa4c5ca8c37c9ecc2e7829d8c759c0a5dcfb1de30588ee5fa88480fbc25b
+macOS universal SHA-256: a9f1ef254f1a627b76a70ec61c3252e62e4ec3177c3341e16dfda31e626015fe
 ```
 
 Follow-up run
@@ -69,5 +70,5 @@ For Linux and macOS, test both Mono and IL2CPP players with normalization enable
 3. Verify no dependency/ABI/attach errors, output gaps, or teardown crashes.
 4. Verify native Gain matches normalization-disabled playback except level.
 
-Phase 5 completes only after packaged binaries and platform runtime results are
-recorded above.
+Packaged binaries and native host integration results are complete. Unity Mono
+and IL2CPP runtime validation remains pending.
