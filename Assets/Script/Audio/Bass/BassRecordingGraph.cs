@@ -9,9 +9,9 @@ namespace YARG.Audio.BASS
     /// <summary>
     /// Owns callback-free non-ASIO capture and its native monitor/analysis graph.
     ///
-    /// The monitor splitter is the master reader and is pulled by the output backend. The
-    /// analysis splitter is a slave, so managed analysis reads can never drive capture or monitor
-    /// playback.
+    /// The monitor splitter is pulled by the output backend and drives capture. The analysis
+    /// splitter only reads buffered data, so managed analysis reads can never drive capture or
+    /// monitor playback.
     /// </summary>
     internal sealed class BassRecordingGraph : IBassMicSampleSource, IDisposable
     {
@@ -183,7 +183,7 @@ namespace YARG.Audio.BASS
                     return null;
                 }
 
-                // Master split drives root. Slave only consumes already-buffered source data.
+                // Monitor split drives root. Analysis only consumes already-buffered source data.
                 analysisHandle = BassMix.CreateSplitStream(rootHandle,
                     BassFlags.Decode | BassFlags.SplitPosition | BassFlags.SplitSlave, null);
                 if (analysisHandle == 0)

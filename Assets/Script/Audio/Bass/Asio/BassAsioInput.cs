@@ -115,8 +115,8 @@ namespace YARG.Audio.BASS
                     return false;
                 }
 
-                // The audible monitor is the master reader. Analysis only consumes audio that
-                // the realtime output has already pulled, so it cannot stall monitoring.
+                // The audible monitor is pulled by realtime output. Analysis only consumes audio
+                // that output has already pulled, so it cannot stall monitoring.
                 analysisHandle = BassMix.CreateSplitStream(_rootHandle,
                     BassFlags.Decode | BassFlags.SplitPosition | BassFlags.SplitSlave, null);
                 if (analysisHandle == 0 || !Bass.ChannelSetAttribute(monitorHandle, ChannelAttribute.Volume, 0))

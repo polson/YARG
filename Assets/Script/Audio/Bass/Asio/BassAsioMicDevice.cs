@@ -9,7 +9,7 @@ namespace YARG.Audio.BASS
     /// <summary>
     /// Microphone adapter for an input owned by the active ASIO output backend.
     /// Monitoring stays entirely in the native ASIO graph; the shared worker only drains the
-    /// analysis slave.
+    /// analysis branch.
     /// </summary>
     internal sealed class BassAsioMicDevice : MicDevice
     {

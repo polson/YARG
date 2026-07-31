@@ -174,7 +174,7 @@ namespace YARG.Audio.BASS
                             break;
                         }
 
-                        // A stale slave is discarded instead of being drained after a managed
+                        // Stale analysis data is discarded instead of being drained after a managed
                         // pause. This bounds analysis lag independently from monitor playback.
                         if (backlogBytes > _maximumLiveBacklogBytes)
                         {
