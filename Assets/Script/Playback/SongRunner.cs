@@ -204,6 +204,7 @@ namespace YARG.Playback
         public float DebugSyncAdjustment => _audioSynchronizer.EffectiveAdjustment;
         public float DebugSyncStartDelta => _audioSynchronizer.StartDelta;
         public float DebugSyncWorstDelta => _audioSynchronizer.WorstDelta;
+        public double DebugRawControlSyncError => _audioSynchronizer.RawControlError;
         public double DebugControlSyncError => _audioSynchronizer.ControlError;
 
         /// <summary>
@@ -257,6 +258,7 @@ namespace YARG.Playback
         {
             _mixer = mixer;
             _audioSynchronizer = new AudioSynchronizer(mixer);
+            _mixer.OutputChanged += _audioSynchronizer.ResetControlFilter;
             SongSpeed = ClampSongSpeed(songSpeed);
             _requestedSongSpeed = SongSpeed;
             SongOffset = -songOffset;
@@ -272,6 +274,8 @@ namespace YARG.Playback
             }
 
             _disposed = true;
+
+            _mixer.OutputChanged -= _audioSynchronizer.ResetControlFilter;
 
             _rewindSource?.Cancel();
             _rewindTween?.Kill();
@@ -575,6 +579,7 @@ namespace YARG.Playback
 
             // Tell the mixer which modeled output position should represent heard audio.
             _mixer.SetOutputLatency(AudioCalibration);
+            _audioSynchronizer.ResetControlFilter();
             AnchorTimeline(InputTime);
         }
 
@@ -764,6 +769,7 @@ namespace YARG.Playback
         private const float  SYNC_CLAMP              = 0.50f;
 
         private readonly StemMixer _mixer;
+        private readonly ControlErrorFilter _controlErrorFilter = new();
 
         private float     Adjustment          { get; set; }
         private double    _controlErrorOffset;
@@ -777,7 +783,11 @@ namespace YARG.Playback
         /// </summary>
         public  double Error               { get; private set; }
         /// <summary>
-        /// Latest difference between target time and delay-free control position.
+        /// Latest unfiltered difference between target time and delay-free control position.
+        /// </summary>
+        public  double RawControlError     { get; private set; }
+        /// <summary>
+        /// Smoothed difference between target time and delay-free control position.
         /// This value drives corrections because it accounts for commands still buffered for output.
         /// </summary>
         public  double ControlError        { get; private set; }
@@ -810,12 +820,14 @@ namespace YARG.Playback
                 _state = SyncState.Idle;
             }
 
-            ControlError = rawControlError + _controlErrorOffset;
+            RawControlError = rawControlError;
+            double controlErrorBeforeSmoothing = rawControlError + _controlErrorOffset;
+            ControlError = _controlErrorFilter.Update(controlErrorBeforeSmoothing, now);
 
             // Startup can land with an already-small predicted error and therefore never have a
             // correction-ending transition. Validate that state against heard output as well.
             if (_state == SyncState.Idle &&
-                Math.Abs(ControlError) < SYNC_START_SECONDS &&
+                Math.Abs(controlErrorBeforeSmoothing) < SYNC_START_SECONDS &&
                 Math.Abs(Error) >= SYNC_START_SECONDS)
             {
                 BeginSettling(now);
@@ -854,7 +866,7 @@ namespace YARG.Playback
             StartDelta = 0f;
             WorstDelta = 0f;
             Error = 0;
-            ControlError = 0;
+            ResetControlFilter();
             _controlErrorOffset = 0;
             _state = SyncState.Idle;
             _settleUntil = double.NegativeInfinity;
@@ -876,9 +888,20 @@ namespace YARG.Playback
         public void ChangeSongSpeed(float songSpeed)
         {
             _controlErrorOffset = 0;
+            ResetControlFilter();
             _state = Adjustment == 0f ? SyncState.Idle : SyncState.Correcting;
             _settleUntil = double.NegativeInfinity;
             _mixer.SetPlaybackSpeed(songSpeed, Adjustment, true);
+        }
+
+        /// <summary>
+        /// Clears control-error smoothing after a playback timeline discontinuity.
+        /// </summary>
+        public void ResetControlFilter()
+        {
+            _controlErrorFilter.Reset();
+            RawControlError = 0;
+            ControlError = 0;
         }
 
         private void RecordCorrection(float adjustment)
@@ -923,6 +946,106 @@ namespace YARG.Playback
         {
             _state = SyncState.Settling;
             _settleUntil = now + _mixer.GetTempoStreamLatency() + SETTLE_MARGIN_SECONDS;
+        }
+
+        /// <summary>
+        /// Adaptive alpha-beta estimator for control error. Stable measurements pass quickly;
+        /// alternating residuals lower the gain, while persistent residuals raise it again.
+        /// </summary>
+        private sealed class ControlErrorFilter
+        {
+            private const double MIN_ALPHA                    = 0.10;
+            private const double MAX_ALPHA                    = 0.85;
+            private const double JITTER_SCALE_SECONDS         = 0.002;
+            private const double JITTER_ADAPTATION_SECONDS    = 0.10;
+            private const double PERSISTENCE_SECONDS          = 0.10;
+            private const double MAX_SAMPLE_INTERVAL_SECONDS = 0.25;
+            private const double MAX_ERROR_RATE              = 2.0;
+
+            private bool   _initialized;
+            private double _estimate;
+            private double _errorRate;
+            private double _lastSampleTime;
+            private double _lastInnovation;
+            private double _jitterEstimate;
+            private double _persistentTime;
+
+            public void Reset()
+            {
+                _initialized = false;
+                _estimate = 0;
+                _errorRate = 0;
+                _lastSampleTime = 0;
+                _lastInnovation = 0;
+                _jitterEstimate = 0;
+                _persistentTime = 0;
+            }
+
+            public double Update(double measurement, double timestamp)
+            {
+                if (double.IsNaN(measurement) || double.IsInfinity(measurement))
+                {
+                    return _estimate;
+                }
+
+                if (!_initialized)
+                {
+                    _initialized = true;
+                    _estimate = measurement;
+                    _lastSampleTime = timestamp;
+                    // Do not let one post-reset sample start a correction. The next sample can
+                    // confirm a persistent error while retaining this value as the prediction.
+                    return 0;
+                }
+
+                double interval = timestamp - _lastSampleTime;
+                if (!(interval > 0) || double.IsNaN(interval) || double.IsInfinity(interval))
+                {
+                    return _estimate;
+                }
+
+                if (interval > MAX_SAMPLE_INTERVAL_SECONDS)
+                {
+                    _estimate = measurement;
+                    _errorRate = 0;
+                    _lastSampleTime = timestamp;
+                    _lastInnovation = 0;
+                    _jitterEstimate = 0;
+                    _persistentTime = 0;
+                    return measurement;
+                }
+
+                double predicted = _estimate + (_errorRate * interval);
+                double innovation = measurement - predicted;
+                double innovationChange = innovation - _lastInnovation;
+
+                double adaptation = 1 - Math.Exp(-interval / JITTER_ADAPTATION_SECONDS);
+                double jitterTarget = Math.Abs(innovationChange);
+                _jitterEstimate += (jitterTarget - _jitterEstimate) * adaptation;
+
+                if (Math.Sign(innovation) != 0 && Math.Sign(innovation) == Math.Sign(_lastInnovation))
+                {
+                    _persistentTime = Math.Min(PERSISTENCE_SECONDS, _persistentTime + interval);
+                }
+                else
+                {
+                    _persistentTime = 0;
+                }
+
+                double jitterRatio = _jitterEstimate / (_jitterEstimate + JITTER_SCALE_SECONDS);
+                double alpha = MAX_ALPHA - ((MAX_ALPHA - MIN_ALPHA) * jitterRatio);
+                double persistence = Math.Clamp(_persistentTime / PERSISTENCE_SECONDS, 0, 1);
+                alpha += (MAX_ALPHA - alpha) * persistence;
+
+                double beta = Math.Clamp(alpha * alpha * 0.5, 0.001, 0.5);
+                _estimate = predicted + (alpha * innovation);
+                _errorRate = Math.Clamp(_errorRate + (beta * innovation / interval),
+                    -MAX_ERROR_RATE, MAX_ERROR_RATE);
+
+                _lastSampleTime = timestamp;
+                _lastInnovation = innovation;
+                return _estimate;
+            }
         }
     }
 }

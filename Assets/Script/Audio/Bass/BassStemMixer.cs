@@ -406,6 +406,7 @@ namespace YARG.Audio.BASS
         {
             _playbackTimeline.ResetAfterOutputChange(_songPositionTracker.GetSongPosition(),
                 _playback.GetPlaybackStartDelay());
+            NotifyOutputChanged();
         }
 
         private void RemoveChannelsFromMixer()
