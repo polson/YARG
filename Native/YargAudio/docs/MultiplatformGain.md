@@ -32,23 +32,33 @@ byte-for-byte.
 
 ## CI artifacts
 
-Run `.github/workflows/native-audio.yml`. Download:
+Run `.github/workflows/native-audio.yml` for validation artifacts, or
+`.github/workflows/native-audio-package.yml` for freshly built artifacts.
+The package command downloads all three platforms:
 
+~~~text
+dotnet run --project scripts/NativeBuild -- package --ref <remote-branch-or-commit>
+~~~
+
+Downloaded artifacts contain:
+
+- `yarg-audio-windows-x64/yarg_audio.dll`
 - `yarg-audio-linux-x64/libyarg_audio.so`
 - `yarg-audio-macos-universal/libyarg_audio.dylib`
 
 Copy them to:
 
-```text
+~~~text
+Assets/Plugins/YargAudio/Windows/x86_64/yarg_audio.dll
 Assets/Plugins/YargAudio/Linux/x86_64/libyarg_audio.so
 Assets/Plugins/YargAudio/Mac/libyarg_audio.dylib
-```
+~~~
 
-Both artifacts and importer metadata are packaged in the Unity plugin tree.
+All artifacts and importer metadata are packaged in the Unity plugin tree.
 Importer metadata restricts each library to matching Editor/standalone targets.
-Re-run
-`scripts/build-native.sh --verify-committed-plugin` on each host before
-committing both files.
+Run
+`dotnet run --project scripts/NativeBuild -- build --verify-committed-plugin`
+on each host before committing platform changes.
 
 ## Runtime gate
 

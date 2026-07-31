@@ -15,9 +15,9 @@ built `yarg_audio.dll`:
 
 Run all automated Windows checks with:
 
-```powershell
-./scripts/build-native.ps1 -NoCopy
-```
+~~~powershell
+dotnet run --project scripts/NativeBuild -- build --no-copy
+~~~
 
 Production source audit found no `FunctionPointer`, `BurstCompiler`,
 `MonoPInvokeCallback`, managed DSP delegate, or `BASS_ChannelSetDSP` call in
