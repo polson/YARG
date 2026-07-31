@@ -57,33 +57,36 @@ namespace YARG.Audio.BASS.Effects
             }
         }
 
-        internal void Detach()
+        internal bool Detach()
         {
             lock (_lifecycleLock)
             {
                 if (_mixerHandle == 0)
                 {
-                    return;
+                    return true;
                 }
 
                 bool locked = Bass.ChannelLock(_mixerHandle);
-                if (locked)
-                {
-                    try
-                    {
-                        BassNativeStream.RemoveFromMixer(_streamHandle);
-                    }
-                    finally
-                    {
-                        Bass.ChannelLock(_mixerHandle, false);
-                    }
-                }
-                else
+                if (!locked)
                 {
                     YargLogger.LogFormatError("Failed to lock one-shot mixer for detach: {0}",
                         Bass.LastError);
+                    return false;
                 }
+
+                bool removed;
+                try
+                {
+                    removed = BassNativeStream.RemoveFromMixer(_streamHandle);
+                }
+                finally
+                {
+                    Bass.ChannelLock(_mixerHandle, false);
+                }
+
+                if (!removed) return false;
                 _mixerHandle = 0;
+                return true;
             }
         }
 
@@ -164,29 +167,30 @@ namespace YARG.Audio.BASS.Effects
                 {
                     return;
                 }
-                _disposed = true;
-
                 if (_mixerHandle != 0)
                 {
                     bool locked = Bass.ChannelLock(_mixerHandle);
-                    if (locked)
-                    {
-                        try
-                        {
-                            BassNativeStream.RemoveFromMixer(_streamHandle);
-                        }
-                        finally
-                        {
-                            Bass.ChannelLock(_mixerHandle, false);
-                        }
-                    }
-                    else
+                    if (!locked)
                     {
                         YargLogger.LogFormatError("Failed to lock one-shot mixer for dispose: {0}",
                             Bass.LastError);
+                        return;
                     }
+
+                    bool removed;
+                    try
+                    {
+                        removed = BassNativeStream.RemoveFromMixer(_streamHandle);
+                    }
+                    finally
+                    {
+                        Bass.ChannelLock(_mixerHandle, false);
+                    }
+
+                    if (!removed) return;
+                    _mixerHandle = 0;
                 }
-                _mixerHandle = 0;
+                _disposed = true;
                 if (_streamHandle != 0)
                 {
                     Bass.StreamFree(_streamHandle);

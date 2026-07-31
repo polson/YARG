@@ -26,10 +26,13 @@ namespace YARG.Audio.BASS.Effects
             return BassMix.MixerAddChannel(mixer, stream, BassFlags.MixerChanNoRampin);
         }
 
-        internal static void RemoveFromMixer(int stream)
+        internal static bool RemoveFromMixer(int stream)
         {
-            if (stream != 0 && !BassMix.MixerRemoveChannel(stream) && Bass.LastError != Errors.Handle)
+            if (stream == 0) return true;
+            bool removed = BassMix.MixerRemoveChannel(stream);
+            if (!removed && Bass.LastError != Errors.Handle)
                 YargLogger.LogFormatError("Failed to remove one-shot stream: {0}", Bass.LastError);
+            return removed || Bass.LastError == Errors.Handle;
         }
     }
 }

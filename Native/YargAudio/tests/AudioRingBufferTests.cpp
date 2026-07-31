@@ -87,6 +87,8 @@ int main() {
     runGainDspTests();
     runFreeverbDspTests();
     runRenderAheadMixerTests();
+    runScheduledSampleSourceTests();
+    runNativeOneShotStreamTests();
     std::cout << "YargAudio native tests passed\n";
     return 0;
 }
