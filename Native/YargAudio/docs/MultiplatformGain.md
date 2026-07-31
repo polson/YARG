@@ -25,6 +25,11 @@ Linux x64 SHA-256: 5e5a177649fd1e24f4b3c44224c743a411ec5d64bbb2cec63e54eed4ff747
 macOS universal SHA-256: dd08043a09941b83498c16f7eb7a24ef8083fa4b423686221536cee9090f3cc8
 ```
 
+Follow-up run
+[`30657748711`](https://github.com/polson/YARG/actions/runs/30657748711)
+rebuilt all targets and verified committed Linux/macOS binaries and metadata
+byte-for-byte.
+
 ## CI artifacts
 
 Run `.github/workflows/native-audio.yml`. Download:
