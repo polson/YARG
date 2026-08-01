@@ -258,7 +258,6 @@ namespace YARG.Playback
         {
             _mixer = mixer;
             _audioSynchronizer = new AudioSynchronizer(mixer);
-            _mixer.OutputChanged += _audioSynchronizer.ResetControlFilter;
             SongSpeed = ClampSongSpeed(songSpeed);
             _requestedSongSpeed = SongSpeed;
             SongOffset = -songOffset;
@@ -274,8 +273,6 @@ namespace YARG.Playback
             }
 
             _disposed = true;
-
-            _mixer.OutputChanged -= _audioSynchronizer.ResetControlFilter;
 
             _rewindSource?.Cancel();
             _rewindTween?.Kill();
@@ -579,7 +576,6 @@ namespace YARG.Playback
 
             // Tell the mixer which modeled output position should represent heard audio.
             _mixer.SetOutputLatency(AudioCalibration);
-            _audioSynchronizer.ResetControlFilter();
             AnchorTimeline(InputTime);
         }
 
@@ -751,7 +747,7 @@ namespace YARG.Playback
 
     /// <summary>
     /// Keeps mixer playback aligned with gameplay time by applying bounded speed corrections.
-    /// Corrections stop near song boundaries and use hysteresis to avoid speed-command chatter.
+    /// Corrections stop near song boundaries and require persistent error before starting.
     /// </summary>
     internal sealed class AudioSynchronizer
     {
@@ -762,19 +758,24 @@ namespace YARG.Playback
             Settling,
         }
 
-        private const double SYNC_START_SECONDS      = 0.005;
+        private const double SYNC_START_SECONDS      = 0.003;
         private const double SYNC_STOP_SECONDS       = 0.0015;
         private const double SETTLE_MARGIN_SECONDS   = 0.025;
-        private const float  CORRECTION_TIME_SECONDS = 0.1f;
-        private const float  SYNC_CLAMP              = 0.50f;
+        private const double CORRECTION_START_CONFIRM_SECONDS = 0.050;
+        // Speed commands do not affect heard output until tempo/output buffering drains. Use a
+        // correction horizon half as long as before, with twice the maximum speed adjustment.
+        private const double MIN_CORRECTION_TIME_SECONDS = 0.125;
+        private const double CORRECTION_DELAY_MULTIPLIER  = 1.0;
+        private const float  SYNC_CLAMP              = 2.00f;
 
         private readonly StemMixer _mixer;
-        private readonly ControlErrorFilter _controlErrorFilter = new();
 
         private float     Adjustment          { get; set; }
         private double    _controlErrorOffset;
         private SyncState _state;
         private double    _settleUntil         = double.NegativeInfinity;
+        private double    _correctionCandidateSince = double.NaN;
+        private int       _correctionCandidateSign;
         public  float  EffectiveAdjustment { get; private set; }
         public  float  StartDelta          { get; private set; }
         public  float  WorstDelta          { get; private set; }
@@ -787,8 +788,8 @@ namespace YARG.Playback
         /// </summary>
         public  double RawControlError     { get; private set; }
         /// <summary>
-        /// Smoothed difference between target time and delay-free control position.
-        /// This value drives corrections because it accounts for commands still buffered for output.
+        /// Control error after applying predictor offset. This value drives corrections because it
+        /// accounts for commands still buffered for output.
         /// </summary>
         public  double ControlError        { get; private set; }
 
@@ -821,39 +822,83 @@ namespace YARG.Playback
             }
 
             RawControlError = rawControlError;
-            double controlErrorBeforeSmoothing = rawControlError + _controlErrorOffset;
-            ControlError = _controlErrorFilter.Update(controlErrorBeforeSmoothing, now);
+            ControlError = rawControlError + _controlErrorOffset;
 
             // Startup can land with an already-small predicted error and therefore never have a
             // correction-ending transition. Validate that state against heard output as well.
             if (_state == SyncState.Idle &&
-                Math.Abs(controlErrorBeforeSmoothing) < SYNC_START_SECONDS &&
+                Math.Abs(ControlError) < SYNC_START_SECONDS &&
                 Math.Abs(Error) >= SYNC_START_SECONDS)
             {
                 BeginSettling(now);
             }
-
-            float adjustment = 0f;
 
             bool isWithinSongBounds =
                 controlTargetTime >= 0 &&
                 controlTargetTime < _mixer.Length &&
                 position.Control < _mixer.Length;
 
-            double correctionThreshold = _state == SyncState.Correcting
-                ? SYNC_STOP_SECONDS
-                : SYNC_START_SECONDS;
-            bool needsAdjustment = Math.Abs(ControlError) >= correctionThreshold;
-
-            if (isWithinSongBounds && needsAdjustment && _state != SyncState.Settling)
-            {
-                adjustment = (float) ControlError / CORRECTION_TIME_SECONDS;
-                adjustment = Math.Clamp(adjustment, -SYNC_CLAMP, SYNC_CLAMP);
-            }
+            float adjustment = GetCorrectionAdjustment(ControlError, now, isWithinSongBounds);
 
             EffectiveAdjustment = adjustment;
             RecordCorrection(adjustment);
             ApplyAdjustment(songSpeed, adjustment);
+        }
+
+        private float GetCorrectionAdjustment(double controlError, double now,
+            bool isWithinSongBounds)
+        {
+            if (!isWithinSongBounds || _state == SyncState.Settling)
+            {
+                ResetCorrectionCandidate();
+                return 0;
+            }
+
+            if (_state == SyncState.Correcting)
+            {
+                if (Math.Abs(controlError) < SYNC_STOP_SECONDS)
+                {
+                    return 0;
+                }
+
+                return CalculateCorrectionAdjustment(controlError);
+            }
+
+            if (Math.Abs(controlError) < SYNC_START_SECONDS)
+            {
+                ResetCorrectionCandidate();
+                return 0;
+            }
+
+            int errorSign = Math.Sign(controlError);
+            if (double.IsNaN(_correctionCandidateSince) || errorSign != _correctionCandidateSign)
+            {
+                _correctionCandidateSince = now;
+                _correctionCandidateSign = errorSign;
+            }
+
+            // Ignore brief position spikes. Require error to remain outside start deadband before
+            // issuing correction, preventing a transient from becoming a large speed command.
+            if (now - _correctionCandidateSince < CORRECTION_START_CONFIRM_SECONDS)
+            {
+                return 0;
+            }
+
+            return CalculateCorrectionAdjustment(controlError);
+        }
+
+        private float CalculateCorrectionAdjustment(double controlError)
+        {
+            double correctionTime = Math.Max(
+                MIN_CORRECTION_TIME_SECONDS,
+                _mixer.GetTempoStreamLatency() * CORRECTION_DELAY_MULTIPLIER);
+            return Math.Clamp((float) (controlError / correctionTime), -SYNC_CLAMP, SYNC_CLAMP);
+        }
+
+        private void ResetCorrectionCandidate()
+        {
+            _correctionCandidateSince = double.NaN;
+            _correctionCandidateSign = 0;
         }
 
         /// <summary>
@@ -866,10 +911,12 @@ namespace YARG.Playback
             StartDelta = 0f;
             WorstDelta = 0f;
             Error = 0;
-            ResetControlFilter();
+            RawControlError = 0;
+            ControlError = 0;
             _controlErrorOffset = 0;
             _state = SyncState.Idle;
             _settleUntil = double.NegativeInfinity;
+            ResetCorrectionCandidate();
             _mixer.SetPlaybackSpeed(songSpeed);
         }
 
@@ -888,20 +935,10 @@ namespace YARG.Playback
         public void ChangeSongSpeed(float songSpeed)
         {
             _controlErrorOffset = 0;
-            ResetControlFilter();
             _state = Adjustment == 0f ? SyncState.Idle : SyncState.Correcting;
             _settleUntil = double.NegativeInfinity;
+            ResetCorrectionCandidate();
             _mixer.SetPlaybackSpeed(songSpeed, Adjustment, true);
-        }
-
-        /// <summary>
-        /// Clears control-error smoothing after a playback timeline discontinuity.
-        /// </summary>
-        public void ResetControlFilter()
-        {
-            _controlErrorFilter.Reset();
-            RawControlError = 0;
-            ControlError = 0;
         }
 
         private void RecordCorrection(float adjustment)
@@ -933,12 +970,14 @@ namespace YARG.Playback
             {
                 // Do not react to control error while the final base-speed command is still
                 // buffered. BufferedPlaybackTimeline reconciles against heard output during this
-                // hold, after which any remaining error is safe to correct again.
+                // settling window, after which any remaining error is safe to correct again.
                 BeginSettling(InputManager.CurrentInputTime);
+                ResetCorrectionCandidate();
             }
             else if (adjustment != 0f)
             {
                 _state = SyncState.Correcting;
+                ResetCorrectionCandidate();
             }
         }
 
@@ -948,104 +987,5 @@ namespace YARG.Playback
             _settleUntil = now + _mixer.GetTempoStreamLatency() + SETTLE_MARGIN_SECONDS;
         }
 
-        /// <summary>
-        /// Adaptive alpha-beta estimator for control error. Stable measurements pass quickly;
-        /// alternating residuals lower the gain, while persistent residuals raise it again.
-        /// </summary>
-        private sealed class ControlErrorFilter
-        {
-            private const double MIN_ALPHA                    = 0.10;
-            private const double MAX_ALPHA                    = 0.85;
-            private const double JITTER_SCALE_SECONDS         = 0.002;
-            private const double JITTER_ADAPTATION_SECONDS    = 0.10;
-            private const double PERSISTENCE_SECONDS          = 0.10;
-            private const double MAX_SAMPLE_INTERVAL_SECONDS = 0.25;
-            private const double MAX_ERROR_RATE              = 2.0;
-
-            private bool   _initialized;
-            private double _estimate;
-            private double _errorRate;
-            private double _lastSampleTime;
-            private double _lastInnovation;
-            private double _jitterEstimate;
-            private double _persistentTime;
-
-            public void Reset()
-            {
-                _initialized = false;
-                _estimate = 0;
-                _errorRate = 0;
-                _lastSampleTime = 0;
-                _lastInnovation = 0;
-                _jitterEstimate = 0;
-                _persistentTime = 0;
-            }
-
-            public double Update(double measurement, double timestamp)
-            {
-                if (double.IsNaN(measurement) || double.IsInfinity(measurement))
-                {
-                    return _estimate;
-                }
-
-                if (!_initialized)
-                {
-                    _initialized = true;
-                    _estimate = measurement;
-                    _lastSampleTime = timestamp;
-                    // Do not let one post-reset sample start a correction. The next sample can
-                    // confirm a persistent error while retaining this value as the prediction.
-                    return 0;
-                }
-
-                double interval = timestamp - _lastSampleTime;
-                if (!(interval > 0) || double.IsNaN(interval) || double.IsInfinity(interval))
-                {
-                    return _estimate;
-                }
-
-                if (interval > MAX_SAMPLE_INTERVAL_SECONDS)
-                {
-                    _estimate = measurement;
-                    _errorRate = 0;
-                    _lastSampleTime = timestamp;
-                    _lastInnovation = 0;
-                    _jitterEstimate = 0;
-                    _persistentTime = 0;
-                    return measurement;
-                }
-
-                double predicted = _estimate + (_errorRate * interval);
-                double innovation = measurement - predicted;
-                double innovationChange = innovation - _lastInnovation;
-
-                double adaptation = 1 - Math.Exp(-interval / JITTER_ADAPTATION_SECONDS);
-                double jitterTarget = Math.Abs(innovationChange);
-                _jitterEstimate += (jitterTarget - _jitterEstimate) * adaptation;
-
-                if (Math.Sign(innovation) != 0 && Math.Sign(innovation) == Math.Sign(_lastInnovation))
-                {
-                    _persistentTime = Math.Min(PERSISTENCE_SECONDS, _persistentTime + interval);
-                }
-                else
-                {
-                    _persistentTime = 0;
-                }
-
-                double jitterRatio = _jitterEstimate / (_jitterEstimate + JITTER_SCALE_SECONDS);
-                double alpha = MAX_ALPHA - ((MAX_ALPHA - MIN_ALPHA) * jitterRatio);
-                double persistence = Math.Clamp(_persistentTime / PERSISTENCE_SECONDS, 0, 1);
-                alpha += (MAX_ALPHA - alpha) * persistence;
-
-                double beta = Math.Clamp(alpha * alpha * 0.5, 0.001, 0.5);
-                _estimate = predicted + (alpha * innovation);
-                _errorRate = Math.Clamp(_errorRate + (beta * innovation / interval),
-                    -MAX_ERROR_RATE, MAX_ERROR_RATE);
-
-                _lastSampleTime = timestamp;
-                _lastInnovation = innovation;
-                return _estimate;
-            }
-        }
     }
 }

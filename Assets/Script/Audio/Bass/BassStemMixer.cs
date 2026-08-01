@@ -209,13 +209,13 @@ namespace YARG.Audio.BASS
         protected override double GetPosition_Internal() => _songPositionTracker.GetSongPosition();
 
         /// <summary>
-        ///     Samples BASS playback once, then derives heard and predictive control positions from that
-        ///     same sample. BASSmix already compensates this position for mixer playback buffering.
+        ///     Samples backend playback once, then derives heard and predictive control positions from
+        ///     that same sample.
         /// </summary>
         protected override SyncPosition GetSyncPosition_Internal()
         {
-            double bassPosition = _songPositionTracker.GetSongPosition();
-            return _playbackTimeline.GetSyncPosition(bassPosition);
+            double backendPosition = _songPositionTracker.GetSongPosition();
+            return _playbackTimeline.GetSyncPosition(backendPosition);
         }
 
         protected override double GetControlPosition_Internal() => GetSyncPosition_Internal().Control;
@@ -688,6 +688,7 @@ namespace YARG.Audio.BASS
             private readonly BassSongPlayback _playback;
             private readonly int              _tempoStreamHandle;
             private          double           _playbackDelay;
+            private          double           _lastSongPosition;
             private          long             _positionBeforeSeek;
             private          bool             _seekPending;
             private          double           _songStart;
@@ -710,10 +711,14 @@ namespace YARG.Audio.BASS
                 double position = GetTempoStreamPosition();
                 if (position < 0)
                 {
-                    return 0;
+                    // Low-latency ASIO can briefly fail a position query while its render worker
+                    // is being flushed or restarted. Returning zero here corrupts
+                    // BufferedPlaybackTimeline's resume anchor by the full current song position.
+                    return _lastSongPosition;
                 }
 
-                return position - TotalDelay + _songStart;
+                _lastSongPosition = position - TotalDelay + _songStart;
+                return _lastSongPosition;
             }
 
             public double GetSongPosition(long tempoStreamPosition)
@@ -721,7 +726,13 @@ namespace YARG.Audio.BASS
                 // Explicit positions come from the decode timeline. They already belong to the
                 // newly prepared route and must not consume the pending heard-position boundary.
                 double position = GetPositionSeconds(tempoStreamPosition);
-                return position - TotalDelay + _songStart;
+                if (position < 0)
+                {
+                    return _lastSongPosition;
+                }
+
+                _lastSongPosition = position - TotalDelay + _songStart;
+                return _lastSongPosition;
             }
 
             /// <summary>
@@ -740,10 +751,12 @@ namespace YARG.Audio.BASS
                 _songStart = songStart;
                 AlignmentDelay = alignmentDelay;
                 _playbackDelay = playbackDelay;
+                _lastSongPosition = songStart - TotalDelay;
             }
 
             public void SetAlignmentDelay(double delay)
             {
+                _lastSongPosition -= delay - AlignmentDelay;
                 AlignmentDelay = delay;
             }
 

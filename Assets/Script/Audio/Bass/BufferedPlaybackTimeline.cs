@@ -6,13 +6,13 @@ using YARG.Core.Audio;
 namespace YARG.Audio.BASS
 {
     /// <summary>
-    /// Converts current BASS position into delay-free control position used for gameplay synchronization.
+    /// Converts current backend position into delay-free control position used for gameplay synchronization.
     /// </summary>
     /// <remarks>
-    /// BASS position is the source of truth. Rate histories track remaining BASS buffer time so
-    /// synchronization can account for commands that have not taken effect yet.
+    /// Backend position is the source of truth. Rate histories track remaining output-buffer time
+    /// so synchronization can account for commands that have not taken effect yet.
     ///
-    /// Two histories represent BASS command buffering:
+    /// Two histories represent output command buffering:
     /// <list type="bullet">
     /// <item><see cref="_commandedRateHistory"/> applies commands immediately.</item>
     /// <item><see cref="_bufferedRateHistory"/> applies commands after their measured BASS latency.</item>
@@ -40,17 +40,17 @@ namespace YARG.Audio.BASS
         }
 
         /// <summary>
-        /// Derives heard and delay-free control positions from one BASS sample.
+        /// Derives heard and delay-free control positions from one backend sample.
         /// </summary>
-        /// <param name="bassPosition">Current song position read from BASS.</param>
+        /// <param name="backendPosition">Current song position reported by the output backend.</param>
         /// <returns>Heard and control positions sampled at same monotonic timestamp.</returns>
         /// <remarks>
         /// <para>
         /// Mathematical relationships:
-        /// <c>Heard = Raw BASS Position</c>
+        /// <c>Heard = Raw Backend Position</c>
         /// </para>
         /// <para>
-        /// <c>Control = Raw BASS Position + (Commanded Integral - Buffered Integral)</c>
+        /// <c>Control = Raw Backend Position + (Commanded Integral - Buffered Integral)</c>
         /// </para>
         /// <para>
         /// Playback speed changes do not take effect immediately. Control position accounts for that delay,
@@ -61,11 +61,11 @@ namespace YARG.Audio.BASS
         /// We can then use that error to predict a speed adjustment in <c>AudioSynchronizer.Synchronize</c>.
         /// </para>
         /// <para>
-        /// BASS position remains the source of truth. Rate histories only account for commands still
-        /// pending in the BASS buffer.
+        /// The backend position remains the source of truth. Rate histories only account for commands
+        /// still pending in its output buffer.
         /// </para>
         /// </remarks>
-        public SyncPosition GetSyncPosition(double bassPosition)
+        public SyncPosition GetSyncPosition(double backendPosition)
         {
             double now = GetCurrentTime();
 
@@ -74,13 +74,13 @@ namespace YARG.Audio.BASS
             // synchronization position.
             double commandBufferingOffset =
                 _commandedRateHistory.GetPositionAt(now) - _bufferedRateHistory.GetPositionAt(now);
-            double controlPosition = bassPosition + commandBufferingOffset;
+            double controlPosition = backendPosition + commandBufferingOffset;
 
             // Re-anchor old history periodically. Pruning preserves all positions from the cutoff onward.
             double cutoff = now - HISTORY_MARGIN_SECONDS;
             _commandedRateHistory.PruneBefore(cutoff);
             _bufferedRateHistory.PruneBefore(cutoff);
-            return new SyncPosition(bassPosition, controlPosition);
+            return new SyncPosition(backendPosition, controlPosition);
         }
 
         /// <summary>
@@ -128,7 +128,7 @@ namespace YARG.Audio.BASS
         /// <summary>
         /// Starts commanded and buffered position advancement.
         /// </summary>
-        public void Play(double bassPosition, double startupDelay)
+        public void Play(double backendPosition, double startupDelay)
         {
             if (_isPlaying)
             {
@@ -141,11 +141,14 @@ namespace YARG.Audio.BASS
             if (_preparedControlPosition.HasValue)
             {
                 // Playback was prepared by seeking to this position. BASS may move past it before
-                // Play returns, but gameplay must still start from the requested seek position.
-                // Control time starts now; audible playback starts after the estimated startup delay.
+                // Play returns, and low-latency ASIO can briefly expose stale MixerPositionEx
+                // history while the route starts. Both model histories must use the requested
+                // position as their new origin; backend samples become authoritative again in
+                // GetSyncPosition. Control time starts now, while audible playback starts after
+                // the estimated startup delay.
                 double requestedPosition = _preparedControlPosition.Value;
                 _commandedRateHistory.Reset(now, requestedPosition, rate);
-                _bufferedRateHistory.Reset(now, bassPosition, 0f);
+                _bufferedRateHistory.Reset(now, requestedPosition, 0f);
                 _bufferedRateHistory.SetRate(now + Math.Max(0, startupDelay), rate);
                 _preparedControlPosition = null;
                 return;

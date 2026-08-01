@@ -102,6 +102,7 @@ int AsioMixerRouter::prefill(std::uint32_t mixer,
     if (!buffered_ || mixer != bufferedHandle_)
         return YARG_AUDIO_ERROR_INVALID_STATE;
 
+    songEnabled_.store(false, std::memory_order_release);
     state_.store(YARG_ASIO_ROUTER_PREFILLING, std::memory_order_release);
     resetClock();
     if (!buffered_->prefill(std::chrono::milliseconds(timeoutMilliseconds))) {
@@ -114,7 +115,6 @@ int AsioMixerRouter::prefill(std::uint32_t mixer,
         return YARG_AUDIO_ERROR_TIMEOUT;
     }
     state_.store(YARG_ASIO_ROUTER_READY, std::memory_order_release);
-    songEnabled_.store(true, std::memory_order_release);
     return YARG_AUDIO_OK;
 }
 

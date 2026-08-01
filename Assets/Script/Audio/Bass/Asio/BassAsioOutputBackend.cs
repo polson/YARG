@@ -1,7 +1,6 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Threading;
 using ManagedBass;
 using ManagedBass.Asio;
@@ -28,7 +27,6 @@ namespace YARG.Audio.BASS
         private readonly HashSet<int> _samples = new();
         private readonly HashSet<int> _monitors = new();
         private readonly Dictionary<int, BassAsioInput> _inputs = new();
-        private readonly Dictionary<int, AsioPositionTracker> _positionTrackers = new();
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
         private readonly AsioNotifyProcedure _notifyCallback;
 #endif
@@ -50,15 +48,29 @@ namespace YARG.Audio.BASS
         private int _notificationQueued;
         private double _volume = 1;
         private int _callbackFrames;
-        private bool _songNeedsPrefill;
+        // Output transport is primed before songs are attached. Discard that silence before
+        // first playback so source-position history starts with real song audio.
+        private bool _songNeedsPrefill = true;
 
         public int HeardLatencyMilliseconds => (int) Math.Round(
-            FramesToMilliseconds(_latencyFrames + QueuedFrames));
+            FramesToMilliseconds(_latencyFrames));
 
         public bool SongMixerRunsContinuously => true;
-        public double PlaybackStartDelay => GetCommandDelay();
+        public double PlaybackStartDelay => _sampleRate > 0
+            ? _latencyFrames / (double) _sampleRate
+            : 0;
 
-        private int QueuedFrames => checked((int) (_mixerRouter?.GetStats().QueuedFrames ?? 0));
+        // Native RenderAheadMixer keeps a fixed target. Do not use live queue depth for command
+        // timing: at large ASIO callbacks it moves by a whole callback between source reads.
+        private int RenderAheadFrames => _sampleRate > 0
+            ? Math.Max(
+                checked((int) Math.Ceiling(_sampleRate * RENDER_AHEAD_MILLISECONDS / 1000.0)),
+                checked(_callbackFrames * 2))
+            : 0;
+
+        // BASS source commands affect audio after render-ahead frames drain, then hardware output
+        // latency.
+        private int CommandLatencyFrames => checked(_latencyFrames + RenderAheadFrames);
 
         public BassAsioOutputBackend(int bufferLength, Action asioReinitializeRequested)
         {
@@ -111,7 +123,10 @@ namespace YARG.Audio.BASS
                 return;
             }
             _startedSongs.Remove(tempoStreamHandle);
-            _positionTrackers.Remove(tempoStreamHandle);
+            if (_startedSongs.Count == 0)
+            {
+                _songNeedsPrefill = true;
+            }
 
             if (!BassMix.MixerRemoveChannel(tempoStreamHandle) && Bass.LastError != Errors.Handle)
             {
@@ -132,6 +147,17 @@ namespace YARG.Audio.BASS
 
         public int PlaySong(int tempoStreamHandle, bool restart)
         {
+            if (_songNeedsPrefill)
+            {
+                // Initial transport prefill contains silence because songs are attached later.
+                // Clear it before unpausing source, then render real source audio into ring.
+                if (!_mixerRouter!.FlushMixer(_songMixerHandle))
+                {
+                    YargLogger.LogError("Failed to clear stale native ASIO song buffer");
+                    return -1;
+                }
+            }
+
             if (BassMix.ChannelFlags(tempoStreamHandle, BassFlags.Default,
                     BassFlags.MixerChanPause) < 0)
             {
@@ -174,8 +200,6 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public void ResetSongAfterSeek(int tempoStreamHandle) { }
-
         public void FadeSong(int tempoStreamHandle, double volume, int durationMilliseconds)
         {
             Bass.ChannelSlideAttribute(tempoStreamHandle, ChannelAttribute.Volume,
@@ -211,41 +235,32 @@ namespace YARG.Audio.BASS
 
         public long GetSongPosition(int tempoStreamHandle)
         {
-            long rawPosition = _mixerRouter?.GetSourcePosition(tempoStreamHandle, _latencyFrames) ?? -1;
-            if (rawPosition < 0 || _mixerRouter == null)
+            // BASSmix owns source-position semantics, including tempo, scheduled source delay,
+            // render-ahead, hardware latency, and its seek boundary. Reconstructing this from the
+            // ASIO output-frame clock loses information whenever source progress differs from output
+            // progress (startup delay, seek, tempo buffering). ChannelGetPositionEx is continuous
+            // enough for synchronization once the full output delay is supplied by the native router.
+            return _mixerRouter?.GetSourcePosition(tempoStreamHandle, _latencyFrames) ?? -1;
+        }
+
+        public void ResetSongAfterSeek(int tempoStreamHandle)
+        {
+            // MixerPositionEx keeps source-position history on the output mixer. Resetting only
+            // the tempo stream leaves that history based on the pre-seek route, which can make
+            // ChannelGetPositionEx retain a multi-second offset after pause/resume. A started song
+            // has already stopped and flushed the native render worker in PrepareSongForSeek, so
+            // resetting the shared decode mixer is safe here. Unstarted previews must not reset it:
+            // they can be prepared while another song is fading out through the same mixer.
+            if (!_startedSongs.Contains(tempoStreamHandle))
             {
-                return rawPosition;
+                return;
             }
 
-            if (!IsSongPlaying(tempoStreamHandle))
+            if (!Bass.ChannelSetPosition(_songMixerHandle, 0, PositionFlags.Bytes))
             {
-                if (_positionTrackers.TryGetValue(tempoStreamHandle, out var tracker))
-                {
-                    tracker.Reset();
-                }
-                return rawPosition;
+                YargLogger.LogFormatError("Failed to reset ASIO song mixer position: {0}",
+                    Bass.LastError);
             }
-
-            if (!_mixerRouter.TryGetClock(out AsioMixerRouterClock clock))
-            {
-                if (_positionTrackers.TryGetValue(tempoStreamHandle, out var tracker))
-                {
-                    tracker.Reset();
-                }
-                return rawPosition;
-            }
-
-            if (!_positionTrackers.TryGetValue(tempoStreamHandle, out var positionTracker))
-            {
-                var sourceInfo = Bass.ChannelGetInfo(tempoStreamHandle);
-                int sourceRate = Math.Max(1, sourceInfo.Frequency);
-                int sourceChannels = Math.Max(1, sourceInfo.Channels);
-                positionTracker = new AsioPositionTracker(
-                    _sampleRate, sourceRate, sourceChannels);
-                _positionTrackers.Add(tempoStreamHandle, positionTracker);
-            }
-
-            return positionTracker.Update(rawPosition, clock, _latencyFrames);
         }
 
         public double GetTempoCommandDelay(int tempoStreamHandle) => GetCommandDelay();
@@ -512,7 +527,7 @@ namespace YARG.Audio.BASS
         private bool ConfigureOutputLatency()
         {
             _latencyFrames = Math.Max(0, BassAsio.GetLatency(false));
-            float latencySeconds = (_latencyFrames + QueuedFrames) / (float) _sampleRate;
+            float latencySeconds = CommandLatencyFrames / (float) _sampleRate;
             if (!Bass.ChannelSetAttribute(_songMixerHandle, ChannelAttribute.MixerLatency,
                     latencySeconds))
             {
@@ -694,18 +709,13 @@ namespace YARG.Audio.BASS
                 return 0;
             }
 
-            int queuedFrames = checked((int) (_mixerRouter?.GetStats().QueuedFrames ?? 0));
-            return (_latencyFrames + queuedFrames) / (double) _sampleRate;
+            return CommandLatencyFrames / (double) _sampleRate;
         }
 
         private bool FlushSongBuffer()
         {
             if (_mixerRouter?.FlushMixer(_songMixerHandle) == true)
             {
-                foreach (var tracker in _positionTrackers.Values)
-                {
-                    tracker.Reset();
-                }
                 return true;
             }
 
@@ -716,203 +726,6 @@ namespace YARG.Audio.BASS
         private double FramesToMilliseconds(long frames) => _sampleRate > 0
             ? Math.Max(0, frames) * 1000.0 / _sampleRate
             : 0;
-
-        /// <summary>
-        /// Reconstructs a continuous source position from BASS absolute anchors and the ASIO
-        /// output-frame clock. BASS remains responsible for absolute position; the ASIO clock
-        /// supplies interpolation between its quantized measurements.
-        /// </summary>
-        private sealed class AsioPositionTracker
-        {
-            private const double RATE_WINDOW_SECONDS = 0.25;
-            private const double POSITION_CORRECTION_SECONDS = 1.0;
-            private const double MAX_CLOCK_GAP_SECONDS = 0.5;
-
-            private readonly double _sampleRate;
-            private readonly double _bytesPerFrame;
-            private readonly double _initialBytesPerOutputFrame;
-
-            private bool _initialized;
-            private uint _generation;
-            private double _position;
-            private double _bytesPerOutputFrame;
-            private double _clockFramesPerSecond;
-            private double _lastOutputFrames;
-            private double _rateAnchorFrames;
-            private long _lastRawPosition;
-            private long _rateAnchorPosition;
-            private long _lastCallbackTimestamp;
-            private ulong _lastCallbackConsumedFrames;
-            private bool _hasCallbackSample;
-
-            public AsioPositionTracker(int sampleRate, int sourceRate, int channels)
-            {
-                _sampleRate = sampleRate;
-                _bytesPerFrame = channels * sizeof(float);
-                _initialBytesPerOutputFrame =
-                    sourceRate * _bytesPerFrame / (double) sampleRate;
-                _bytesPerOutputFrame = _initialBytesPerOutputFrame;
-            }
-
-            public void Reset()
-            {
-                _initialized = false;
-                _generation = 0;
-                _position = 0;
-                _bytesPerOutputFrame = _initialBytesPerOutputFrame;
-                _clockFramesPerSecond = _sampleRate;
-                _lastOutputFrames = 0;
-                _rateAnchorFrames = 0;
-                _lastRawPosition = 0;
-                _rateAnchorPosition = 0;
-                _lastCallbackTimestamp = 0;
-                _lastCallbackConsumedFrames = 0;
-                _hasCallbackSample = false;
-            }
-
-            public long Update(long rawPosition, AsioMixerRouterClock clock,
-                int hardwareLatencyFrames)
-            {
-                if (clock.Valid == 0 || clock.PerformanceFrequency <= 0 ||
-                    clock.SampleRate == 0 || clock.CallbackTimestamp <= 0)
-                {
-                    Reset();
-                    return rawPosition;
-                }
-
-                double now = Stopwatch.GetTimestamp() *
-                    (double) clock.PerformanceFrequency / Stopwatch.Frequency;
-                double elapsed = (now - clock.CallbackTimestamp) / clock.PerformanceFrequency;
-                double callbackPeriod = clock.CallbackFrames > 0
-                    ? clock.CallbackFrames / (double) clock.SampleRate
-                    : 0;
-                double maximumGap = Math.Max(MAX_CLOCK_GAP_SECONDS, callbackPeriod * 4);
-                if (!(elapsed >= 0) || elapsed > maximumGap)
-                {
-                    Reset();
-                    return rawPosition;
-                }
-
-                if (!_initialized || _generation != clock.Generation)
-                {
-                    Initialize(rawPosition, GetOutputFrames(clock, elapsed, hardwareLatencyFrames),
-                        clock);
-                    return rawPosition;
-                }
-
-                UpdateClockRate(clock);
-                double outputFrames = GetOutputFrames(clock, elapsed, hardwareLatencyFrames);
-                if (double.IsNaN(outputFrames) || double.IsInfinity(outputFrames))
-                {
-                    Reset();
-                    return rawPosition;
-                }
-                // Callback scheduling can make an extrapolated sample land a few frames behind
-                // the previous query. The physical output cursor cannot move backwards.
-                outputFrames = Math.Max(outputFrames, _lastOutputFrames);
-
-                double outputDelta = outputFrames - _lastOutputFrames;
-                if (!(outputDelta > 0) || outputDelta > _sampleRate * maximumGap)
-                {
-                    if (outputDelta < 0 || outputDelta > _sampleRate * maximumGap)
-                    {
-                        Initialize(rawPosition, outputFrames, clock);
-                    }
-                    return (long) Math.Round(_position);
-                }
-
-                // A backwards BASS sample is treated as measurement noise. A larger backwards
-                // jump is a seek, which should have advanced the native clock generation.
-                long measurement = rawPosition;
-                long backwardsTolerance = (long) Math.Ceiling(
-                    _bytesPerFrame * Math.Max(1, clock.CallbackFrames) * 2);
-                if (measurement < _lastRawPosition - backwardsTolerance)
-                {
-                    Initialize(rawPosition, outputFrames, clock);
-                    return rawPosition;
-                }
-                if (measurement < _lastRawPosition)
-                {
-                    measurement = _lastRawPosition;
-                }
-
-                double rateWindowDelta = outputFrames - _rateAnchorFrames;
-                if (rateWindowDelta >= _sampleRate * RATE_WINDOW_SECONDS &&
-                    measurement >= _rateAnchorPosition)
-                {
-                    double measuredRate = (measurement - _rateAnchorPosition) / rateWindowDelta;
-                    if (!double.IsNaN(measuredRate) && !double.IsInfinity(measuredRate) &&
-                        measuredRate > 0)
-                    {
-                        double adaptation = Math.Clamp(
-                            rateWindowDelta / (_sampleRate * 1.0), 0.1, 0.5);
-                        _bytesPerOutputFrame +=
-                            (measuredRate - _bytesPerOutputFrame) * adaptation;
-                    }
-
-                    _rateAnchorFrames = outputFrames;
-                    _rateAnchorPosition = measurement;
-                }
-
-                double predicted = _position + outputDelta * _bytesPerOutputFrame;
-                double innovation = measurement - predicted;
-                double correction = 1 - Math.Exp(
-                    -outputDelta / (_sampleRate * POSITION_CORRECTION_SECONDS));
-                _position = Math.Max(0, predicted + innovation * correction);
-                _lastOutputFrames = outputFrames;
-                _lastRawPosition = measurement;
-                return (long) Math.Round(_position);
-            }
-
-            private void Initialize(long rawPosition, double outputFrames,
-                AsioMixerRouterClock clock)
-            {
-                _initialized = true;
-                _generation = clock.Generation;
-                _position = Math.Max(0, rawPosition);
-                _bytesPerOutputFrame = _initialBytesPerOutputFrame;
-                _clockFramesPerSecond = clock.SampleRate;
-                _lastOutputFrames = outputFrames;
-                _rateAnchorFrames = outputFrames;
-                _lastRawPosition = rawPosition;
-                _rateAnchorPosition = rawPosition;
-                _lastCallbackTimestamp = clock.CallbackTimestamp;
-                _lastCallbackConsumedFrames = clock.ConsumedSongFrames;
-                _hasCallbackSample = true;
-            }
-
-            private double GetOutputFrames(AsioMixerRouterClock clock, double elapsed,
-                int hardwareLatencyFrames)
-            {
-                return clock.ConsumedSongFrames + elapsed * _clockFramesPerSecond -
-                    hardwareLatencyFrames;
-            }
-
-            private void UpdateClockRate(AsioMixerRouterClock clock)
-            {
-                if (_hasCallbackSample && clock.CallbackTimestamp > _lastCallbackTimestamp &&
-                    clock.ConsumedSongFrames > _lastCallbackConsumedFrames)
-                {
-                    double elapsed = (clock.CallbackTimestamp - _lastCallbackTimestamp) /
-                        (double) clock.PerformanceFrequency;
-                    double frameDelta = clock.ConsumedSongFrames - _lastCallbackConsumedFrames;
-                    if (elapsed > 0 && frameDelta > 0)
-                    {
-                        double measuredRate = frameDelta / elapsed;
-                        if (!double.IsNaN(measuredRate) && !double.IsInfinity(measuredRate))
-                        {
-                            double adaptation = Math.Clamp(elapsed, 0.05, 0.25);
-                            _clockFramesPerSecond +=
-                                (measuredRate - _clockFramesPerSecond) * adaptation;
-                        }
-                    }
-                }
-
-                _lastCallbackTimestamp = clock.CallbackTimestamp;
-                _lastCallbackConsumedFrames = clock.ConsumedSongFrames;
-                _hasCallbackSample = true;
-            }
-        }
 
         public void Dispose()
         {
@@ -930,7 +743,6 @@ namespace YARG.Audio.BASS
             LogRouterSummary();
             _mixerRouter?.Dispose();
             _mixerRouter = null;
-            _positionTrackers.Clear();
 
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
             if (_ownsAsio)
