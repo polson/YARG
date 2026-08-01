@@ -10,13 +10,36 @@
 #include <memory>
 #include <cstdint>
 
+static_assert(sizeof(yarg_asio_router_config) == 20);
+static_assert(sizeof(yarg_asio_router_stats) == 72);
+static_assert(sizeof(yarg_asio_router_clock) == 56);
 static_assert(sizeof(yarg_one_shot_config) == 24);
+static_assert(sizeof(int32_t) == sizeof(int));
+
+#if defined(_WIN32)
+#include "AsioMixerRouter.h"
+
+#include <memory>
+
+struct yarg_asio_router {
+    explicit yarg_asio_router(const yarg_asio_router_config& config) : value(config) {}
+    yarg::audio::AsioMixerRouter value;
+};
+#endif
 
 struct yarg_one_shot_stream {
     std::unique_ptr<yarg::audio::NativeOneShotStream> value;
 };
 
 namespace {
+
+#if defined(_WIN32)
+bool validConfig(const yarg_asio_router_config* config) {
+    return config && config->size >= sizeof(yarg_asio_router_config) &&
+        config->sample_rate > 0 && config->channels == 2 &&
+        config->callback_frames > 0;
+}
+#endif
 
 yarg::audio::BassCoreBindings& coreBassBindings() noexcept {
     static yarg::audio::BassCoreBindings bindings;
@@ -217,3 +240,138 @@ int32_t YARG_AUDIO_CALL yarg_one_shot_stream_destroy(
     delete stream;
     return YARG_AUDIO_OK;
 }
+
+#if defined(_WIN32)
+int32_t YARG_AUDIO_CALL yarg_asio_router_create(
+    const yarg_asio_router_config* config, yarg_asio_router** router) {
+    if (!router || !validConfig(config)) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    *router = nullptr;
+    try {
+        auto value = std::make_unique<yarg_asio_router>(*config);
+        const int result = value->value.initialize();
+        if (result != YARG_AUDIO_OK) return result;
+        *router = value.release();
+        return YARG_AUDIO_OK;
+    } catch (...) {
+        return YARG_AUDIO_ERROR_INTERNAL;
+    }
+}
+
+int32_t YARG_AUDIO_CALL yarg_asio_router_attach_mixer(yarg_asio_router* router,
+    uint32_t mixer_handle, uint32_t buffer_milliseconds) {
+    return router ? router->value.attach(mixer_handle, buffer_milliseconds)
+                  : YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+}
+
+int32_t YARG_AUDIO_CALL yarg_asio_router_prefill(yarg_asio_router* router,
+    uint32_t mixer_handle, uint32_t timeout_milliseconds) {
+    return router ? router->value.prefill(mixer_handle, timeout_milliseconds)
+                  : YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+}
+
+int32_t YARG_AUDIO_CALL yarg_asio_router_enable_output(yarg_asio_router* router,
+    uint32_t first_asio_channel) {
+    return router ? router->value.enableOutput(first_asio_channel)
+                  : YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+}
+
+int32_t YARG_AUDIO_CALL yarg_asio_router_flush_mixer(yarg_asio_router* router,
+    uint32_t mixer_handle) {
+    return router ? router->value.flush(mixer_handle)
+                  : YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+}
+
+int32_t YARG_AUDIO_CALL yarg_asio_router_set_song_enabled(yarg_asio_router* router,
+    int32_t enabled) {
+    return router ? router->value.setSongEnabled(enabled != 0)
+                  : YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+}
+
+int64_t YARG_AUDIO_CALL yarg_asio_router_get_source_position(yarg_asio_router* router,
+    uint32_t source, uint32_t outputLatencyFrames, int32_t* error) {
+    if (!router || !error) return -1;
+    int result = YARG_AUDIO_OK;
+    const auto position = router->value.getSourcePosition(
+        source, outputLatencyFrames, result);
+    *error = result;
+    return position;
+}
+
+int32_t YARG_AUDIO_CALL yarg_asio_router_get_clock(yarg_asio_router* router,
+    yarg_asio_router_clock* clock) {
+    if (!router || !clock || clock->size < sizeof(yarg_asio_router_clock))
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    return router->value.getClock(*clock);
+}
+
+int32_t YARG_AUDIO_CALL yarg_asio_router_get_stats(yarg_asio_router* router,
+    yarg_asio_router_stats* stats) {
+    if (!router || !stats || stats->size < sizeof(yarg_asio_router_stats))
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    return router->value.getStats(*stats);
+}
+
+int32_t YARG_AUDIO_CALL yarg_asio_router_set_volume(
+    yarg_asio_router* router, float volume) {
+    return router ? router->value.setVolume(volume) : YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+}
+
+void YARG_AUDIO_CALL yarg_asio_router_destroy(yarg_asio_router* router) {
+    delete router;
+}
+#else
+int32_t YARG_AUDIO_CALL yarg_asio_router_create(
+    const yarg_asio_router_config*, yarg_asio_router** router) {
+    if (!router) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    *router = nullptr;
+    return YARG_AUDIO_ERROR_UNSUPPORTED;
+}
+
+int32_t YARG_AUDIO_CALL yarg_asio_router_attach_mixer(
+    yarg_asio_router*, uint32_t, uint32_t) {
+    return YARG_AUDIO_ERROR_UNSUPPORTED;
+}
+
+int32_t YARG_AUDIO_CALL yarg_asio_router_prefill(
+    yarg_asio_router*, uint32_t, uint32_t) {
+    return YARG_AUDIO_ERROR_UNSUPPORTED;
+}
+
+int32_t YARG_AUDIO_CALL yarg_asio_router_enable_output(
+    yarg_asio_router*, uint32_t) {
+    return YARG_AUDIO_ERROR_UNSUPPORTED;
+}
+
+int32_t YARG_AUDIO_CALL yarg_asio_router_flush_mixer(
+    yarg_asio_router*, uint32_t) {
+    return YARG_AUDIO_ERROR_UNSUPPORTED;
+}
+
+int32_t YARG_AUDIO_CALL yarg_asio_router_set_song_enabled(
+    yarg_asio_router*, int32_t) {
+    return YARG_AUDIO_ERROR_UNSUPPORTED;
+}
+
+int64_t YARG_AUDIO_CALL yarg_asio_router_get_source_position(
+    yarg_asio_router*, uint32_t, uint32_t, int32_t* error) {
+    if (error) *error = YARG_AUDIO_ERROR_UNSUPPORTED;
+    return -1;
+}
+
+int32_t YARG_AUDIO_CALL yarg_asio_router_get_clock(
+    yarg_asio_router*, yarg_asio_router_clock*) {
+    return YARG_AUDIO_ERROR_UNSUPPORTED;
+}
+
+int32_t YARG_AUDIO_CALL yarg_asio_router_get_stats(
+    yarg_asio_router*, yarg_asio_router_stats*) {
+    return YARG_AUDIO_ERROR_UNSUPPORTED;
+}
+
+int32_t YARG_AUDIO_CALL yarg_asio_router_set_volume(yarg_asio_router*, float) {
+    return YARG_AUDIO_ERROR_UNSUPPORTED;
+}
+
+void YARG_AUDIO_CALL yarg_asio_router_destroy(yarg_asio_router*) {
+}
+#endif

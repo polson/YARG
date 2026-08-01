@@ -35,6 +35,21 @@ namespace YARG.Audio.BASS
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    internal struct AsioMixerRouterClock
+    {
+        public uint Size;
+        public uint Valid;
+        public uint SampleRate;
+        public uint CallbackFrames;
+        public long PerformanceFrequency;
+        public long CallbackTimestamp;
+        public ulong ConsumedSongFrames;
+        public ulong RequestedOutputFrames;
+        public uint QueuedFrames;
+        public uint Generation;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     internal struct AsioMixerRouterConfig
     {
         public uint Size;
@@ -53,6 +68,7 @@ namespace YARG.Audio.BASS
         private const uint ABI_VERSION = 1;
 
         private IntPtr _handle;
+        private bool _clockSupported = true;
 
         private BassAsioMixerRouter(IntPtr handle)
         {
@@ -151,6 +167,19 @@ namespace YARG.Audio.BASS
             return Native.FlushMixer(_handle, unchecked((uint) mixerHandle)) == 0;
         }
 
+        public bool SetSongEnabled(bool enabled)
+        {
+            ThrowIfDisposed();
+            try
+            {
+                return Native.SetSongEnabled(_handle, enabled ? 1 : 0) == 0;
+            }
+            catch (EntryPointNotFoundException)
+            {
+                return false;
+            }
+        }
+
         public long GetSourcePosition(int sourceHandle, int hardwareLatencyFrames)
         {
             ThrowIfDisposed();
@@ -161,6 +190,30 @@ namespace YARG.Audio.BASS
             long position = Native.GetSourcePosition(_handle, unchecked((uint) sourceHandle),
                 checked((uint) Math.Max(0, hardwareLatencyFrames)), out int error);
             return error == 0 ? position : -1;
+        }
+
+        public bool TryGetClock(out AsioMixerRouterClock clock)
+        {
+            ThrowIfDisposed();
+            clock = new AsioMixerRouterClock
+            {
+                Size = (uint) Marshal.SizeOf<AsioMixerRouterClock>(),
+            };
+            if (!_clockSupported)
+            {
+                return false;
+            }
+
+            try
+            {
+                int result = Native.GetClock(_handle, ref clock);
+                return result == 0 && clock.Valid != 0;
+            }
+            catch (EntryPointNotFoundException)
+            {
+                _clockSupported = false;
+                return false;
+            }
         }
 
         public AsioMixerRouterStats GetStats()
@@ -230,10 +283,18 @@ namespace YARG.Audio.BASS
                 CallingConvention = CallingConvention.Cdecl)]
             internal static extern int FlushMixer(IntPtr router, uint mixer);
 
+            [DllImport(LIBRARY, EntryPoint = "yarg_asio_router_set_song_enabled",
+                CallingConvention = CallingConvention.Cdecl)]
+            internal static extern int SetSongEnabled(IntPtr router, int enabled);
+
             [DllImport(LIBRARY, EntryPoint = "yarg_asio_router_get_source_position",
                 CallingConvention = CallingConvention.Cdecl)]
             internal static extern long GetSourcePosition(IntPtr router, uint source,
                 uint outputLatencyFrames, out int error);
+
+            [DllImport(LIBRARY, EntryPoint = "yarg_asio_router_get_clock",
+                CallingConvention = CallingConvention.Cdecl)]
+            internal static extern int GetClock(IntPtr router, ref AsioMixerRouterClock clock);
 
             [DllImport(LIBRARY, EntryPoint = "yarg_asio_router_get_stats",
                 CallingConvention = CallingConvention.Cdecl)]

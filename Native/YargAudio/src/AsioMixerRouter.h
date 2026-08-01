@@ -26,8 +26,10 @@ public:
     int prefill(std::uint32_t mixer, std::uint32_t timeoutMilliseconds) noexcept;
     int enableOutput(std::uint32_t firstChannel) noexcept;
     int flush(std::uint32_t mixer) noexcept;
+    int setSongEnabled(bool enabled) noexcept;
     std::int64_t getSourcePosition(std::uint32_t source,
         std::uint32_t outputLatencyFrames, int& error) noexcept;
+    int getClock(yarg_asio_router_clock& clock) const noexcept;
     int getStats(yarg_asio_router_stats& stats) const noexcept;
     int setVolume(float volume) noexcept;
 
@@ -37,6 +39,9 @@ private:
         void* buffer, std::uint32_t length, void* user) noexcept;
     std::uint32_t processOutput(void* buffer, std::uint32_t length) noexcept;
     void disableOutput() noexcept;
+    void resetClock() noexcept;
+    void publishClock(std::int64_t timestamp, std::uint64_t consumedFrames,
+        std::uint32_t callbackFrames) noexcept;
     void updateMinimum(std::uint32_t queued) noexcept;
 
     const yarg_asio_router_config config_;
@@ -56,6 +61,11 @@ private:
     std::atomic<std::uint32_t> activeSongConsumers_{0};
     std::atomic<bool> songEnabled_{false};
     std::atomic<std::int64_t> callbackTimestamp_{0};
+    std::atomic<std::uint64_t> clockConsumedSongFrames_{0};
+    std::atomic<std::uint32_t> clockCallbackFrames_{0};
+    std::atomic<std::uint32_t> clockSequence_{0};
+    std::atomic<std::uint32_t> clockGeneration_{0};
+    std::atomic<bool> clockValid_{false};
     std::int64_t performanceFrequency_ = 0;
     std::atomic<std::uint32_t> minimumQueuedFrames_{UINT32_MAX};
     std::atomic<std::uint64_t> consumedSongFrames_{0};
