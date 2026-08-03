@@ -61,6 +61,11 @@ namespace YARG.Audio.BASS
             AttachOutput(outputMixerHandle, playbackPaused);
         }
 
+        public override void Play()
+        {
+            // Native source consumes scheduled playback directly.
+        }
+
         public override void SetVolume(double volume)
         {
             _nativeStream?.SetVolume(volume);
@@ -69,6 +74,12 @@ namespace YARG.Audio.BASS
         public override void SetEnabled(bool enabled)
         {
             _nativeStream?.SetEnabled(enabled);
+        }
+
+        internal void DetachOutput()
+        {
+            bool detached = _nativeStream?.Detach() ?? true;
+            if (detached) _outputMixerHandle = 0;
         }
 
         internal void AttachOutput(int outputMixerHandle, bool playbackPaused)

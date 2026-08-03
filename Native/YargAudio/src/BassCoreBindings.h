@@ -8,6 +8,9 @@
 namespace yarg::audio {
 
 struct BassCoreFunctions {
+    int (YARG_BASS_CALL* setDevice)(std::uint32_t) = nullptr;
+    std::uint32_t (YARG_BASS_CALL* channelGetData)(
+        std::uint32_t, void*, std::uint32_t) = nullptr;
     int (YARG_BASS_CALL* errorGetCode)() = nullptr;
     std::uint32_t (YARG_BASS_CALL* channelSetDsp)(
         std::uint32_t, BassDspProc, void*, int) = nullptr;
@@ -29,6 +32,8 @@ public:
     bool load() noexcept;
     bool valid() const noexcept;
 
+    bool setDevice(int device) const noexcept;
+    int getData(std::uint32_t channel, void* buffer, std::uint32_t bytes) const noexcept;
     int error() const noexcept;
     std::uint32_t setDsp(std::uint32_t channel, BassDspProc proc,
         void* user, int priority) const noexcept;

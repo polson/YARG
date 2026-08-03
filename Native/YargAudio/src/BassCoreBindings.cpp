@@ -26,6 +26,10 @@ bool BassCoreBindings::load() noexcept {
     module_ = PlatformDynamicLibrary::findLoaded(BassModule);
     if (!module_) return false;
 
+    // Bind each symbol independently. One-shot capability must not depend on
+    // optional DSP symbols being present in an older BASS build.
+    (void) bind(module_, "BASS_SetDevice", functions_.setDevice);
+    (void) bind(module_, "BASS_ChannelGetData", functions_.channelGetData);
     (void) bind(module_, "BASS_ErrorGetCode", functions_.errorGetCode);
     (void) bind(module_, "BASS_ChannelSetDSP", functions_.channelSetDsp);
     (void) bind(module_, "BASS_ChannelRemoveDSP", functions_.channelRemoveDsp);
@@ -38,9 +42,22 @@ bool BassCoreBindings::load() noexcept {
 }
 
 bool BassCoreBindings::valid() const noexcept {
-    return functions_.errorGetCode && functions_.channelSetDsp &&
+    return functions_.setDevice && functions_.channelGetData &&
+        functions_.errorGetCode && functions_.channelSetDsp &&
         functions_.channelRemoveDsp && functions_.channelLock &&
         functions_.channelGetInfo && functions_.getConfig;
+}
+
+bool BassCoreBindings::setDevice(int device) const noexcept {
+    return functions_.setDevice &&
+        functions_.setDevice(static_cast<std::uint32_t>(device)) != 0;
+}
+
+int BassCoreBindings::getData(std::uint32_t channel, void* buffer,
+    std::uint32_t bytes) const noexcept {
+    if (!functions_.channelGetData) return -1;
+    const auto result = functions_.channelGetData(channel, buffer, bytes);
+    return result == UINT32_MAX ? -1 : static_cast<int>(result);
 }
 
 int BassCoreBindings::error() const noexcept {

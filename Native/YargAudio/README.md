@@ -1,8 +1,16 @@
-# YargAudio native DSP library
+# YargAudio native audio library
 
-YargAudio hosts allocation-free native Gain and Freeverb BASS DSP callbacks plus
-native scheduled one-shot BASS mixer sources.
+Portable 64-bit desktop native Gain, Freeverb, and scheduled one-shot source
+plus Windows x64 ASIO mixer router.
+Non-Windows builds preserve ASIO C exports as unsupported stubs.
+
 Managed code reaches them through the C ABI and `SafeHandle` wrappers.
+Scheduled one-shots keep their PCM, schedule, BASS stream callback, and
+lifecycle state native; the former Burst callback backend has been removed
+after runtime and real-BASS platform validation.
+It accepts float BASS channels, or channels processed as float through
+`BASS_CONFIG_FLOATDSP`. Failed native attachment disables normalization for that
+mixer; there is no Burst fallback.
 
 Core BASS symbols resolve from already-loaded `bass.dll`, `libbass.so`, or
 `libbass.dylib`. This prevents channel handles from being passed to a second
@@ -11,6 +19,27 @@ BASS instance. Missing required symbols fail attachment.
 Gain state uses atomic bit storage. Freeverb preserves managed topology:
 sample-rate-scaled comb/all-pass delay lines, stereo spread, wet/dry mixing,
 callback-safe reset, channel locking, and safe DSP removal.
+
+The audio graph, native DSP boundary, scheduled one-shot source, and ASIO split
+are documented in [`docs/audio_pipeline.md`](../../docs/audio_pipeline.md).
+
+## ASIO runtime invariants
+
+- Joined BASSASIO channels invoke one callback with interleaved samples.
+- Callback `length` and return value cover full joined buffer in bytes.
+- `BASS_ASIO_FORMAT_FLOAT` is value 19; stereo frame is 8 bytes.
+- `BASS_SetDevice` is thread-local. Render worker and ASIO callback set captured
+  BASS device before decode pulls.
+- One worker exclusively pulls buffered mixer. ASIO callback exclusively pulls
+  direct mixer.
+- Mixer mutation, seek, source removal, and source freeing must be serialized
+  against decode pulls. The native render-ahead worker stops before its ring is
+  cleared; output lifecycle code detaches sources before freeing parent mixers.
+- Callback may not call `BASS_ASIO_Stop` or `BASS_ASIO_Free`.
+
+Sources: official Un4seen `ASIOPROC`, `BASS_ASIO_ChannelEnable`,
+`BASS_ASIO_ChannelJoin`, `BASS_ASIO_ChannelSetFormat`, `BASS_ChannelGetData`,
+`BASS_SetDevice`, and `BASS_ChannelLock` documentation.
 
 ## Build
 
