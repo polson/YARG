@@ -11,41 +11,27 @@ namespace YARG.Audio.BASS
     /// Stable facade for song and sample output routing.
     /// Lifecycle and route mutations are owned by the main thread. Native BASS calls are never
     /// made while a managed registry lock is held.
+    ///
+    /// The facade borrows an <see cref="IBassOutputBackend"/> from the active transport: it
+    /// attaches routes to it and detaches before the transport tears it down. The facade never
+    /// creates, selects, or disposes a backend.
     /// </summary>
     internal sealed class BassAudioOutput : IDisposable
     {
-        private readonly Action _asioReinitializeRequested;
-        private readonly HashSet<BassSongPlayback> _playbacks = new();
+        private readonly HashSet<BassSongPlayback> _playbacks     = new();
         private readonly HashSet<BassMonitorRoute> _monitorRoutes = new();
-        private IBassOutputBackend? _backend;
-        private int _outputDeviceId = -1;
-        private double _volume = 1;
-        private bool _disposed;
+        private          IBassOutputBackend?       _backend;
+        private          int                       _outputDeviceId = -1;
+        private          double                    _volume         = 1;
+        private          bool                      _disposed;
 
         public int HeardLatencyMilliseconds => _backend?.HeardLatencyMilliseconds ?? 0;
 
-        public BassAudioOutput(Action asioReinitializeRequested)
-        {
-            _asioReinitializeRequested = asioReinitializeRequested;
-        }
-
-        public bool InitializeForDevice(BassOutputDevice device, int asioBufferLength)
-        {
-            if (!InitializeBackend(device, asioBufferLength))
-            {
-                return false;
-            }
-
-            if (AttachMonitorRoutes(device.DeviceId))
-            {
-                return true;
-            }
-
-            DisposeBackend();
-            return false;
-        }
-
-        public void Suspend()
+        /// <summary>
+        /// Detaches every route from the borrowed backend without disposing it. The owning
+        /// transport remains responsible for tearing the backend down.
+        /// </summary>
+        public void SuspendRoutes()
         {
             if (_backend == null)
             {
@@ -54,34 +40,53 @@ namespace YARG.Audio.BASS
 
             DetachMonitorRoutes();
             SuspendSongPlaybacks();
-            DisposeBackend();
         }
 
-        public bool Resume(BassOutputDevice device, int asioBufferLength)
+        /// <summary>
+        /// Borrows an initialized backend from the active transport and reattaches all routes.
+        /// Reapplies the cached master volume. On failure, rolls back to no backend.
+        /// </summary>
+        public bool AttachBackend(IBassOutputBackend backend, int deviceId)
         {
-            if (!InitializeBackend(device, asioBufferLength))
+            if (_disposed || _backend != null)
             {
                 return false;
             }
 
-            if (!AttachSongPlaybacks() || !AttachMonitorRoutes(device.DeviceId))
+            _backend = backend;
+            _outputDeviceId = deviceId;
+            backend.SetVolume(_volume);
+
+            if (AttachSongPlaybacks() && AttachMonitorRoutes(deviceId))
             {
-                DetachSongPlaybacks();
-                DisposeBackend();
-                return false;
+                RestoreSongPlaybacks();
+                return true;
             }
 
-            RestoreSongPlaybacks();
-            return true;
+            DetachSongPlaybacks();
+            DetachBackend();
+            return false;
+        }
+
+        /// <summary>
+        /// Drops the borrowed backend reference. Callers must have detached routes first and
+        /// must keep the owning transport alive until this call completes.
+        /// </summary>
+        public void DetachBackend()
+        {
+            _backend = null;
+            _outputDeviceId = -1;
         }
 
         public void ResetForDeviceChange()
         {
-            Suspend();
+            SuspendRoutes();
+            DetachBackend();
             foreach (var playback in _playbacks)
             {
                 playback.Invalidate();
             }
+
             _playbacks.Clear();
         }
 
@@ -112,10 +117,12 @@ namespace YARG.Audio.BASS
             {
                 throw new ArgumentNullException(nameof(source));
             }
+
             if (double.IsNaN(volume) || double.IsInfinity(volume) || volume < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(volume));
             }
+
             if (_disposed)
             {
                 return null;
@@ -150,11 +157,13 @@ namespace YARG.Audio.BASS
             {
                 return;
             }
+
             if (route.IsAttached)
             {
                 _backend?.DetachMonitor(route.Source.Handle);
                 route.MarkDetached();
             }
+
             _monitorRoutes.Remove(route);
         }
 
@@ -166,40 +175,52 @@ namespace YARG.Audio.BASS
             }
         }
 
-        internal bool IsSongPlaying(int tempoStreamHandle) =>
-            _backend?.IsSongPlaying(tempoStreamHandle) == true;
+        internal bool IsSongPlaying(int tempoStreamHandle) => _backend?.IsSongPlaying(tempoStreamHandle) == true;
+
         internal int PlaySong(int tempoStreamHandle, bool restart) =>
             _backend?.PlaySong(tempoStreamHandle, restart) ?? -1;
+
         internal int PauseSong(int tempoStreamHandle) => _backend?.PauseSong(tempoStreamHandle) ?? -1;
-        internal void PrepareSongForSeek(int tempoStreamHandle) =>
-            _backend?.PrepareSongForSeek(tempoStreamHandle);
+        internal void PrepareSongForSeek(int tempoStreamHandle) => _backend?.PrepareSongForSeek(tempoStreamHandle);
         internal void ResetSongAfterSeek(int tempoStreamHandle) => _backend?.ResetSongAfterSeek(tempoStreamHandle);
+
         internal void FadeSong(int tempoStreamHandle, double volume, int durationMilliseconds) =>
             _backend?.FadeSong(tempoStreamHandle, volume, durationMilliseconds);
+
         internal double GetSongVolume(int tempoStreamHandle) => _backend?.GetSongVolume(tempoStreamHandle) ?? 0;
+
         internal void SetSongVolume(int tempoStreamHandle, double volume) =>
             _backend?.SetSongVolume(tempoStreamHandle, volume);
+
         internal int GetSongData(int tempoStreamHandle, float[] buffer, int flags) =>
             _backend?.GetSongData(tempoStreamHandle, buffer, flags) ?? -1;
+
         internal int GetSongLevel(int tempoStreamHandle, float[] level) =>
             _backend?.GetSongLevel(tempoStreamHandle, level) ?? -1;
-        internal long GetSongPosition(int tempoStreamHandle) =>
-            _backend?.GetSongPosition(tempoStreamHandle) ?? -1;
+
+        internal long GetSongPosition(int tempoStreamHandle) => _backend?.GetSongPosition(tempoStreamHandle) ?? -1;
+
         internal double GetTempoCommandDelay(int tempoStreamHandle) =>
             _backend?.GetTempoCommandDelay(tempoStreamHandle) ?? 0;
+
         internal double GetPlaybackStartDelay() => _backend?.PlaybackStartDelay ?? 0;
+
         internal void SetSongBufferLength(int tempoStreamHandle, int length) =>
             _backend?.SetSongBufferLength(tempoStreamHandle, length);
+
         internal void SetSongOutputChannel(int tempoStreamHandle, OutputChannel? channel) =>
             _backend?.SetSongOutputChannel(tempoStreamHandle, channel);
-        internal int GetSongMixerHandle(int tempoStreamHandle) =>
-            _backend?.SongMixerHandle(tempoStreamHandle) ?? 0;
+
+        internal int GetSongMixerHandle(int tempoStreamHandle) => _backend?.SongMixerHandle(tempoStreamHandle) ?? 0;
+
         internal bool OneShotStartsPaused(int tempoStreamHandle) =>
             _backend?.SongMixerRunsContinuously == true && !IsSongPlaying(tempoStreamHandle);
 
         public bool PlaySample(int sourceHandle, OutputChannel? outputChannel) =>
             _backend?.PlaySample(sourceHandle, outputChannel) == true;
+
         public void RemoveSample(int sourceHandle) => _backend?.RemoveSample(sourceHandle);
+
         public void SetSampleOutputChannel(int sourceHandle, OutputChannel? outputChannel) =>
             _backend?.SetSampleOutputChannel(sourceHandle, outputChannel);
 
@@ -207,52 +228,6 @@ namespace YARG.Audio.BASS
         {
             _volume = volume;
             _backend?.SetVolume(volume);
-        }
-
-        internal IReadOnlyList<AsioInputDescriptor> GetAsioInputDescriptors() =>
-            _backend is BassAsioOutputBackend asioBackend
-                ? asioBackend.GetInputDescriptors()
-                : Array.Empty<AsioInputDescriptor>();
-
-        internal AsioInputAcquireResult TryAcquireAsioInput(string driverId, int channelIndex,
-            out BassAsioInputLease? lease)
-        {
-            lease = null;
-            return _backend is BassAsioOutputBackend asioBackend
-                ? asioBackend.TryAcquireInput(driverId, channelIndex, out lease)
-                : AsioInputAcquireResult.NoAsioBackend;
-        }
-
-        internal bool TryGetAsioInputLevel(int channelIndex, out double level)
-        {
-            if (_backend is BassAsioOutputBackend asioBackend)
-            {
-                return asioBackend.TryGetInputLevel(channelIndex, out level);
-            }
-            level = 0;
-            return false;
-        }
-
-        private bool InitializeBackend(BassOutputDevice device, int asioBufferLength)
-        {
-            if (_disposed || _backend != null)
-            {
-                return false;
-            }
-
-            IBassOutputBackend backend = device.IsAsio
-                ? new BassAsioOutputBackend(asioBufferLength, _asioReinitializeRequested)
-                : new BassDeviceOutputBackend();
-            if (!backend.Initialize(device))
-            {
-                backend.Dispose();
-                return false;
-            }
-
-            backend.SetVolume(_volume);
-            _backend = backend;
-            _outputDeviceId = device.DeviceId;
-            return true;
         }
 
         private void SuspendSongPlaybacks()
@@ -273,6 +248,7 @@ namespace YARG.Audio.BASS
                     return false;
                 }
             }
+
             return true;
         }
 
@@ -301,6 +277,7 @@ namespace YARG.Audio.BASS
                     return true;
                 }
             }
+
             return false;
         }
 
@@ -313,8 +290,7 @@ namespace YARG.Audio.BASS
                 return false;
             }
 
-            bool attached = route.Source.MoveToDevice(_outputDeviceId) &&
-                route.Source.ResetToLive() &&
+            bool attached = route.Source.MoveToDevice(_outputDeviceId) && route.Source.ResetToLive() &&
                 _backend!.AttachMonitor(route.Source.Handle, route.Volume);
             if (attached)
             {
@@ -347,13 +323,14 @@ namespace YARG.Audio.BASS
                 {
                     break;
                 }
+
                 movedRouteCount++;
 
-                if (!route.Source.ResetToLive() ||
-                    !_backend.AttachMonitor(route.Source.Handle, route.Volume))
+                if (!route.Source.ResetToLive() || !_backend.AttachMonitor(route.Source.Handle, route.Volume))
                 {
                     break;
                 }
+
                 route.MarkAttached();
                 attachedRouteCount++;
             }
@@ -375,19 +352,18 @@ namespace YARG.Audio.BASS
                 int originalDevice = route.Source.GetDevice();
                 if (originalDevice < 0)
                 {
-                    YargLogger.LogFormatError(
-                        "Failed to get monitor source device: {0}", Bass.LastError);
+                    YargLogger.LogFormatError("Failed to get monitor source device: {0}", Bass.LastError);
                     return null;
                 }
+
                 routes.Add((route, originalDevice));
             }
+
             return routes;
         }
 
-        private void RollbackMonitorRoutes(
-            List<(BassMonitorRoute Route, int OriginalDevice)> routes,
-            int attachedRouteCount,
-            int movedRouteCount)
+        private void RollbackMonitorRoutes(List<(BassMonitorRoute Route, int OriginalDevice)> routes,
+            int attachedRouteCount, int movedRouteCount)
         {
             for (int i = attachedRouteCount - 1; i >= 0; i--)
             {
@@ -395,6 +371,7 @@ namespace YARG.Audio.BASS
                 _backend!.DetachMonitor(route.Source.Handle);
                 route.MarkDetached();
             }
+
             for (int i = movedRouteCount - 1; i >= 0; i--)
             {
                 routes[i].Route.Source.MoveToDevice(routes[i].OriginalDevice);
@@ -407,22 +384,17 @@ namespace YARG.Audio.BASS
             {
                 return;
             }
+
             foreach (var route in _monitorRoutes)
             {
                 if (!route.IsAttached)
                 {
                     continue;
                 }
+
                 _backend.DetachMonitor(route.Source.Handle);
                 route.MarkDetached();
             }
-        }
-
-        private void DisposeBackend()
-        {
-            _backend?.Dispose();
-            _backend = null;
-            _outputDeviceId = -1;
         }
 
         public void Dispose()
@@ -431,12 +403,14 @@ namespace YARG.Audio.BASS
             {
                 return;
             }
+
             _disposed = true;
             ResetForDeviceChange();
             foreach (var route in _monitorRoutes)
             {
                 route.InvalidateOwner();
             }
+
             _monitorRoutes.Clear();
         }
     }

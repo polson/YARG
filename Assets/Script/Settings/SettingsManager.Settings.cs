@@ -33,12 +33,6 @@ using Object = UnityEngine.Object;
 
 namespace YARG.Settings
 {
-    public enum AudioOutputBackend
-    {
-        WindowsAudio,
-        Asio
-    }
-
     public enum QualityMode
     {
         NativeAA = 0,
@@ -101,13 +95,12 @@ namespace YARG.Settings
 
     public static partial class SettingsManager
     {
+        /// <summary>
+        /// Per-output-device ASIO buffer length (frames). Pure lookup keyed by the device's
+        /// display name; callers classify the device as ASIO before calling.
+        /// </summary>
         public static int GetAsioBufferLength(string outputDevice)
         {
-            if (OutputDeviceSetting.BackendFor(outputDevice) != AudioOutputBackend.Asio)
-            {
-                return 0;
-            }
-
             var bufferLengths = Settings?.AsioBufferLengths ?? AsioBufferLengthsAtStartup;
             return bufferLengths != null && bufferLengths.TryGetValue(outputDevice, out int length)
                 ? length
@@ -1015,12 +1008,14 @@ namespace YARG.Settings
                 }
 
                 string activeDevice = Settings.OutputDevice.Value;
-                AudioOutputBackend backend = OutputDeviceSetting.BackendFor(activeDevice);
+                AudioOutputBackend backend = GlobalAudioHandler.GetOutputBackend(activeDevice);
                 Settings.OutputBackend.SetValueWithoutNotify(backend);
                 RememberOutputDevice(backend, activeDevice);
 
                 Settings.AsioBufferSize.UpdateValues();
-                int bufferLength = GetAsioBufferLength(activeDevice);
+                int bufferLength = backend == AudioOutputBackend.Asio
+                    ? GetAsioBufferLength(activeDevice)
+                    : 0;
                 if (!Settings.AsioBufferSize.Supports(bufferLength))
                 {
                     bufferLength = 0;
@@ -1044,7 +1039,7 @@ namespace YARG.Settings
                 }
 
                 string currentDevice = Settings.OutputDevice.Value;
-                AudioOutputBackend currentBackend = OutputDeviceSetting.BackendFor(currentDevice);
+                AudioOutputBackend currentBackend = GlobalAudioHandler.GetOutputBackend(currentDevice);
                 RememberOutputDevice(currentBackend, currentDevice);
                 Settings.OutputDevice.UpdateValues(backend);
 
@@ -1161,7 +1156,7 @@ namespace YARG.Settings
 
             private static bool IsAsioOutput(string name)
             {
-                return OutputDeviceSetting.BackendFor(name) == AudioOutputBackend.Asio;
+                return GlobalAudioHandler.GetOutputBackend(name) == AudioOutputBackend.Asio;
             }
 
             private static void OutputChannelDefaultCallback(int channelId)

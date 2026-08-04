@@ -11,7 +11,7 @@ namespace YARG.Settings.Types
 
         public override void UpdateValues()
         {
-            UpdateValues(BackendFor(Value));
+            UpdateValues(GlobalAudioHandler.GetOutputBackend(Value));
         }
 
         public void UpdateValues(AudioOutputBackend backend)
@@ -20,8 +20,8 @@ namespace YARG.Settings.Types
 
             foreach ((int, string name) device in GlobalAudioHandler.GetAllOutputDevices())
             {
-                bool isAsio = device.name.StartsWith(BassOutputDevicePrefix, StringComparison.Ordinal);
-                if (isAsio == (backend == AudioOutputBackend.Asio))
+                // Classification comes from the transport implementations, not name parsing
+                if (GlobalAudioHandler.GetOutputBackend(device.name) == backend)
                 {
                     _possibleValues.Add(device.name);
                 }
@@ -34,18 +34,12 @@ namespace YARG.Settings.Types
 
         public override string ValueToString(string value)
         {
-            return value.StartsWith(BassOutputDevicePrefix, StringComparison.Ordinal)
-                ? value.Substring(BassOutputDevicePrefix.Length)
+            return value.StartsWith(AsioPrefix, StringComparison.Ordinal)
+                ? value.Substring(AsioPrefix.Length)
                 : value;
         }
 
-        public static AudioOutputBackend BackendFor(string name)
-        {
-            return name?.StartsWith(BassOutputDevicePrefix, StringComparison.Ordinal) == true
-                ? AudioOutputBackend.Asio
-                : AudioOutputBackend.WindowsAudio;
-        }
-
-        private const string BassOutputDevicePrefix = "ASIO: ";
+        // Display-only: strips the ASIO family prefix for the UI. Never used for routing.
+        private const string AsioPrefix = "ASIO: ";
     }
 }

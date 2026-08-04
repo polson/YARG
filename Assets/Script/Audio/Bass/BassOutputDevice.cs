@@ -1,72 +1,39 @@
 using ManagedBass;
-using System;
 using YARG.Core.Audio;
-using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
 {
+    /// <summary>
+    /// A BASS device context that mixers route to. The device itself carries no driver
+    /// identity: whether it backs a shared-mode device or an ASIO driver is a property of
+    /// the owning transport.
+    /// </summary>
     public sealed class BassOutputDevice : OutputDevice
     {
-        public const string ASIO_PREFIX = "ASIO: ";
-
         public readonly int DeviceId;
-        public readonly int AsioDeviceId;
-        public bool IsAsio => AsioDeviceId >= 0;
-        private bool _ownsBassDevice;
+        private readonly BassDeviceContextLease _contextLease;
 
-#nullable enable
-        internal static BassOutputDevice? Create(int deviceId, string name)
-#nullable disable
+        internal static BassOutputDevice? Create(int deviceId, string name) =>
+            Initialize(deviceId, name, DeviceInitFlags.Default | DeviceInitFlags.Latency,
+                resolveDeviceId: true);
+
+        /// <summary>
+        /// Creates the no-sound BASS context (device 0) that ASIO output uses purely to own
+        /// decode streams. ASIO has no BASS output device.
+        /// </summary>
+        internal static BassOutputDevice? CreateAsio(string name) =>
+            Initialize(0, name, DeviceInitFlags.Default, resolveDeviceId: false);
+
+        private static BassOutputDevice? Initialize(int deviceId, string name,
+            DeviceInitFlags flags, bool resolveDeviceId)
         {
-            bool initialized;
-            try
+            var contextLease = BassDeviceContextLease.Acquire(deviceId, name, flags, resolveDeviceId);
+            if (contextLease == null)
             {
-                initialized = Bass.Init(deviceId, 44100,
-                    DeviceInitFlags.Default | DeviceInitFlags.Latency, IntPtr.Zero);
-                if (!initialized)
-                {
-                    if (Bass.LastError != Errors.Already)
-                    {
-                        YargLogger.LogFormatError("Failed to initialize BASS device '{0}': {1}!", name,
-                            Bass.LastError);
-
-                        return null;
-                    }
-                }
-            }
-            catch (BassException e)
-            {
-                YargLogger.LogException(e);
                 return null;
             }
 
-            // Device 1 can be BASS' dynamic "Default" device. Keep resolved ID so all
-            // streams and later cleanup use device BASS actually initialized.
-            return new BassOutputDevice(Bass.CurrentDevice, -1, name, initialized);
-        }
-
-        internal static BassOutputDevice? CreateAsio(int deviceId, string name)
-        {
-            bool initialized;
-            try
-            {
-                // ASIO pulls from a decoding mixer, but BASS still needs a device context
-                // for creating and owning its streams.
-                initialized = Bass.Init(0, 44100, DeviceInitFlags.Default, IntPtr.Zero);
-                if (!initialized && Bass.LastError != Errors.Already)
-                {
-                    YargLogger.LogFormatError("Failed to initialize BASS no-sound device for ASIO '{0}': {1}!",
-                        name, Bass.LastError);
-                    return null;
-                }
-            }
-            catch (BassException e)
-            {
-                YargLogger.LogException(e);
-                return null;
-            }
-
-            return new BassOutputDevice(0, deviceId, ASIO_PREFIX + name, initialized);
+            return new BassOutputDevice(contextLease.ResolvedDeviceId, name, contextLease);
         }
 
         public BassOutputDevice Use()
@@ -76,33 +43,17 @@ namespace YARG.Audio.BASS
             return this;
         }
 
-        internal void TransferOwnershipTo(BassOutputDevice replacement)
-        {
-            if (DeviceId == replacement.DeviceId && _ownsBassDevice)
-            {
-                _ownsBassDevice = false;
-                replacement._ownsBassDevice = true;
-            }
-        }
-
-        private BassOutputDevice(int deviceId, int asioDeviceId, string name, bool ownsBassDevice)
+        private BassOutputDevice(int deviceId, string name, BassDeviceContextLease contextLease)
             : base(name)
         {
             DeviceId = deviceId;
-            AsioDeviceId = asioDeviceId;
-            _ownsBassDevice = ownsBassDevice;
+            _contextLease = contextLease;
             Use();
         }
 
         protected override void DisposeManagedResources()
         {
-            if (!_ownsBassDevice)
-            {
-                return;
-            }
-            Bass.CurrentDevice = DeviceId;
-            Bass.Free();
-            _ownsBassDevice = false;
+            _contextLease.Dispose();
         }
     }
 }

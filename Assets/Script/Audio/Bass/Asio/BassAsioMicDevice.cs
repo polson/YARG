@@ -16,10 +16,10 @@ namespace YARG.Audio.BASS
         private readonly BassAsioInputLease _lease;
         private readonly BassMicAnalysisPipeline _analysisPipeline;
 
-        internal static BassAsioMicDevice? Create(BassAudioManager manager, AsioInputDescriptor descriptor,
+        internal static BassAsioMicDevice? Create(BassAsioAudioTransport transport, AsioInputDescriptor descriptor,
             string displayName)
         {
-            var result = manager.TryAcquireAsioInput(descriptor.DriverId, descriptor.ChannelIndex, out var lease);
+            var result = transport.TryAcquireInput(descriptor.DriverId, descriptor.ChannelIndex, out var lease);
             if (result != AsioInputAcquireResult.Success || lease == null)
             {
                 YargLogger.LogWarning($"Failed to acquire ASIO microphone '{displayName}': {result}");

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using ManagedBass;
-using ManagedBass.Asio;
 using ManagedBass.Fx;
 using ManagedBass.Mix;
 using UnityEngine;
@@ -86,6 +85,11 @@ namespace YARG.Audio.BASS
         }
     }
 
+    /// <summary>
+    /// Orchestrates transport switching. All transport-specific behavior (ASIO driver setup,
+    /// buffer configuration, input ownership, driver notifications) lives in the transports;
+    /// this class only resolves, activates, routes, and rolls back.
+    /// </summary>
     public class BassAudioManager : AudioManager
     {
         private static readonly string[] FORMATS =
@@ -96,14 +100,13 @@ namespace YARG.Audio.BASS
         protected override ReadOnlySpan<string> SupportedFormats => FORMATS;
 
         private readonly int _opusHandle = 0;
-        private BassOutputDevice _currentDevice;
-        private readonly BassAudioOutput _audioOutput;
-        private int _asioBufferLength;
+        private BassAudioTransport? _currentTransport;
+        private readonly BassAudioOutput _audioOutput = new();
+        private int _bufferLength;
 
         public BassAudioManager()
         {
             YargLogger.LogInfo("Initializing BASS...");
-            _audioOutput = new BassAudioOutput(OnAsioReinitializeRequested);
             string bassPath = GetBassDirectory();
             string opusLibDirectory = Path.Combine(bassPath, "bassopus");
 
@@ -170,6 +173,7 @@ namespace YARG.Audio.BASS
                 {
                     Bass.Free();
                     Bass.PluginFree(0);
+                    BassDeviceContextLease.ResetForEditor();
                 }
                 catch (Exception ex)
                 {
@@ -214,7 +218,7 @@ namespace YARG.Audio.BASS
             YargLogger.LogFormatInfo("Update Period: {0}ms. Device Buffer Length: {1}ms. Playback Buffer Length: {2}ms. Device Playback Latency: {3}ms",
                 Bass.UpdatePeriod, Bass.DeviceBufferLength, Bass.PlaybackBufferLength, PlaybackLatency);
 
-            YargLogger.LogFormatInfo("Current Device: {0}", _currentDevice.DisplayName);
+            YargLogger.LogFormatInfo("Current Device: {0}", _currentTransport?.Descriptor.DisplayName);
         }
 
         private void UpdatePlaybackLatency()
@@ -224,20 +228,22 @@ namespace YARG.Audio.BASS
 
         protected override bool SetOutputDevice(string name)
         {
-            int bufferLength = SettingsManager.GetAsioBufferLength(name);
-            if (_currentDevice?.DisplayName == name && _asioBufferLength == bufferLength)
+            int bufferLength = BassAudioTransport.GetBackend(name) == AudioOutputBackend.Asio
+                ? SettingsManager.GetAsioBufferLength(name)
+                : 0;
+            if (_currentTransport?.Descriptor.DisplayName == name && _bufferLength == bufferLength)
             {
                 return true;
             }
 
-            int previousBufferLength = _asioBufferLength;
-            _asioBufferLength = bufferLength;
+            int previousBufferLength = _bufferLength;
+            _bufferLength = bufferLength;
             if (ApplyOutputDevice(name, previousBufferLength))
             {
                 return true;
             }
 
-            _asioBufferLength = previousBufferLength;
+            _bufferLength = previousBufferLength;
 
             return RestoreDefaultOutput(name);
         }
@@ -251,7 +257,7 @@ namespace YARG.Audio.BASS
 
             YargLogger.LogFormatError("Failed to initialize audio output '{0}', falling back to Default",
                 failedOutput);
-            _asioBufferLength = 0;
+            _bufferLength = 0;
             bool restored = ApplyOutputDevice("Default", 0);
             if (restored && SettingsManager.SettingContainer.IsInitialized)
             {
@@ -261,7 +267,7 @@ namespace YARG.Audio.BASS
             return restored;
         }
 
-        private bool ApplyOutputDevice(string name, int restoreAsioBufferLength)
+        private bool ApplyOutputDevice(string name, int restoreBufferLength)
         {
 
 #nullable enable
@@ -275,191 +281,136 @@ namespace YARG.Audio.BASS
                 }
             }
 
-            var device = GetOutputDevice(name);
-            if (device is not BassOutputDevice bassDevice)
+            var transport = BassAudioTransport.Create(name, _audioOutput);
+            if (transport == null)
             {
                 return false;
             }
 
-            if (_currentDevice != null)
+            if (_currentTransport != null)
             {
-                BassOutputDevice previousDevice = _currentDevice;
-                previousDevice.Use();
+                BassAudioTransport previous = _currentTransport;
+                previous.BassMixerDevice.Use();
                 UnloadSfx();
                 UnloadDrumSfx();
                 UnloadVox();
                 UnloadVenueSamples();
                 UnloadMetronome();
-                _audioOutput.Suspend();
+                _audioOutput.SuspendRoutes();
+                _audioOutput.DetachBackend();
 
-                bassDevice.Use();
-                MoveActiveMixersTo(bassDevice);
-                if (!_audioOutput.Resume(bassDevice, _asioBufferLength))
+                if (!transport.Activate(new AudioTransportConfiguration(_bufferLength)))
                 {
                     YargLogger.LogError(
-                        $"Failed to start audio output '{bassDevice.DisplayName}', " +
-                        $"restoring '{previousDevice.DisplayName}'");
-                    previousDevice.Use();
-                    MoveActiveMixersTo(previousDevice);
-                    bassDevice.Dispose();
-                    previousDevice.Use();
-                    _asioBufferLength = restoreAsioBufferLength;
-                    if (!_audioOutput.Resume(previousDevice, _asioBufferLength))
+                        $"Failed to start audio output '{name}', " +
+                        $"restoring '{previous.Descriptor.DisplayName}'");
+                    transport.Dispose();
+                    previous.BassMixerDevice.Use();
+                    MoveActiveMixersTo(previous.MixerDevice);
+                    _bufferLength = restoreBufferLength;
+                    if (!_audioOutput.AttachBackend(previous.Backend, previous.BassDeviceId))
                     {
                         YargLogger.LogFormatError("Failed to restore audio output '{0}'",
-                            previousDevice.DisplayName);
+                            previous.Descriptor.DisplayName);
                     }
                     UpdatePlaybackLatency();
                     ReloadSamples(venueSamples);
                     return false;
                 }
 
-                _currentDevice = bassDevice;
-                previousDevice.TransferOwnershipTo(bassDevice);
-                previousDevice.Dispose();
-                bassDevice.Use();
+                transport.BassMixerDevice.Use();
+                MoveActiveMixersTo(transport.MixerDevice);
+                if (!_audioOutput.AttachBackend(transport.Backend, transport.BassDeviceId))
+                {
+                    YargLogger.LogError(
+                        $"Failed to start audio output '{name}', " +
+                        $"restoring '{previous.Descriptor.DisplayName}'");
+                    previous.BassMixerDevice.Use();
+                    MoveActiveMixersTo(previous.MixerDevice);
+                    transport.Deactivate();
+                    transport.Dispose();
+                    _bufferLength = restoreBufferLength;
+                    if (!_audioOutput.AttachBackend(previous.Backend, previous.BassDeviceId))
+                    {
+                        YargLogger.LogFormatError("Failed to restore audio output '{0}'",
+                            previous.Descriptor.DisplayName);
+                    }
+                    UpdatePlaybackLatency();
+                    ReloadSamples(venueSamples);
+                    return false;
+                }
+
+                previous.ReinitializeRequested -= OnTransportReinitializeRequested;
+                _currentTransport = transport;
+                previous.Deactivate();
+                previous.Dispose();
+                transport.ReinitializeRequested += OnTransportReinitializeRequested;
+                transport.BassMixerDevice.Use();
             }
             else
             {
-                _currentDevice = bassDevice.Use();
-                if (!_audioOutput.InitializeForDevice(bassDevice, _asioBufferLength))
+                if (!transport.Activate(new AudioTransportConfiguration(_bufferLength)))
                 {
-                    _audioOutput.ResetForDeviceChange();
-                    _currentDevice.Dispose();
-                    _currentDevice = null;
+                    transport.Dispose();
                     return false;
                 }
+                _currentTransport = transport;
+                transport.BassMixerDevice.Use();
+                if (!_audioOutput.AttachBackend(transport.Backend, transport.BassDeviceId))
+                {
+                    _currentTransport = null;
+                    transport.Deactivate();
+                    transport.Dispose();
+                    return false;
+                }
+                transport.ReinitializeRequested += OnTransportReinitializeRequested;
             }
 
             UpdatePlaybackLatency();
 
-            YargLogger.LogFormatInfo("Current audio output: {0}", bassDevice.DisplayName);
+            YargLogger.LogFormatInfo("Current audio output: {0}", name);
 
             ReloadSamples(venueSamples);
             return true;
         }
 
-        protected override OutputBufferInfo? GetOutputBufferInfo()
-        {
-#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
-            if (_currentDevice?.IsAsio != true)
-            {
-                return null;
-            }
+        protected override OutputBufferInfo? GetOutputBufferInfo() => _currentTransport?.GetBufferInfo();
 
-            try
-            {
-                BassAsio.CurrentDevice = _currentDevice.AsioDeviceId;
-                var info = BassAsio.Info;
-                var lengths = GetBufferLengths(info);
-                int sampleRate = (int) Math.Round(BassAsio.Rate);
-                bool isDriverControlled = info.BufferLengthGranularity == 0 &&
-                    info.MinBufferLength == info.MaxBufferLength;
-                return new OutputBufferInfo(lengths, info.PreferredBufferLength, sampleRate, isDriverControlled);
-            }
-            catch (Exception exception)
-            {
-                YargLogger.LogException(exception, "Failed to read ASIO buffer sizes");
-            }
-#endif
-            return null;
-        }
+        protected override bool OpenOutputControlPanel() => _currentTransport?.OpenControlPanel() ?? false;
 
-        protected override bool OpenOutputControlPanel()
-        {
-#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
-            if (_currentDevice?.IsAsio != true)
-            {
-                return false;
-            }
-
-            BassAsio.CurrentDevice = _currentDevice.AsioDeviceId;
-            if (BassAsio.ControlPanel())
-            {
-                return true;
-            }
-
-            YargLogger.LogFormatError("Failed to open ASIO control panel: {0}", BassAsio.LastError);
-#endif
-            return false;
-        }
+        protected override AudioOutputBackend GetOutputBackend(string name) => BassAudioTransport.GetBackend(name);
 
         protected override bool ReinitializeOutput(int bufferLength)
         {
-            if (_currentDevice?.IsAsio != true || bufferLength < 0)
+            if (_currentTransport == null || bufferLength < 0)
             {
                 return false;
             }
 
-            int previousBufferLength = _asioBufferLength;
-            _asioBufferLength = bufferLength;
-            if (ApplyOutputDevice(_currentDevice.DisplayName, previousBufferLength))
+            int previousBufferLength = _bufferLength;
+            _bufferLength = bufferLength;
+            if (ApplyOutputDevice(_currentTransport.Descriptor.DisplayName, previousBufferLength))
             {
                 return true;
             }
 
-            _asioBufferLength = previousBufferLength;
+            _bufferLength = previousBufferLength;
             return false;
         }
 
-        private void OnAsioReinitializeRequested()
+        private void OnTransportReinitializeRequested()
         {
-            if (_currentDevice?.IsAsio != true)
+            if (_currentTransport == null)
             {
                 return;
             }
 
-            if (!ReinitializeOutput(_asioBufferLength))
+            if (!ReinitializeOutput(_bufferLength))
             {
-                YargLogger.LogError("Failed to reinitialize audio after ASIO driver settings changed");
-                ToastManager.ToastError("Failed to reinitialize audio after ASIO driver settings changed.");
+                YargLogger.LogError("Failed to reinitialize audio after driver settings changed");
+                ToastManager.ToastError("Failed to reinitialize audio after driver settings changed.");
             }
         }
-
-#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
-        private static int[] GetBufferLengths(AsioInfo info)
-        {
-            var lengths = new List<int>();
-            int minimum = info.MinBufferLength;
-            int maximum = info.MaxBufferLength;
-
-            if (minimum <= 0 || maximum < minimum)
-            {
-                return Array.Empty<int>();
-            }
-
-            if (info.BufferLengthGranularity == -1)
-            {
-                for (long length = minimum; length <= maximum; length *= 2)
-                {
-                    lengths.Add((int) length);
-                    if (length > int.MaxValue / 2)
-                    {
-                        break;
-                    }
-                }
-            }
-            else if (info.BufferLengthGranularity > 0)
-            {
-                for (long length = minimum; length <= maximum; length += info.BufferLengthGranularity)
-                {
-                    lengths.Add((int) length);
-                }
-            }
-            else
-            {
-                lengths.Add(minimum);
-            }
-
-            if (info.PreferredBufferLength >= minimum && info.PreferredBufferLength <= maximum &&
-                !lengths.Contains(info.PreferredBufferLength))
-            {
-                lengths.Add(info.PreferredBufferLength);
-                lengths.Sort();
-            }
-            return lengths.ToArray();
-        }
-#endif
 
 #nullable enable
         private void ReloadSamples(List<(string Name, byte[] Data, OutputChannel? OutputChannel)> venueSamples)
@@ -496,154 +447,29 @@ namespace YARG.Audio.BASS
             return _audioOutput.CreateSongPlayback(tempoStreamHandle);
         }
 
-        internal IReadOnlyList<AsioInputDescriptor> GetAsioInputDescriptors() =>
-            _audioOutput.GetAsioInputDescriptors();
-
-        internal AsioInputAcquireResult TryAcquireAsioInput(string driverId, int channelIndex,
-            out BassAsioInputLease? lease) =>
-            _audioOutput.TryAcquireAsioInput(driverId, channelIndex, out lease);
-
-        internal bool TryGetAsioInputLevel(int channelIndex, out double level) =>
-            _audioOutput.TryGetAsioInputLevel(channelIndex, out level);
-
-        private const string ASIO_MIC_PREFIX = "ASIO: ";
-
-        private static string GetAsioMicName(AsioInputDescriptor descriptor) =>
-            $"{ASIO_MIC_PREFIX}{descriptor.DriverName} - {descriptor.ChannelIndex}: {descriptor.Name}";
-
-        private AsioInputDescriptor? FindAsioInput(string name)
-        {
-            foreach (var descriptor in GetAsioInputDescriptors())
-            {
-                if (string.Equals(GetAsioMicName(descriptor), name, StringComparison.Ordinal))
-                {
-                    return descriptor;
-                }
-            }
-            return null;
-        }
-
-        protected override MicDevice? GetInputDevice(string name)
-        {
-            if (_currentDevice?.IsAsio == true)
-            {
-                var asioInput = FindAsioInput(name);
-                return asioInput != null
-                    ? BassAsioMicDevice.Create(this, asioInput, name)
-                    : null;
-            }
-
-            // ASIO inputs are valid only while their owning ASIO output driver is active.
-            if (name.StartsWith(ASIO_MIC_PREFIX, StringComparison.Ordinal))
-            {
-                return null;
-            }
-
-            for (int deviceIndex = 0; Bass.RecordGetDeviceInfo(deviceIndex, out var info); deviceIndex++)
-            {
-                // Ignore disabled/claimed devices
-                if (!info.IsEnabled || info.IsInitialized)
-                {
-                    continue;
-                }
-
-                // Ignore loopback devices, they're potentially confusing and can cause feedback loops
-                if (info.IsLoopback)
-                {
-                    continue;
-                }
-
-                // Check if type is in whitelist
-                // The "Default" device is also excluded here since we want the user to explicitly pick which microphone to use
-                // if (!typeWhitelist.Contains(info.Type) || info.Name == "Default") continue;
-                if (info.Name == "Default" || info.Name != name)
-                {
-                    continue;
-                }
-
-                return CreateInputDevice(deviceIndex, name);
-            }
-
-            return null;
-        }
+#nullable enable
+        protected override MicDevice? GetInputDevice(string name) => _currentTransport?.CreateInputByName(name);
 #nullable disable
 
         protected override List<(int id, string name)> GetAllInputDevices()
         {
             var mics = new List<(int id, string name)>();
-
-            if (_currentDevice?.IsAsio == true)
+            if (_currentTransport == null)
             {
-                foreach (var descriptor in GetAsioInputDescriptors())
-                {
-                    mics.Add((descriptor.ChannelIndex, GetAsioMicName(descriptor)));
-                }
                 return mics;
             }
 
-            // Ignored for now since it causes issues on Linux, BASS must not report device info correctly there
-            // TODO: allow configuring this at runtime?
-            // Also put into a static variable instead of instantiating every time
-            // var typeWhitelist = new List<DeviceType>()
-            // {
-            //     DeviceType.Headset,
-            //     DeviceType.Digital,
-            //     DeviceType.Line,
-            //     DeviceType.Headphones,
-            //     DeviceType.Microphone,
-            // };
-
-            for (int deviceIndex = 0; Bass.RecordGetDeviceInfo(deviceIndex, out var info); deviceIndex++)
+            foreach (var descriptor in _currentTransport.GetInputs())
             {
-                // Ignore disabled/claimed devices
-                if (!info.IsEnabled || info.IsInitialized)
-                {
-                    continue;
-                }
-
-                // Ignore loopback devices, they're potentially confusing and can cause feedback loops
-                if (info.IsLoopback)
-                {
-                    continue;
-                }
-
-                // Check if type is in whitelist
-                // The "Default" device is also excluded here since we want the user to explicitly pick which microphone to use
-                // if (!typeWhitelist.Contains(info.Type) || info.Name == "Default") continue;
-                if (info.Name == "Default")
-                {
-                    continue;
-                }
-
-                mics.Add((deviceIndex, info.Name));
+                mics.Add((descriptor.ChannelId, descriptor.DisplayName));
             }
-
             return mics;
         }
 
 #nullable enable
-        protected override MicDevice? CreateInputDevice(int deviceId, string name)
+        protected override MicDevice? CreateInputDevice(int deviceId, string name) =>
+            _currentTransport?.CreateInputByChannel(deviceId, name);
 #nullable disable
-        {
-            if (_currentDevice?.IsAsio == true)
-            {
-                var descriptor = FindAsioInput(name);
-                if (descriptor == null || descriptor.ChannelIndex != deviceId)
-                {
-                    return null;
-                }
-                return BassAsioMicDevice.Create(this, descriptor, name);
-            }
-
-            if (name.StartsWith(ASIO_MIC_PREFIX, StringComparison.Ordinal))
-            {
-                return null;
-            }
-
-            var device = BassMicDevice.Create(deviceId, name, _audioOutput);
-            device?.SetMonitoringLevel(SettingsManager.Settings.VocalMonitoring.Value);
-            return device;
-        }
 
 #nullable enable
         protected override OutputChannel? CreateOutputChannel(int channelId)
@@ -652,109 +478,16 @@ namespace YARG.Audio.BASS
             return BassOutputChannel.Create(channelId);
         }
 
-#nullable enable
-        protected override OutputDevice? CreateOutputDevice(int deviceId, string name)
-#nullable disable
-        {
-            return BassOutputDevice.Create(deviceId, name);
-        }
-
         protected override List<(int id, string name)> GetAllOutputDevices()
         {
-            var devices = new List<(int id, string name)>();
-
-            for (int deviceIndex = 1; Bass.GetDeviceInfo(deviceIndex, out var info); deviceIndex++)
-            {
-                // Ignore disabled devices
-                if (!info.IsEnabled)
-                {
-                    continue;
-                }
-
-                // Ignore loopback devices, they're potentially confusing and can cause feedback loops
-                if (info.IsLoopback)
-                {
-                    continue;
-                }
-
-                devices.Add((deviceIndex, info.Name));
-            }
-
-#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
-            try
-            {
-                for (int deviceIndex = 0; deviceIndex < BassAsio.DeviceCount; deviceIndex++)
-                {
-                    var info = BassAsio.GetDeviceInfo(deviceIndex);
-                    devices.Add((deviceIndex, BassOutputDevice.ASIO_PREFIX + info.Name));
-                }
-            }
-            catch (Exception exception)
-            {
-                YargLogger.LogException(exception, "Failed to enumerate ASIO devices");
-            }
-#endif
-
+            var devices = BassSharedAudioTransport.EnumerateDevices();
+            devices.AddRange(BassAsioAudioTransport.EnumerateDevices());
             return devices;
         }
 
         protected override int GetOutputChannelCount()
         {
             return BassHelpers.GetOutputChannelCount();
-        }
-
-#nullable enable
-        protected override OutputDevice? GetOutputDevice(string name)
-#nullable disable
-        {
-#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
-            if (name.StartsWith(BassOutputDevice.ASIO_PREFIX, StringComparison.Ordinal))
-            {
-                string driverName = name.Substring(BassOutputDevice.ASIO_PREFIX.Length);
-                try
-                {
-                    for (int deviceIndex = 0; deviceIndex < BassAsio.DeviceCount; deviceIndex++)
-                    {
-                        var info = BassAsio.GetDeviceInfo(deviceIndex);
-                        if (info.Name == driverName)
-                        {
-                            return BassOutputDevice.CreateAsio(deviceIndex, driverName);
-                        }
-                    }
-                }
-                catch (Exception exception)
-                {
-                    YargLogger.LogException(exception, "Failed to find ASIO device");
-                }
-
-                return null;
-            }
-#endif
-
-            for (int deviceIndex = 0; Bass.GetDeviceInfo(deviceIndex, out var info); deviceIndex++)
-            {
-                // Ignore disabled devices
-                if (!info.IsEnabled)
-                {
-                    continue;
-                }
-
-                // Ignore loopback devices, they're potentially confusing and can cause feedback loops
-                if (info.IsLoopback)
-                {
-                    continue;
-                }
-
-                // Ensure device names match
-                if (info.Name != name)
-                {
-                    continue;
-                }
-
-                return CreateOutputDevice(deviceIndex, name);
-            }
-
-            return null;
         }
 
         private void LoadSfx()
@@ -998,6 +731,9 @@ namespace YARG.Audio.BASS
         protected override void DisposeUnmanagedResources()
         {
             _audioOutput.Dispose();
+            _currentTransport?.Deactivate();
+            _currentTransport?.Dispose();
+            _currentTransport = null;
             YargLogger.LogInfo("Unloading BASS plugins");
             Bass.Free();
             Bass.PluginFree(0);

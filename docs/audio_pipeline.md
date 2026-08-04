@@ -45,8 +45,11 @@ the whole managed audio graph.
 
 | Component | Responsibility |
 | --- | --- |
-| [`BassAudioManager`](../Assets/Script/Audio/Bass/BassAudioManager.cs) | Initializes BASS, selects output devices, creates song mixers, and reloads samples during device changes. |
-| [`BassAudioOutput`](../Assets/Script/Audio/Bass/BassAudioOutput.cs) | Stable facade for songs, samples, monitors, backend selection, and output replacement. |
+| [`BassAudioManager`](../Assets/Script/Audio/Bass/BassAudioManager.cs) | Initializes BASS, orchestrates transport switching, creates song mixers, and reloads samples during device changes. |
+| [`BassAudioTransport`](../Assets/Script/Audio/Bass/BassAudioTransport.cs) | Transport contract; owns backend + inputs; name→transport factory. |
+| [`BassSharedAudioTransport`](../Assets/Script/Audio/Bass/BassSharedAudioTransport.cs) | Shared-mode BASS device transport with record-device inputs. |
+| [`BassAsioAudioTransport`](../Assets/Script/Audio/Bass/Asio/BassAsioAudioTransport.cs) | ASIO driver transport: buffer config, control panel, driver inputs, reinit notifications. |
+| [`BassAudioOutput`](../Assets/Script/Audio/Bass/BassAudioOutput.cs) | Stable facade for songs, samples, monitors; borrows the active transport's backend and reattaches routes on output replacement. |
 | [`BassDeviceOutputBackend`](../Assets/Script/Audio/Bass/BassDeviceOutputBackend.cs) | Routes audio to a normal BASS playback device. |
 | [`BassAsioOutputBackend`](../Assets/Script/Audio/Bass/Asio/BassAsioOutputBackend.cs) | Windows ASIO setup, shared song/live mixers, input routes, and native router control. |
 | [`BassStemMixer`](../Assets/Script/Audio/Bass/BassStemMixer.cs) | Builds per-song source, stem, effect, tempo, and synchronization state. |
@@ -246,16 +249,18 @@ Monitoring effects never contaminate pitch or level analysis.
 
 ## 7. Output and Resource Lifecycle
 
-Output changes are coordinated by `BassAudioManager` and `BassAudioOutput`:
+Output changes are coordinated by `BassAudioManager` (transport switch
+orchestration) and `BassAudioOutput` (route reattachment against the borrowed
+backend):
 
 ```text
 capture active playback state
-  -> detach one-shots and song/monitor routes
-  -> stop and dispose old output backend
-       -> stop ASIO before destroying native router, when applicable
+  -> detach one-shots and song/monitor routes (SuspendRoutes)
+  -> drop the borrowed backend reference (DetachBackend)
+  -> old transport deactivates: stop ASIO before destroying native router, dispose backend
+  -> candidate transport activates: device + backend + mixers
   -> move BASS channels to replacement device
-  -> create replacement backend and mixers
-  -> reattach songs and monitor routes
+  -> reattach songs and monitor routes (AttachBackend)
   -> reattach and re-anchor one-shots
   -> restore volume, buffer, output-channel, and playing state
 ```

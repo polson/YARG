@@ -35,7 +35,7 @@ namespace YARG.Audio.BASS
         private BassAsioMixerRouter? _mixerRouter;
         private int _songMixerHandle;
         private int _liveMixerHandle;
-        private int _asioDeviceId = -1;
+        private int _asioDeviceId;
         private int _bassDeviceId;
         private int _sampleRate;
         private int _latencyFrames;
@@ -72,8 +72,9 @@ namespace YARG.Audio.BASS
         // latency.
         private int CommandLatencyFrames => checked(_latencyFrames + RenderAheadFrames);
 
-        public BassAsioOutputBackend(int bufferLength, Action asioReinitializeRequested)
+        public BassAsioOutputBackend(int asioDeviceId, int bufferLength, Action asioReinitializeRequested)
         {
+            _asioDeviceId = asioDeviceId;
             _bufferLength = bufferLength;
             _asioReinitializeRequested = asioReinitializeRequested;
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
@@ -87,7 +88,7 @@ namespace YARG.Audio.BASS
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
             try
             {
-                return InitializeAsioDriver(device.AsioDeviceId) &&
+                return InitializeAsioDriver() &&
                     CreateOutputMixers(_sampleRate) && StartAsio();
             }
             catch (Exception exception)
@@ -395,17 +396,16 @@ namespace YARG.Audio.BASS
         }
 
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
-        private bool InitializeAsioDriver(int deviceId)
+        private bool InitializeAsioDriver()
         {
-            if (!BassAsio.Init(deviceId, AsioInitFlags.Thread))
+            if (!BassAsio.Init(_asioDeviceId, AsioInitFlags.Thread))
             {
                 YargLogger.LogFormatError("Failed to initialize ASIO device: {0}",
                     BassAsio.LastError);
                 return false;
             }
             _ownsAsio = true;
-            _asioDeviceId = deviceId;
-            BassAsio.CurrentDevice = deviceId;
+            BassAsio.CurrentDevice = _asioDeviceId;
 
             var asioInfo = BassAsio.Info;
             if (asioInfo.Outputs < OUTPUT_CHANNELS)

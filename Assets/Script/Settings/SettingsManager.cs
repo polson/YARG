@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
 using UnityEngine;
+using YARG.Core.Audio;
 using YARG.Core.Logging;
 using YARG.Core.Utility;
 using YARG.Helpers;
@@ -329,7 +330,7 @@ namespace YARG.Settings
             Settings ??= new SettingContainer();
             Settings.AsioBufferLengths ??= new();
 
-            AudioOutputBackend outputBackend = OutputDeviceSetting.BackendFor(Settings.OutputDevice.Value);
+            AudioOutputBackend outputBackend = GlobalAudioHandler.GetOutputBackend(Settings.OutputDevice.Value);
             Settings.OutputBackend.SetValueWithoutNotify(outputBackend);
             if (outputBackend == AudioOutputBackend.Asio)
             {
@@ -341,7 +342,9 @@ namespace YARG.Settings
             }
             Settings.OutputDevice.UpdateValues(outputBackend);
             Settings.AsioBufferSize.UpdateValues();
-            int bufferLength = GetAsioBufferLength(Settings.OutputDevice.Value);
+            int bufferLength = outputBackend == AudioOutputBackend.Asio
+                ? GetAsioBufferLength(Settings.OutputDevice.Value)
+                : 0;
             Settings.AsioBufferSize.SetValueWithoutNotify(
                 Settings.AsioBufferSize.Supports(bufferLength) ? bufferLength : 0);
 
