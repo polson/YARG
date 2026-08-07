@@ -401,10 +401,17 @@ namespace YARG.Audio.BASS
             unsafe
             {
                 short* src = (short*) buffer;
-                int captureChannel = Math.Clamp(_captureChannel, 0, channels - 1);
+                if (_captureChannel >= channels)
+                {
+                    YargLogger.LogFormatError(
+                        "Mic '{0}' capture channel {1} exceeds session channel count {2}",
+                        DisplayName, _captureChannel, channels);
+                    return;
+                }
+
                 for (int i = 0; i < frames; ++i)
                 {
-                    mono[i] = src[i * channels + captureChannel];
+                    mono[i] = src[i * channels + _captureChannel];
                 }
             }
 

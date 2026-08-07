@@ -24,6 +24,7 @@ namespace YARG.Audio.BASS
         private readonly List<ActiveMic>         _activeMics   = new();
         private readonly Dictionary<string, int> _channelCache = new(StringComparer.Ordinal);
         private readonly object                  _lock         = new();
+        private          List<string>            _deviceNames  = new();
 
         /// <summary>
         ///     Opens a mic on a physical device and claims its capture channel. All mics on
@@ -49,6 +50,10 @@ namespace YARG.Audio.BASS
             }
 
             int captureChannels = GetChannelCount(device.DeviceId, device.Name);
+            if (device.Channel >= captureChannels)
+            {
+                return null;
+            }
 
             lock (_lock)
             {
@@ -79,8 +84,7 @@ namespace YARG.Audio.BASS
         }
 
         /// <summary>
-        ///     Returns every usable input device and the unclaimed channel(s) on each.
-        ///     Probing devices to learn their channel count is cached per device name.
+        ///     Returns every usable input device and the unclaimed channels on each
         /// </summary>
         public List<InputDeviceInfo> GetAllDevices()
         {
@@ -88,26 +92,53 @@ namespace YARG.Audio.BASS
                 .Where(d => IsUsable(d.Info))
                 .ToList();
 
+            InvalidateStaleCache(usable);
+
             ProbeChannels(usable);
 
             var result = new List<InputDeviceInfo>();
-            foreach ((int id, var info) in usable)
+            foreach (var device in usable)
             {
-                result.AddRange(GetUnclaimedInputs(id, info.Name));
+                result.AddRange(GetUnclaimedInputs(device.Id, device.Info.Name));
             }
 
             return result;
         }
 
+        /// <summary>
+        ///     Re-probes everything when the set of device names changes (device
+        ///     added/removed/replaced). Keeps name-keyed cache from going stale.
+        /// </summary>
+        private void InvalidateStaleCache(List<DeviceEntry> devices)
+        {
+            var names = new List<string>(devices.Count);
+            foreach (var device in devices)
+            {
+                names.Add(device.Info.Name);
+            }
+
+            lock (_lock)
+            {
+                if (!names.SequenceEqual(_deviceNames))
+                {
+                    _channelCache.Clear();
+                    _deviceNames = names;
+                }
+            }
+        }
+
         public Task<List<InputDeviceInfo>> GetAllDevicesAsync(CancellationToken ct = default) =>
             Task.Run(GetAllDevices, ct);
 
-        private static IEnumerable<(int Id, DeviceInfo Info)> GetDevices()
+        private static List<DeviceEntry> GetDevices()
         {
+            var devices = new List<DeviceEntry>();
             for (int i = 0; Bass.RecordGetDeviceInfo(i, out var info); i++)
             {
-                yield return (i, info);
+                devices.Add(new DeviceEntry(i, info));
             }
+
+            return devices;
         }
 
         private static bool IsUsable(DeviceInfo info)
@@ -132,11 +163,11 @@ namespace YARG.Audio.BASS
 
         private static int FindDeviceIndexByName(string name)
         {
-            foreach ((int id, var info) in GetDevices())
+            foreach (var device in GetDevices())
             {
-                if (IsUsable(info) && info.Name == name)
+                if (IsUsable(device.Info) && device.Info.Name == name)
                 {
-                    return id;
+                    return device.Id;
                 }
             }
 
@@ -177,23 +208,30 @@ namespace YARG.Audio.BASS
                 }
             }
 
-            int probed;
+            int? probed;
             lock (_lock)
             {
                 probed = ChannelProbe.Probe(deviceId, name);
-                _channelCache[name] = probed;
+                if (probed == null)
+                {
+                    // Don't cache failures: a later replug may make the device probed-able,
+                    // and returning 1 without caching re-attempts on the next scan.
+                    return 1;
+                }
+
+                _channelCache[name] = probed.Value;
             }
 
-            return probed;
+            return probed.Value;
         }
 
-        private void ProbeChannels(List<(int Id, DeviceInfo Info)> devices)
+        private void ProbeChannels(List<DeviceEntry> devices)
         {
             lock (_lock)
             {
-                foreach ((int id, var info) in devices)
+                foreach (var device in devices)
                 {
-                    GetChannelCount(id, info.Name);
+                    GetChannelCount(device.Id, device.Info.Name);
                 }
             }
         }
@@ -263,6 +301,18 @@ namespace YARG.Audio.BASS
 
         private ActiveMic? FindActive(int deviceId) => _activeMics.FirstOrDefault(m => m.DeviceId == deviceId);
 
+        private readonly struct DeviceEntry
+        {
+            public readonly int        Id;
+            public readonly DeviceInfo Info;
+
+            public DeviceEntry(int id, DeviceInfo info)
+            {
+                Id = id;
+                Info = info;
+            }
+        }
+
         private sealed class ActiveMic
         {
             public ActiveMic(int deviceId, RecordingSession session)
@@ -300,12 +350,12 @@ namespace YARG.Audio.BASS
 
             public void Dispose() => _gotFrame.Dispose();
 
-            public static int Probe(int deviceId, string name)
+            public static int? Probe(int deviceId, string name)
             {
                 bool initialized = Bass.RecordInit(deviceId);
                 if (!initialized && Bass.LastError != Errors.Already)
                 {
-                    return 1;
+                    return null;
                 }
 
                 Bass.CurrentRecordingDevice = deviceId;
@@ -323,8 +373,11 @@ namespace YARG.Audio.BASS
                             continue;
                         }
 
-                        int useableChannels = probe.WaitAndAnalyze(deviceId, name);
-                        return Math.Max(1, useableChannels);
+                        int useableChannels = probe.Analyze(deviceId, name);
+                        if (useableChannels > 0)
+                        {
+                            return useableChannels;
+                        }
                     }
                 }
                 finally
@@ -335,27 +388,29 @@ namespace YARG.Audio.BASS
                     }
                 }
 
-                return 1;
+                YargLogger.LogWarning($"Channel probe: no usable frame from [{deviceId}] '{name}'");
+                return null;
             }
 
-            private int WaitAndAnalyze(int deviceId, string name)
+            private int Analyze(int deviceId, string name)
             {
                 try
                 {
                     bool received = _gotFrame.Wait(TIMEOUT_MS);
                     if (!received)
                     {
-                        YargLogger.LogWarning($"Channel probe: no frame from [{deviceId}] '{name}'");
+                        YargLogger.LogTrace(
+                            $"Channel probe: no frame from [{deviceId}] '{name}' at {_reportedChannels} ch");
                         return 0;
                     }
 
                     int usable = CountUsableChannels();
-                    YargLogger.LogInfo($"Channel probe: [{deviceId}] '{name}' has {usable} usable channel(s)");
+                    YargLogger.LogTrace(
+                        $"Channel probe: [{deviceId}] '{name}' reports {usable} usable channel(s) at {_reportedChannels} ch");
                     return usable;
                 }
                 finally
                 {
-                    Bass.RecordFree();
                     Dispose();
                 }
             }
