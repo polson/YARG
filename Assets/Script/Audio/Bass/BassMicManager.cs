@@ -11,14 +11,13 @@ using YARG.Settings;
 
 namespace YARG.Audio.BASS
 {
-    /// <summary>
-    ///     Manages all recording devices and the mics opened on them. Each physical device
-    ///     is captured once and shared by every mic on it, so multi-input devices (e.g. a
-    ///     USB audio interface with several inputs) only open the device a single time.
-    ///     The manager probes devices to discover their real channel count, caches the
-    ///     results, tracks which channels are already claimed, and handles
-    ///     <see cref="RecordingSession" /> instances as mics are added and removed.
-    /// </summary>
+    // Manages all recording devices and the mics opened on them. Each physical device
+    // is captured once and shared by every mic on it, so multi-input devices (e.g. a
+    // USB audio interface with several inputs) only open the device a single time.
+    // The manager probes devices to discover their real channel count, caches the
+    // results, tracks which channels are already claimed, and handles
+    // RecordingSession instances as mics are added and removed. BASS recording
+    // calls act on the current recording device; _lock serializes all of them.
     internal sealed class BassMicManager
     {
         private readonly List<ActiveMic>         _activeMics   = new();
@@ -35,6 +34,7 @@ namespace YARG.Audio.BASS
         {
             if (device.DeviceId < 0)
             {
+                // Id from saved settings can be stale; resolve by name instead.
                 int resolved = FindDeviceIndexByName(device.Name);
                 if (resolved < 0)
                 {
@@ -42,11 +42,6 @@ namespace YARG.Audio.BASS
                 }
 
                 device = new InputDeviceInfo(resolved, device.Name, device.Channel, device.ChannelCount);
-            }
-
-            if (IsChannelClaimed(device.DeviceId, device.Channel))
-            {
-                return null;
             }
 
             int captureChannels = GetChannelCount(device.DeviceId, device.Name);
@@ -57,6 +52,13 @@ namespace YARG.Audio.BASS
 
             lock (_lock)
             {
+                // Check inside the lock: the claim happens in BassMicDevice.Create
+                // (session.AddMic), so checking earlier would be a TOCTOU race.
+                if (IsChannelClaimed(device.DeviceId, device.Channel))
+                {
+                    return null;
+                }
+
                 var session = GetOrCreateSession(device.DeviceId, device.Name, captureChannels);
                 if (session == null)
                 {
@@ -92,7 +94,7 @@ namespace YARG.Audio.BASS
                 .Where(d => IsUsable(d.Info))
                 .ToList();
 
-            InvalidateStaleCache(usable);
+            RefreshCache(usable);
 
             ProbeChannels(usable);
 
@@ -105,11 +107,7 @@ namespace YARG.Audio.BASS
             return result;
         }
 
-        /// <summary>
-        ///     Re-probes everything when the set of device names changes (device
-        ///     added/removed/replaced). Keeps name-keyed cache from going stale.
-        /// </summary>
-        private void InvalidateStaleCache(List<DeviceEntry> devices)
+        private void RefreshCache(List<DeviceEntry> devices)
         {
             var names = new List<string>(devices.Count);
             foreach (var device in devices)
@@ -204,35 +202,34 @@ namespace YARG.Audio.BASS
 
                 if (_channelCache.TryGetValue(name, out int cached))
                 {
-                    return Math.Max(1, cached);
+                    return cached;
                 }
             }
 
-            int? probed;
+            int? channels;
             lock (_lock)
             {
-                probed = ChannelProbe.Probe(deviceId, name);
-                if (probed == null)
+                channels = ChannelProbe.Probe(deviceId, name);
+                if (channels == null)
                 {
-                    // Don't cache failures: a later replug may make the device probed-able,
-                    // and returning 1 without caching re-attempts on the next scan.
+                    // Assume one channel so the device stays usable, but don't
+                    // cache the failure; a replug may make the probe succeed.
                     return 1;
                 }
 
-                _channelCache[name] = probed.Value;
+                _channelCache[name] = channels.Value;
             }
 
-            return probed.Value;
+            return channels.Value;
         }
 
         private void ProbeChannels(List<DeviceEntry> devices)
         {
-            lock (_lock)
+            // GetChannelCount locks per device; a probe can block for ~1.5s, so
+            // don't hold the lock across the whole sweep.
+            foreach (var device in devices)
             {
-                foreach (var device in devices)
-                {
-                    GetChannelCount(device.Id, device.Info.Name);
-                }
+                GetChannelCount(device.Id, device.Info.Name);
             }
         }
 
@@ -329,7 +326,9 @@ namespace YARG.Audio.BASS
         {
             private const int TIMEOUT_MS = 250;
 
-            private static readonly (int Channels, int Rate)[] Attempts =
+            // Driver-reported channel counts are unreliable, so probe layouts from
+            // largest to smallest, at the two common sample rates.
+            private static readonly (int Channels, int Rate)[] PROBE_CONFIGS =
             {
                 (8, 48000),
                 (8, 44100),
@@ -362,7 +361,7 @@ namespace YARG.Audio.BASS
                 int devicePeriod = Bass.GetConfig(Configuration.DevicePeriod);
                 try
                 {
-                    foreach ((int channels, int rate) in Attempts)
+                    foreach ((int channels, int rate) in PROBE_CONFIGS)
                     {
                         var probe = new ChannelProbe(channels);
                         int handle = Bass.RecordStart(rate, channels, BassFlags.Default,
@@ -370,13 +369,28 @@ namespace YARG.Audio.BASS
 
                         if (handle == 0)
                         {
+                            probe.Dispose();
                             continue;
                         }
 
-                        int useableChannels = probe.Analyze(deviceId, name);
-                        if (useableChannels > 0)
+                        int usableChannels;
+                        try
                         {
-                            return useableChannels;
+                            usableChannels = probe.CountUsableChannels();
+                        }
+                        finally
+                        {
+                            // Stop the handle before disposing the waiter: the device may
+                            // already be initialized by a live session, in which case
+                            // RecordFree below is skipped and the recording would otherwise
+                            // keep firing callbacks into a disposed probe.
+                            Bass.ChannelStop(handle);
+                            probe.Dispose();
+                        }
+
+                        if (usableChannels > 0)
+                        {
+                            return usableChannels;
                         }
                     }
                 }
@@ -392,30 +406,18 @@ namespace YARG.Audio.BASS
                 return null;
             }
 
-            private int Analyze(int deviceId, string name)
+            private int CountUsableChannels()
             {
-                try
+                bool received = _gotFrame.Wait(TIMEOUT_MS);
+                if (!received)
                 {
-                    bool received = _gotFrame.Wait(TIMEOUT_MS);
-                    if (!received)
-                    {
-                        YargLogger.LogTrace(
-                            $"Channel probe: no frame from [{deviceId}] '{name}' at {_reportedChannels} ch");
-                        return 0;
-                    }
+                    return 0;
+                }
 
-                    int usable = CountUsableChannels();
-                    YargLogger.LogTrace(
-                        $"Channel probe: [{deviceId}] '{name}' reports {usable} usable channel(s) at {_reportedChannels} ch");
-                    return usable;
-                }
-                finally
-                {
-                    Dispose();
-                }
+                return CountUsable();
             }
 
-            private int CountUsableChannels()
+            private int CountUsable()
             {
                 int frameCount = _frame.Length / _reportedChannels;
                 if (frameCount == 0)
@@ -430,9 +432,10 @@ namespace YARG.Audio.BASS
                 {
                     if (IsSilent(deinterleaved[ch]))
                     {
-                        break;
+                        continue;
                     }
 
+                    // Unused channels often mirror input 1; don't count them twice.
                     if (!IsDuplicate(deinterleaved, ch))
                     {
                         usable++;
@@ -452,17 +455,8 @@ namespace YARG.Audio.BASS
                 unsafe
                 {
                     var span = new Span<short>((short*) buffer, length / sizeof(short));
-                    foreach (short s in span)
-                    {
-                        if (s == 0)
-                        {
-                            continue;
-                        }
-
-                        _frame = span.ToArray();
-                        _gotFrame.Set();
-                        break;
-                    }
+                    _frame = span.ToArray();
+                    _gotFrame.Set();
                 }
 
                 return true;
