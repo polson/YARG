@@ -6,6 +6,7 @@ using ManagedBass.Fx;
 using ManagedBass.Mix;
 using YARG.Audio.BASS.Effects;
 using YARG.Core.Logging;
+using YARG.Settings;
 
 namespace YARG.Audio.BASS
 {
@@ -32,7 +33,7 @@ namespace YARG.Audio.BASS
         private static readonly BQFParameters MonitorHighPass1Params = new()
         {
             lFilter = BQFType.HighPass,
-            fCenter = 115f,
+            fCenter = 145f,
             fQ = 0.707f,
             lChannel = FXChannelFlags.All,
         };
@@ -40,7 +41,7 @@ namespace YARG.Audio.BASS
         private static readonly BQFParameters MonitorHighPass2Params = new()
         {
             lFilter = BQFType.HighPass,
-            fCenter = 110f,
+            fCenter = 140f,
             fQ = 0.707f,
             lChannel = FXChannelFlags.All,
         };
@@ -240,7 +241,7 @@ namespace YARG.Audio.BASS
                         return false;
                     }
 
-                    reverb = BassFreeverbDsp.Create(handle, dryMix: 1.0f, wetMix: 0.18f, roomSize: 0.42f,
+                    reverb = BassFreeverbDsp.Create(handle, dryMix: 1.0f, wetMix: GetReverbWet(), roomSize: 0.42f,
                         damp: 0.35f, width: 0f, priority: 1);
                     if (reverb == null)
                     {
@@ -368,8 +369,7 @@ namespace YARG.Audio.BASS
                     return null;
                 }
 
-                // For vocal monitoring: full 100% dry voice + tight 18% rock stage reverb
-                reverb = BassFreeverbDsp.Create(monitorHandle, dryMix: 1.0f, wetMix: 0.18f, roomSize: 0.42f, damp: 0.35f, width: 0f, priority: 1);
+                reverb = BassFreeverbDsp.Create(monitorHandle, dryMix: 1.0f, wetMix: GetReverbWet(), roomSize: 0.42f, damp: 0.35f, width: 0f, priority: 1);
                 if (reverb == null)
                 {
                     YargLogger.LogError($"Failed to add reverb to mic '{name}' monitor split");
@@ -421,6 +421,20 @@ namespace YARG.Audio.BASS
         }
 
         public void SetMonitoringLevel(double volume) => _monitor?.SetVolume(volume);
+
+        public void SetReverbLevel(float wet)
+        {
+            _reverb.SetWetMix(wet);
+            lock (_streamLock)
+            {
+                foreach (var pair in _recordingEffects)
+                {
+                    pair.Value.SetReverbWet(wet);
+                }
+            }
+        }
+
+        private static float GetReverbWet() => SettingsManager.Settings?.VocalReverb?.Value ?? 0.25f;
 
         private static bool AddMonitoringEffects(int handle)
         {
@@ -492,6 +506,8 @@ namespace YARG.Audio.BASS
                 _noiseGate = noiseGate;
                 _reverb = reverb;
             }
+
+            public void SetReverbWet(float wet) => _reverb?.SetWetMix(wet);
 
             public void Dispose()
             {

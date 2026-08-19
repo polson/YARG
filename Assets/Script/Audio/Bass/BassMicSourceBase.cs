@@ -143,6 +143,19 @@ namespace YARG.Audio.BASS
             }
         }
 
+        public bool SetReverbLevel(float wet)
+        {
+            lock (_lock)
+            {
+                if (_disposed)
+                {
+                    return false;
+                }
+
+                return SetReverbLevelCore(wet);
+            }
+        }
+
         public abstract bool Reset();
 
         public MicBufferInfo? GetBufferInfo()
@@ -202,6 +215,7 @@ namespace YARG.Audio.BASS
         protected abstract void ReleaseRecordingChannelCore(int handle);
         protected abstract bool ResetToLiveCore();
         protected abstract bool SetMonitoringLevelCore(float volume);
+        protected abstract bool SetReverbLevelCore(float wet);
         protected abstract MicBufferInfo? GetBufferInfoCore();
         protected abstract void DisposeCore();
     }

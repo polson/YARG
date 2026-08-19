@@ -349,7 +349,10 @@ namespace YARG.Settings
             public VolumeSetting PreviewVolume { get; } = new(0.25f);
             public VolumeSetting MusicPlayerVolume { get; } = new(0.15f, MusicPlayerVolumeCallback);
             public VolumeSetting VocalMonitoring { get; } =
-                new(0.7f, 2f, VocalMonitoringCallback);
+                new(0.7f, 1f, VocalMonitoringCallback);
+
+            public VolumeSetting VocalReverb { get; } =
+                new(0.25f, 1f, VocalReverbCallback);
 
             private bool _automaticPlaybackBufferWasEnabled = true;
 
@@ -993,6 +996,17 @@ namespace YARG.Settings
                     foreach (var mic in player.Bindings.Microphones)
                     {
                         mic.SetMonitoringLevel(volume);
+                    }
+                }
+            }
+
+            private static void VocalReverbCallback(float wet)
+            {
+                foreach (var player in PlayerContainer.Players)
+                {
+                    foreach (var mic in player.Bindings.Microphones)
+                    {
+                        mic.SetReverbLevel(wet);
                     }
                 }
             }

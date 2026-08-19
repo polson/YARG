@@ -101,6 +101,110 @@ namespace YARG.Audio.BASS.Effects
             }
         }
 
+        public bool SetDryMix(float dryMix)
+        {
+            if (!IsFinite(dryMix))
+            {
+                YargLogger.LogFormatError("Ignoring non-finite dryMix for {0}: {1}.", EFFECT_NAME, dryMix);
+                return false;
+            }
+
+            if (IsClosed || IsInvalid) return false;
+            try { return Native.SetDryMix(this, dryMix) == 0; }
+            catch (ObjectDisposedException) { return false; }
+        }
+
+        public bool SetWetMix(float wetMix)
+        {
+            if (!IsFinite(wetMix))
+            {
+                YargLogger.LogFormatError("Ignoring non-finite wetMix for {0}: {1}.", EFFECT_NAME, wetMix);
+                return false;
+            }
+
+            if (IsClosed || IsInvalid) return false;
+            try { return Native.SetWetMix(this, wetMix) == 0; }
+            catch (ObjectDisposedException) { return false; }
+        }
+
+        public bool SetRoomSize(float roomSize)
+        {
+            if (!IsFinite(roomSize))
+            {
+                YargLogger.LogFormatError("Ignoring non-finite roomSize for {0}: {1}.", EFFECT_NAME, roomSize);
+                return false;
+            }
+
+            if (IsClosed || IsInvalid) return false;
+            try { return Native.SetRoomSize(this, roomSize) == 0; }
+            catch (ObjectDisposedException) { return false; }
+        }
+
+        public bool SetDamp(float damp)
+        {
+            if (!IsFinite(damp))
+            {
+                YargLogger.LogFormatError("Ignoring non-finite damp for {0}: {1}.", EFFECT_NAME, damp);
+                return false;
+            }
+
+            if (IsClosed || IsInvalid) return false;
+            try { return Native.SetDamp(this, damp) == 0; }
+            catch (ObjectDisposedException) { return false; }
+        }
+
+        public bool SetWidth(float width)
+        {
+            if (!IsFinite(width))
+            {
+                YargLogger.LogFormatError("Ignoring non-finite width for {0}: {1}.", EFFECT_NAME, width);
+                return false;
+            }
+
+            if (IsClosed || IsInvalid) return false;
+            try { return Native.SetWidth(this, width) == 0; }
+            catch (ObjectDisposedException) { return false; }
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct FreeverbParams
+        {
+            public uint Size;
+            public float DryMix;
+            public float WetMix;
+            public float RoomSize;
+            public float Damp;
+            public float Width;
+
+            public FreeverbParams(float dryMix, float wetMix, float roomSize, float damp, float width)
+            {
+                Size = (uint) Marshal.SizeOf<FreeverbParams>();
+                DryMix = dryMix;
+                WetMix = wetMix;
+                RoomSize = roomSize;
+                Damp = damp;
+                Width = width;
+            }
+        }
+
+        public bool SetParams(float dryMix, float wetMix, float roomSize, float damp, float width)
+        {
+            return SetParams(new FreeverbParams(dryMix, wetMix, roomSize, damp, width));
+        }
+
+        public bool SetParams(in FreeverbParams parms)
+        {
+            if (!IsFinite(parms.DryMix) || !IsFinite(parms.WetMix) || !IsFinite(parms.RoomSize) || !IsFinite(parms.Damp) || !IsFinite(parms.Width))
+            {
+                YargLogger.LogFormatError("Ignoring non-finite Freeverb params for {0}: dry={1}, wet={2}, room={3}, damp={4}, width={5}.", EFFECT_NAME, parms.DryMix, parms.WetMix, parms.RoomSize, parms.Damp, parms.Width);
+                return false;
+            }
+
+            if (IsClosed || IsInvalid) return false;
+            try { return Native.SetParams(this, in parms) == 0; }
+            catch (ObjectDisposedException) { return false; }
+        }
+
         protected override bool ReleaseHandle()
         {
             Native.Destroy(handle);
@@ -132,6 +236,30 @@ namespace YARG.Audio.BASS.Effects
             [DllImport(LIBRARY, EntryPoint = "yarg_freeverb_dsp_reset",
                 CallingConvention = CallingConvention.Cdecl)]
             internal static extern int Reset(BassFreeverbDsp dsp);
+
+            [DllImport(LIBRARY, EntryPoint = "yarg_freeverb_dsp_set_dry_mix",
+                CallingConvention = CallingConvention.Cdecl)]
+            internal static extern int SetDryMix(BassFreeverbDsp dsp, float dryMix);
+
+            [DllImport(LIBRARY, EntryPoint = "yarg_freeverb_dsp_set_wet_mix",
+                CallingConvention = CallingConvention.Cdecl)]
+            internal static extern int SetWetMix(BassFreeverbDsp dsp, float wetMix);
+
+            [DllImport(LIBRARY, EntryPoint = "yarg_freeverb_dsp_set_room_size",
+                CallingConvention = CallingConvention.Cdecl)]
+            internal static extern int SetRoomSize(BassFreeverbDsp dsp, float roomSize);
+
+            [DllImport(LIBRARY, EntryPoint = "yarg_freeverb_dsp_set_damp",
+                CallingConvention = CallingConvention.Cdecl)]
+            internal static extern int SetDamp(BassFreeverbDsp dsp, float damp);
+
+            [DllImport(LIBRARY, EntryPoint = "yarg_freeverb_dsp_set_width",
+                CallingConvention = CallingConvention.Cdecl)]
+            internal static extern int SetWidth(BassFreeverbDsp dsp, float width);
+
+            [DllImport(LIBRARY, EntryPoint = "yarg_freeverb_dsp_set_params",
+                CallingConvention = CallingConvention.Cdecl)]
+            internal static extern int SetParams(BassFreeverbDsp dsp, in FreeverbParams parms);
 
             [DllImport(LIBRARY, EntryPoint = "yarg_freeverb_dsp_destroy",
                 CallingConvention = CallingConvention.Cdecl)]

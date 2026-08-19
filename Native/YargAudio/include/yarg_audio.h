@@ -105,8 +105,38 @@ YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_attach(
     uint32_t channel, float dry_mix, float wet_mix, float room_size,
     float damp, float width, int32_t priority,
     yarg_freeverb_dsp** dsp, int32_t* bass_error);
+typedef struct yarg_freeverb_params {
+    uint32_t size;
+    float dry_mix;
+    float wet_mix;
+    float room_size;
+    float damp;
+    float width;
+} yarg_freeverb_params;
+
+typedef struct yarg_noise_gate_params {
+    uint32_t size;
+    float threshold;
+    float floor_gain;
+    float attack_ms;
+    float hold_ms;
+    float release_ms;
+} yarg_noise_gate_params;
+
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_reset(
     yarg_freeverb_dsp* dsp);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_set_dry_mix(
+    yarg_freeverb_dsp* dsp, float dry_mix);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_set_wet_mix(
+    yarg_freeverb_dsp* dsp, float wet_mix);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_set_room_size(
+    yarg_freeverb_dsp* dsp, float room_size);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_set_damp(
+    yarg_freeverb_dsp* dsp, float damp);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_set_width(
+    yarg_freeverb_dsp* dsp, float width);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_set_params(
+    yarg_freeverb_dsp* dsp, const yarg_freeverb_params* params);
 YARG_AUDIO_API void YARG_AUDIO_CALL yarg_freeverb_dsp_destroy(yarg_freeverb_dsp* dsp);
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_attach(
     uint32_t channel, float threshold, float floor_gain, float attack_ms,
@@ -114,6 +144,18 @@ YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_attach(
     yarg_noise_gate_dsp** dsp, int32_t* bass_error);
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_reset(
     yarg_noise_gate_dsp* dsp);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_set_threshold(
+    yarg_noise_gate_dsp* dsp, float threshold);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_set_floor_gain(
+    yarg_noise_gate_dsp* dsp, float floor_gain);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_set_attack(
+    yarg_noise_gate_dsp* dsp, float attack_ms);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_set_hold(
+    yarg_noise_gate_dsp* dsp, float hold_ms);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_set_release(
+    yarg_noise_gate_dsp* dsp, float release_ms);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_set_params(
+    yarg_noise_gate_dsp* dsp, const yarg_noise_gate_params* params);
 YARG_AUDIO_API void YARG_AUDIO_CALL yarg_noise_gate_dsp_destroy(yarg_noise_gate_dsp* dsp);
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_one_shot_stream_create(
     const yarg_one_shot_config* config,
