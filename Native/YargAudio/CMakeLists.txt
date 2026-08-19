@@ -14,6 +14,7 @@ find_package(Threads REQUIRED)
 set(YARG_AUDIO_SOURCES
     src/AudioRingBuffer.cpp
     src/BassCoreBindings.cpp
+    src/dsp/DattorroReverbDsp.cpp
     src/dsp/GainDsp.cpp
     src/dsp/FreeverbDsp.cpp
     src/dsp/NoiseGateDsp.cpp
@@ -72,6 +73,7 @@ if(YARG_AUDIO_BUILD_TESTS)
         tests/BassBindingTests.cpp
         tests/GainDspTests.cpp
         tests/FreeverbDspTests.cpp
+        tests/DattorroReverbDspTests.cpp
         tests/NoiseGateDspTests.cpp
         tests/RenderAheadMixerTests.cpp
         tests/ScheduledSampleSourceTests.cpp
@@ -80,6 +82,7 @@ if(YARG_AUDIO_BUILD_TESTS)
         src/AudioRingBuffer.cpp
         src/BassCoreBindings.cpp
         src/BassMixBindings.cpp
+        src/dsp/DattorroReverbDsp.cpp
         src/dsp/GainDsp.cpp
         src/dsp/FreeverbDsp.cpp
         src/dsp/NoiseGateDsp.cpp

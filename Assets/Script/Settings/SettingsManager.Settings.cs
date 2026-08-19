@@ -63,6 +63,12 @@ namespace YARG.Settings
         Addressable
     }
 
+    public enum ReverbMode
+    {
+        Performance = 0,
+        Quality = 1
+    }
+
     public struct CustomCharacterInfo : IEquatable<CustomCharacterInfo>
     {
         public CustomCharacterSource          Source;
@@ -724,6 +730,12 @@ namespace YARG.Settings
                 BandComboType.Lenient,
                 BandComboType.Strict
             };
+            public DropdownSetting<ReverbMode> ReverbImplementation { get; } = new(ReverbMode.Performance,
+                ReverbImplementationCallback)
+            {
+                ReverbMode.Performance,
+                ReverbMode.Quality
+            };
             public ToggleSetting SaveScoresWithBots { get; } = new(false);
             public SliderSetting FontScaling { get; } = new(0f, 0f, 100f, FontScalingCallback);
 
@@ -1008,6 +1020,28 @@ namespace YARG.Settings
                     {
                         mic.SetReverbLevel(wet);
                     }
+                }
+            }
+
+            private static void ReverbImplementationCallback(ReverbMode mode)
+            {
+                if (!IsInitialized)
+                {
+                    return;
+                }
+
+                BindingsContainer.ReleaseMicrophones();
+                try
+                {
+                    if (!GlobalAudioHandler.ReinitializeOutput())
+                    {
+                        YargLogger.LogError("Failed to reinitialize audio output after reverb implementation change");
+                        ToastManager.ToastError("Failed to reinitialize audio output after reverb change.");
+                    }
+                }
+                finally
+                {
+                    BindingsContainer.ResolveMicrophones();
                 }
             }
 
