@@ -18,11 +18,12 @@
 extern "C" {
 #endif
 
-#define YARG_AUDIO_ABI_VERSION 2u
+#define YARG_AUDIO_ABI_VERSION 3u
 
 typedef struct yarg_read_ahead_stream yarg_read_ahead_stream;
 typedef struct yarg_gain_dsp yarg_gain_dsp;
 typedef struct yarg_freeverb_dsp yarg_freeverb_dsp;
+typedef struct yarg_noise_gate_dsp yarg_noise_gate_dsp;
 typedef struct yarg_one_shot_stream yarg_one_shot_stream;
 
 typedef enum yarg_audio_result {
@@ -107,6 +108,13 @@ YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_attach(
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_reset(
     yarg_freeverb_dsp* dsp);
 YARG_AUDIO_API void YARG_AUDIO_CALL yarg_freeverb_dsp_destroy(yarg_freeverb_dsp* dsp);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_attach(
+    uint32_t channel, float threshold, float floor_gain, float attack_ms,
+    float hold_ms, float release_ms, int32_t priority,
+    yarg_noise_gate_dsp** dsp, int32_t* bass_error);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_reset(
+    yarg_noise_gate_dsp* dsp);
+YARG_AUDIO_API void YARG_AUDIO_CALL yarg_noise_gate_dsp_destroy(yarg_noise_gate_dsp* dsp);
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_one_shot_stream_create(
     const yarg_one_shot_config* config,
     const float* pcm, uint64_t pcm_sample_count,

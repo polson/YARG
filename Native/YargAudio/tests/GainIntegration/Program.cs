@@ -11,7 +11,7 @@ internal static class Program
     private static int Main()
     {
         Check(Environment.Is64BitProcess, "Integration probe requires a 64-bit process.");
-        Check(GainDsp.GetAbiVersion() == 2, "Unexpected YargAudio ABI version.");
+        Check(GainDsp.GetAbiVersion() == 3, "Unexpected YargAudio ABI version.");
         Check(Bass.Init(0, 48_000, 0, IntPtr.Zero, IntPtr.Zero), "BASS_Init");
 
         try
@@ -19,6 +19,7 @@ internal static class Program
             TestParityAndLiveUpdates();
             TestDspPriority();
             TestRepeatedLifecycle();
+            TestNoiseGateAndReset();
             TestFreeverbImpulseAndReset();
             TestOneShotRealBassLifecycle();
             TestReadAheadRealBassGraph();
@@ -28,7 +29,7 @@ internal static class Program
             Check(Bass.Free(), "BASS_Free");
         }
 
-        Console.WriteLine($"Native Gain/Freeverb integration passed on {RuntimeInformation.OSDescription} " +
+        Console.WriteLine($"Native DSP integration passed on {RuntimeInformation.OSDescription} " +
             $"({RuntimeInformation.ProcessArchitecture}).");
         return 0;
     }
@@ -167,6 +168,32 @@ internal static class Program
         finally
         {
             Check(Bass.StreamFree(stream), "BASS_StreamFree after Freeverb test");
+        }
+    }
+
+    private static void TestNoiseGateAndReset()
+    {
+        uint stream = CreatePushStream();
+        try
+        {
+            using NoiseGateDsp gate = AttachNoiseGate(stream, 0.05f, 0, 0, 0, 0, priority: 5);
+
+            float[] output = Process(stream, new float[] { 0, 0, 0, 0 });
+            AssertSilence(output, "noise gate silence");
+
+            output = Process(stream, new float[] { 1, 1 });
+            Check(output[0] == 1 && output[1] == 1, "noise gate loud signal");
+
+            output = Process(stream, new float[] { 0.01f, 0.01f });
+            AssertSilence(output, "noise gate quiet signal");
+
+            Check(NoiseGateDsp.Reset(gate) == 0, "noise gate reset");
+            output = Process(stream, new float[] { 0, 0, 0, 0 });
+            AssertSilence(output, "noise gate reset silence");
+        }
+        finally
+        {
+            Check(Bass.StreamFree(stream), "BASS_StreamFree after dynamics test");
         }
     }
 
@@ -354,6 +381,16 @@ internal static class Program
         return dsp!;
     }
 
+    private static NoiseGateDsp AttachNoiseGate(uint stream, float threshold,
+        float floorGain, float attackMs, float holdMs, float releaseMs, int priority = 0)
+    {
+        int result = NoiseGateDsp.Attach(stream, threshold, floorGain, attackMs, holdMs,
+            releaseMs, priority, out NoiseGateDsp dsp, out int bassError);
+        Check(result == 0 && dsp != null && !dsp.IsInvalid,
+            $"Noise gate attach failed: result={result}, BASS={bassError}.");
+        return dsp!;
+    }
+
     private static float[] Process(uint stream, float[] input)
     {
         int byteLength = input.Length * sizeof(float);
@@ -428,6 +465,33 @@ internal static class Program
         internal static extern int Reset(FreeverbDsp dsp);
 
         [DllImport("yarg_audio", EntryPoint = "yarg_freeverb_dsp_destroy",
+            CallingConvention = CallingConvention.Cdecl)]
+        private static extern void Destroy(IntPtr dsp);
+    }
+
+    private sealed class NoiseGateDsp : SafeHandleZeroOrMinusOneIsInvalid
+    {
+        private NoiseGateDsp() : base(true)
+        {
+        }
+
+        protected override bool ReleaseHandle()
+        {
+            Destroy(handle);
+            return true;
+        }
+
+        [DllImport("yarg_audio", EntryPoint = "yarg_noise_gate_dsp_attach",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int Attach(uint channel, float threshold, float floorGain,
+            float attackMs, float holdMs, float releaseMs, int priority,
+            out NoiseGateDsp dsp, out int bassError);
+
+        [DllImport("yarg_audio", EntryPoint = "yarg_noise_gate_dsp_reset",
+            CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int Reset(NoiseGateDsp dsp);
+
+        [DllImport("yarg_audio", EntryPoint = "yarg_noise_gate_dsp_destroy",
             CallingConvention = CallingConvention.Cdecl)]
         private static extern void Destroy(IntPtr dsp);
     }

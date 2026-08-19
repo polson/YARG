@@ -3,6 +3,7 @@
 #include "ReadAheadStream.h"
 #include "dsp/FreeverbDsp.h"
 #include "dsp/GainDsp.h"
+#include "dsp/NoiseGateDsp.h"
 #include "one_shot/NativeOneShotStream.h"
 #include "yarg_audio.h"
 
@@ -107,6 +108,22 @@ int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_reset(yarg_freeverb_dsp* dsp) {
 
 void YARG_AUDIO_CALL yarg_freeverb_dsp_destroy(yarg_freeverb_dsp* dsp) {
     (void) yarg::audio::freeverbDspDestroy(dsp);
+}
+
+int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_attach(uint32_t channel,
+    float threshold, float floor_gain, float attack_ms, float hold_ms,
+    float release_ms, int32_t priority, yarg_noise_gate_dsp** dsp,
+    int32_t* bass_error) {
+    return yarg::audio::noiseGateDspAttach(coreBassBindings(), channel, threshold,
+        floor_gain, attack_ms, hold_ms, release_ms, priority, dsp, bass_error);
+}
+
+int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_reset(yarg_noise_gate_dsp* dsp) {
+    return yarg::audio::noiseGateDspRequestReset(dsp);
+}
+
+void YARG_AUDIO_CALL yarg_noise_gate_dsp_destroy(yarg_noise_gate_dsp* dsp) {
+    (void) yarg::audio::noiseGateDspDestroy(dsp);
 }
 
 int32_t YARG_AUDIO_CALL yarg_one_shot_stream_create(
