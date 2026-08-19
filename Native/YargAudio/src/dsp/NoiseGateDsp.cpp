@@ -1,5 +1,7 @@
 #include "dsp/NoiseGateDsp.h"
 
+#include "BitCastCompat.h"
+
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -37,6 +39,16 @@ void process(yarg_noise_gate_dsp* state, float* samples, std::size_t sampleCount
     const std::uint32_t channelCount = state->channelCount;
     const std::size_t frameCount = sampleCount / channelCount;
 
+    const float thresholdSquared = yarg::audio::bitCast<float>(
+        state->thresholdSquaredBits.load(std::memory_order_relaxed));
+    const float floorGain = yarg::audio::bitCast<float>(
+        state->floorGainBits.load(std::memory_order_relaxed));
+    const float attackCoefficient = yarg::audio::bitCast<float>(
+        state->attackCoefficientBits.load(std::memory_order_relaxed));
+    const std::uint32_t holdFrames = state->holdFramesBits.load(std::memory_order_relaxed);
+    const float releaseCoefficient = yarg::audio::bitCast<float>(
+        state->releaseCoefficientBits.load(std::memory_order_relaxed));
+
     for (std::size_t frame = 0; frame < frameCount; ++frame) {
         const std::size_t frameOffset = frame * channelCount;
         float power = 0.0f;
@@ -47,22 +59,22 @@ void process(yarg_noise_gate_dsp* state, float* samples, std::size_t sampleCount
         power /= static_cast<float>(channelCount);
 
         const float detectorCoefficient = power > state->envelopeSquared
-            ? state->attackCoefficient : state->releaseCoefficient;
+            ? attackCoefficient : releaseCoefficient;
         state->envelopeSquared +=
             (power - state->envelopeSquared) * detectorCoefficient;
 
-        if (state->envelopeSquared >= state->thresholdSquared) {
-            state->holdRemaining = state->holdFrames;
+        if (state->envelopeSquared >= thresholdSquared) {
+            state->holdRemaining = holdFrames;
         }
         else if (state->holdRemaining > 0) {
             --state->holdRemaining;
         }
 
-        const bool open = state->envelopeSquared >= state->thresholdSquared ||
+        const bool open = state->envelopeSquared >= thresholdSquared ||
             state->holdRemaining > 0;
-        const float targetGain = open ? 1.0f : state->floorGain;
+        const float targetGain = open ? 1.0f : floorGain;
         const float gainCoefficient = targetGain > state->gain
-            ? state->attackCoefficient : state->releaseCoefficient;
+            ? attackCoefficient : releaseCoefficient;
         state->gain += (targetGain - state->gain) * gainCoefficient;
 
         for (std::uint32_t channel = 0; channel < channelCount; ++channel) {
@@ -82,11 +94,15 @@ yarg_noise_gate_dsp::yarg_noise_gate_dsp(
     const yarg::audio::BassCoreBindings& bindings, std::uint32_t channelHandle,
     std::uint32_t channels, float threshold, float floorGain,
     float attackCoefficientValue, std::uint32_t holdFrameCount,
-    float releaseCoefficientValue) noexcept
+    float releaseCoefficientValue, std::uint32_t sampleRateValue) noexcept
     : bass(bindings), channel(channelHandle), channelCount(channels),
-      thresholdSquared(threshold * threshold), floorGain(floorGain),
-      attackCoefficient(attackCoefficientValue), holdFrames(holdFrameCount),
-      releaseCoefficient(releaseCoefficientValue), resetRequested(0) {}
+      sampleRate(sampleRateValue),
+      thresholdSquaredBits(yarg::audio::bitCast<std::uint32_t>(threshold * threshold)),
+      floorGainBits(yarg::audio::bitCast<std::uint32_t>(floorGain)),
+      attackCoefficientBits(yarg::audio::bitCast<std::uint32_t>(attackCoefficientValue)),
+      holdFramesBits(holdFrameCount),
+      releaseCoefficientBits(yarg::audio::bitCast<std::uint32_t>(releaseCoefficientValue)),
+      resetRequested(0) {}
 
 namespace yarg::audio {
 
@@ -130,7 +146,8 @@ int noiseGateDspAttach(const BassCoreBindings& bass, std::uint32_t channel,
 
     auto* state = new (std::nothrow) yarg_noise_gate_dsp(bass, channel, info.channels,
         threshold, floorGain, timeCoefficient(attackMs, info.frequency),
-        timeFrames(holdMs, info.frequency), timeCoefficient(releaseMs, info.frequency));
+        timeFrames(holdMs, info.frequency), timeCoefficient(releaseMs, info.frequency),
+        info.frequency);
     if (!state) return YARG_AUDIO_ERROR_INTERNAL;
 
     state->dsp = bass.setDsp(channel, &noiseGateDspProc, state, priority);
@@ -147,6 +164,63 @@ int noiseGateDspAttach(const BassCoreBindings& bass, std::uint32_t channel,
 int noiseGateDspRequestReset(yarg_noise_gate_dsp* dsp) noexcept {
     if (!dsp) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
     dsp->resetRequested.store(1, std::memory_order_relaxed);
+    return YARG_AUDIO_OK;
+}
+
+int noiseGateDspSetThreshold(yarg_noise_gate_dsp* dsp, float threshold) noexcept {
+    if (!dsp || !std::isfinite(threshold) || threshold < 0.0f) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    const float squared = threshold * threshold;
+    dsp->thresholdSquaredBits.store(yarg::audio::bitCast<std::uint32_t>(squared), std::memory_order_relaxed);
+    return YARG_AUDIO_OK;
+}
+
+int noiseGateDspSetFloorGain(yarg_noise_gate_dsp* dsp, float floorGain) noexcept {
+    if (!dsp || !std::isfinite(floorGain) || floorGain < 0.0f || floorGain > 1.0f) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    dsp->floorGainBits.store(yarg::audio::bitCast<std::uint32_t>(floorGain), std::memory_order_relaxed);
+    return YARG_AUDIO_OK;
+}
+
+int noiseGateDspSetAttack(yarg_noise_gate_dsp* dsp, float attackMs) noexcept {
+    if (!dsp || !std::isfinite(attackMs) || attackMs < 0.0f) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    const float coeff = timeCoefficient(attackMs, dsp->sampleRate);
+    dsp->attackCoefficientBits.store(yarg::audio::bitCast<std::uint32_t>(coeff), std::memory_order_relaxed);
+    return YARG_AUDIO_OK;
+}
+
+int noiseGateDspSetHold(yarg_noise_gate_dsp* dsp, float holdMs) noexcept {
+    if (!dsp || !std::isfinite(holdMs) || holdMs < 0.0f) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    const std::uint32_t frames = timeFrames(holdMs, dsp->sampleRate);
+    dsp->holdFramesBits.store(frames, std::memory_order_relaxed);
+    return YARG_AUDIO_OK;
+}
+
+int noiseGateDspSetRelease(yarg_noise_gate_dsp* dsp, float releaseMs) noexcept {
+    if (!dsp || !std::isfinite(releaseMs) || releaseMs < 0.0f) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    const float coeff = timeCoefficient(releaseMs, dsp->sampleRate);
+    dsp->releaseCoefficientBits.store(yarg::audio::bitCast<std::uint32_t>(coeff), std::memory_order_relaxed);
+    return YARG_AUDIO_OK;
+}
+
+int noiseGateDspSetParams(yarg_noise_gate_dsp* dsp, const yarg_noise_gate_params* params) noexcept {
+    if (!dsp || !params || params->size < sizeof(yarg_noise_gate_params)) {
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    }
+    const float threshold = params->threshold;
+    const float floorGain = params->floor_gain;
+    const float attackMs = params->attack_ms;
+    const float holdMs = params->hold_ms;
+    const float releaseMs = params->release_ms;
+    if (!std::isfinite(threshold) || !std::isfinite(floorGain) ||
+        !std::isfinite(attackMs) || !std::isfinite(holdMs) || !std::isfinite(releaseMs) ||
+        threshold < 0.0f || floorGain < 0.0f || floorGain > 1.0f ||
+        attackMs < 0.0f || holdMs < 0.0f || releaseMs < 0.0f) {
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    }
+    dsp->thresholdSquaredBits.store(yarg::audio::bitCast<std::uint32_t>(threshold * threshold), std::memory_order_relaxed);
+    dsp->floorGainBits.store(yarg::audio::bitCast<std::uint32_t>(floorGain), std::memory_order_relaxed);
+    dsp->attackCoefficientBits.store(yarg::audio::bitCast<std::uint32_t>(timeCoefficient(attackMs, dsp->sampleRate)), std::memory_order_relaxed);
+    dsp->holdFramesBits.store(timeFrames(holdMs, dsp->sampleRate), std::memory_order_relaxed);
+    dsp->releaseCoefficientBits.store(yarg::audio::bitCast<std::uint32_t>(timeCoefficient(releaseMs, dsp->sampleRate)), std::memory_order_relaxed);
     return YARG_AUDIO_OK;
 }
 

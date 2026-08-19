@@ -48,6 +48,12 @@ namespace YARG.Audio.BASS
             return true;
         }
 
+        protected override bool SetReverbLevelCore(float wet)
+        {
+            _signal.SetReverbLevel(wet);
+            return true;
+        }
+
         public override bool Reset()
         {
             lock (SyncRoot)

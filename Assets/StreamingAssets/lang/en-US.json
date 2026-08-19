@@ -1650,6 +1650,11 @@
                 "PauseName": "Monitoring",
                 "Description": "Adjusts the feedback you hear when singing. Values above 1 add extra gain for quiet microphones."
             },
+            "VocalReverb": {
+                "Name": "Vocal Reverb",
+                "PauseName": "Reverb",
+                "Description": "Adjusts the amount of reverb applied to vocal monitoring. 0 is dry, 1.0 is maximum."
+            },
 			"VocalStreakFrequency": {
                 "Name": "Vocal Streak Frequency",
                 "Description": "Sets the frequency of phrase streak notifications for vocalists.",

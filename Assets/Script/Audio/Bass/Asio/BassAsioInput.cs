@@ -124,6 +124,17 @@ namespace YARG.Audio.BASS.Asio
             return true;
         }
 
+        internal bool SetReverbLevel(float wet)
+        {
+            if (!_claimed || _signal == null)
+            {
+                return false;
+            }
+
+            _signal.SetReverbLevel(wet);
+            return true;
+        }
+
         internal void Release()
         {
             _signal?.SetMonitoringLevel(0);

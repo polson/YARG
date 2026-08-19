@@ -16,6 +16,7 @@ namespace YARG.Audio.BASS.Asio
         private readonly BassAsioMics _owner;
         private BassAsioInput _input;
         private float _monitoringLevel;
+        private float _reverbLevel;
 
         public BassAsioMicSource(BassAsioMics owner, string driverId, BassAsioInput input, InputDeviceInfo info)
             : base(info.Name, info.DisplayName, info.Channel)
@@ -24,10 +25,12 @@ namespace YARG.Audio.BASS.Asio
             DriverId = driverId;
             _input = input;
             _monitoringLevel = SettingsManager.Settings.VocalMonitoring.Value;
+            _reverbLevel = SettingsManager.Settings.VocalReverb.Value;
             if (!_input.EnableMonitoring(_monitoringLevel))
             {
                 YargLogger.LogWarning($"Failed to enable monitoring for ASIO microphone '{DisplayName}'");
             }
+            _input.SetReverbLevel(_reverbLevel);
         }
 
         public string DriverId { get; }
@@ -51,6 +54,12 @@ namespace YARG.Audio.BASS.Asio
         {
             _monitoringLevel = volume;
             return _input.EnableMonitoring(volume);
+        }
+
+        protected override bool SetReverbLevelCore(float wet)
+        {
+            _reverbLevel = wet;
+            return _input.SetReverbLevel(wet);
         }
 
         public override bool Reset()
@@ -93,6 +102,7 @@ namespace YARG.Audio.BASS.Asio
                 {
                     YargLogger.LogWarning($"Failed to restore monitoring for ASIO microphone '{DisplayName}'");
                 }
+                _input.SetReverbLevel(_reverbLevel);
             }
 
             RaiseInputChanged();
