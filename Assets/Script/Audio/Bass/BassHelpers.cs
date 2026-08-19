@@ -36,7 +36,7 @@ namespace YARG.Audio.BASS
 
     public static class BassHelpers
     {
-        public const uint YARG_AUDIO_ABI_VERSION = 2;
+        public const uint YARG_AUDIO_ABI_VERSION = 3;
 
         public const float REVERB_VOLUME_MULTIPLIER = 0.35f;
 
