@@ -1,6 +1,7 @@
 #include "BassCoreBindings.h"
 #include "BassMixBindings.h"
 #include "ReadAheadStream.h"
+#include "dsp/DattorroReverbDsp.h"
 #include "dsp/FreeverbDsp.h"
 #include "dsp/GainDsp.h"
 #include "dsp/NoiseGateDsp.h"
@@ -17,6 +18,7 @@ static_assert(sizeof(yarg_read_ahead_stats) == 104);
 static_assert(sizeof(yarg_read_ahead_position_snapshot) == 24);
 static_assert(sizeof(yarg_one_shot_config) == 24);
 static_assert(sizeof(yarg_freeverb_params) == 24);
+static_assert(sizeof(yarg_dattorro_reverb_params) == 24);
 static_assert(sizeof(yarg_noise_gate_params) == 24);
 static_assert(sizeof(int32_t) == sizeof(int));
 
@@ -108,32 +110,31 @@ int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_reset(yarg_freeverb_dsp* dsp) {
     return yarg::audio::freeverbDspRequestReset(dsp);
 }
 
-int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_set_dry_mix(yarg_freeverb_dsp* dsp, float dry_mix) {
-    return yarg::audio::freeverbDspSetDryMix(dsp, dry_mix);
-}
-
-int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_set_wet_mix(yarg_freeverb_dsp* dsp, float wet_mix) {
-    return yarg::audio::freeverbDspSetWetMix(dsp, wet_mix);
-}
-
-int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_set_room_size(yarg_freeverb_dsp* dsp, float room_size) {
-    return yarg::audio::freeverbDspSetRoomSize(dsp, room_size);
-}
-
-int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_set_damp(yarg_freeverb_dsp* dsp, float damp) {
-    return yarg::audio::freeverbDspSetDamp(dsp, damp);
-}
-
-int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_set_width(yarg_freeverb_dsp* dsp, float width) {
-    return yarg::audio::freeverbDspSetWidth(dsp, width);
-}
-
 int32_t YARG_AUDIO_CALL yarg_freeverb_dsp_set_params(yarg_freeverb_dsp* dsp, const yarg_freeverb_params* params) {
     return yarg::audio::freeverbDspSetParams(dsp, params);
 }
 
 void YARG_AUDIO_CALL yarg_freeverb_dsp_destroy(yarg_freeverb_dsp* dsp) {
     (void) yarg::audio::freeverbDspDestroy(dsp);
+}
+
+int32_t YARG_AUDIO_CALL yarg_dattorro_reverb_dsp_attach(uint32_t channel,
+    float dry_mix, float wet_mix, float room_size, float damp, float width,
+    int32_t priority, yarg_dattorro_reverb_dsp** dsp, int32_t* bass_error) {
+    return yarg::audio::dattorroReverbDspAttach(coreBassBindings(), channel, dry_mix,
+        wet_mix, room_size, damp, width, priority, dsp, bass_error);
+}
+
+int32_t YARG_AUDIO_CALL yarg_dattorro_reverb_dsp_reset(yarg_dattorro_reverb_dsp* dsp) {
+    return yarg::audio::dattorroReverbDspRequestReset(dsp);
+}
+
+int32_t YARG_AUDIO_CALL yarg_dattorro_reverb_dsp_set_params(yarg_dattorro_reverb_dsp* dsp, const yarg_dattorro_reverb_params* params) {
+    return yarg::audio::dattorroReverbDspSetParams(dsp, params);
+}
+
+void YARG_AUDIO_CALL yarg_dattorro_reverb_dsp_destroy(yarg_dattorro_reverb_dsp* dsp) {
+    (void) yarg::audio::dattorroReverbDspDestroy(dsp);
 }
 
 int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_attach(uint32_t channel,
@@ -146,26 +147,6 @@ int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_attach(uint32_t channel,
 
 int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_reset(yarg_noise_gate_dsp* dsp) {
     return yarg::audio::noiseGateDspRequestReset(dsp);
-}
-
-int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_set_threshold(yarg_noise_gate_dsp* dsp, float threshold) {
-    return yarg::audio::noiseGateDspSetThreshold(dsp, threshold);
-}
-
-int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_set_floor_gain(yarg_noise_gate_dsp* dsp, float floor_gain) {
-    return yarg::audio::noiseGateDspSetFloorGain(dsp, floor_gain);
-}
-
-int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_set_attack(yarg_noise_gate_dsp* dsp, float attack_ms) {
-    return yarg::audio::noiseGateDspSetAttack(dsp, attack_ms);
-}
-
-int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_set_hold(yarg_noise_gate_dsp* dsp, float hold_ms) {
-    return yarg::audio::noiseGateDspSetHold(dsp, hold_ms);
-}
-
-int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_set_release(yarg_noise_gate_dsp* dsp, float release_ms) {
-    return yarg::audio::noiseGateDspSetRelease(dsp, release_ms);
 }
 
 int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_set_params(yarg_noise_gate_dsp* dsp, const yarg_noise_gate_params* params) {

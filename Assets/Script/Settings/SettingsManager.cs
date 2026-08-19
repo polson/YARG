@@ -271,6 +271,7 @@ namespace YARG.Settings
                 nameof(Settings.BandComboTypeSetting),
                 nameof(Settings.DataStreamEnable),
                 nameof(Settings.SaveScoresWithBots),
+                nameof(Settings.ReverbImplementation),
                 new HeaderMetadata("Accessibility"),
                 nameof(Settings.FontScaling),
                 new HeaderMetadata("OutputConfiguration"),
@@ -329,6 +330,14 @@ namespace YARG.Settings
 
             // If null, recreate
             Settings ??= new SettingContainer();
+
+            if (Settings.ReverbImplementation != null &&
+                !Enum.IsDefined(typeof(ReverbMode), Settings.ReverbImplementation.Value))
+            {
+                int raw = (int)(object)Settings.ReverbImplementation.Value;
+                ReverbMode migrated = raw == 0 ? ReverbMode.Performance : ReverbMode.Quality;
+                Settings.ReverbImplementation.SetValueWithoutNotify(migrated);
+            }
 
             AudioOutputMode outputMode = GlobalAudioHandler.GetOutputMode(Settings.OutputDevice.Value);
             Settings.OutputMode.SetValueWithoutNotify(outputMode);

@@ -39,11 +39,6 @@ int noiseGateDspAttach(const BassCoreBindings& bass, std::uint32_t channel,
     float releaseMs, int priority, yarg_noise_gate_dsp** dsp,
     int* bassError) noexcept;
 int noiseGateDspRequestReset(yarg_noise_gate_dsp* dsp) noexcept;
-int noiseGateDspSetThreshold(yarg_noise_gate_dsp* dsp, float threshold) noexcept;
-int noiseGateDspSetFloorGain(yarg_noise_gate_dsp* dsp, float floorGain) noexcept;
-int noiseGateDspSetAttack(yarg_noise_gate_dsp* dsp, float attackMs) noexcept;
-int noiseGateDspSetHold(yarg_noise_gate_dsp* dsp, float holdMs) noexcept;
-int noiseGateDspSetRelease(yarg_noise_gate_dsp* dsp, float releaseMs) noexcept;
 int noiseGateDspSetParams(yarg_noise_gate_dsp* dsp, const yarg_noise_gate_params* params) noexcept;
 
 bool noiseGateDspDestroy(yarg_noise_gate_dsp* dsp) noexcept;

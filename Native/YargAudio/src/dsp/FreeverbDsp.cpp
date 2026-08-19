@@ -407,58 +407,6 @@ int freeverbDspRequestReset(yarg_freeverb_dsp* dsp) noexcept {
     return YARG_AUDIO_OK;
 }
 
-int freeverbDspSetDryMix(yarg_freeverb_dsp* dsp, float dryMix) noexcept {
-    if (!dsp || !std::isfinite(dryMix)) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
-    dsp->dryMixBits.store(
-        yarg::audio::bitCast<std::uint32_t>(clamp(dryMix, 0.0f, 1.0f)),
-        std::memory_order_relaxed);
-    return YARG_AUDIO_OK;
-}
-
-int freeverbDspSetWetMix(yarg_freeverb_dsp* dsp, float wetMix) noexcept {
-    if (!dsp || !std::isfinite(wetMix)) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
-    const float clampedWet = clampWet(wetMix);
-    dsp->wetMixBits.store(yarg::audio::bitCast<std::uint32_t>(clampedWet), std::memory_order_relaxed);
-    const float width = yarg::audio::bitCast<float>(dsp->widthBits.load(std::memory_order_relaxed));
-    dsp->sameChannelWetMixBits.store(
-        yarg::audio::bitCast<std::uint32_t>(computeSameChannelWet(clampedWet, width)),
-        std::memory_order_relaxed);
-    dsp->crossChannelWetMixBits.store(
-        yarg::audio::bitCast<std::uint32_t>(computeCrossChannelWet(clampedWet, width)),
-        std::memory_order_relaxed);
-    return YARG_AUDIO_OK;
-}
-
-int freeverbDspSetRoomSize(yarg_freeverb_dsp* dsp, float roomSize) noexcept {
-    if (!dsp || !std::isfinite(roomSize)) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
-    dsp->roomFeedbackBits.store(
-        yarg::audio::bitCast<std::uint32_t>(computeRoomFeedback(roomSize)),
-        std::memory_order_relaxed);
-    return YARG_AUDIO_OK;
-}
-
-int freeverbDspSetDamp(yarg_freeverb_dsp* dsp, float damp) noexcept {
-    if (!dsp || !std::isfinite(damp)) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
-    dsp->dampingBits.store(
-        yarg::audio::bitCast<std::uint32_t>(computeDamping(damp)),
-        std::memory_order_relaxed);
-    return YARG_AUDIO_OK;
-}
-
-int freeverbDspSetWidth(yarg_freeverb_dsp* dsp, float width) noexcept {
-    if (!dsp || !std::isfinite(width)) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
-    const float clampedWidth = clamp01(width);
-    dsp->widthBits.store(yarg::audio::bitCast<std::uint32_t>(clampedWidth), std::memory_order_relaxed);
-    const float wet = yarg::audio::bitCast<float>(dsp->wetMixBits.load(std::memory_order_relaxed));
-    dsp->sameChannelWetMixBits.store(
-        yarg::audio::bitCast<std::uint32_t>(computeSameChannelWet(wet, clampedWidth)),
-        std::memory_order_relaxed);
-    dsp->crossChannelWetMixBits.store(
-        yarg::audio::bitCast<std::uint32_t>(computeCrossChannelWet(wet, clampedWidth)),
-        std::memory_order_relaxed);
-    return YARG_AUDIO_OK;
-}
-
 int freeverbDspSetParams(yarg_freeverb_dsp* dsp, const yarg_freeverb_params* params) noexcept {
     if (!dsp || !params || params->size < sizeof(yarg_freeverb_params)) {
         return YARG_AUDIO_ERROR_INVALID_ARGUMENT;

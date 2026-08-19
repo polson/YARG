@@ -167,40 +167,6 @@ int noiseGateDspRequestReset(yarg_noise_gate_dsp* dsp) noexcept {
     return YARG_AUDIO_OK;
 }
 
-int noiseGateDspSetThreshold(yarg_noise_gate_dsp* dsp, float threshold) noexcept {
-    if (!dsp || !std::isfinite(threshold) || threshold < 0.0f) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
-    const float squared = threshold * threshold;
-    dsp->thresholdSquaredBits.store(yarg::audio::bitCast<std::uint32_t>(squared), std::memory_order_relaxed);
-    return YARG_AUDIO_OK;
-}
-
-int noiseGateDspSetFloorGain(yarg_noise_gate_dsp* dsp, float floorGain) noexcept {
-    if (!dsp || !std::isfinite(floorGain) || floorGain < 0.0f || floorGain > 1.0f) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
-    dsp->floorGainBits.store(yarg::audio::bitCast<std::uint32_t>(floorGain), std::memory_order_relaxed);
-    return YARG_AUDIO_OK;
-}
-
-int noiseGateDspSetAttack(yarg_noise_gate_dsp* dsp, float attackMs) noexcept {
-    if (!dsp || !std::isfinite(attackMs) || attackMs < 0.0f) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
-    const float coeff = timeCoefficient(attackMs, dsp->sampleRate);
-    dsp->attackCoefficientBits.store(yarg::audio::bitCast<std::uint32_t>(coeff), std::memory_order_relaxed);
-    return YARG_AUDIO_OK;
-}
-
-int noiseGateDspSetHold(yarg_noise_gate_dsp* dsp, float holdMs) noexcept {
-    if (!dsp || !std::isfinite(holdMs) || holdMs < 0.0f) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
-    const std::uint32_t frames = timeFrames(holdMs, dsp->sampleRate);
-    dsp->holdFramesBits.store(frames, std::memory_order_relaxed);
-    return YARG_AUDIO_OK;
-}
-
-int noiseGateDspSetRelease(yarg_noise_gate_dsp* dsp, float releaseMs) noexcept {
-    if (!dsp || !std::isfinite(releaseMs) || releaseMs < 0.0f) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
-    const float coeff = timeCoefficient(releaseMs, dsp->sampleRate);
-    dsp->releaseCoefficientBits.store(yarg::audio::bitCast<std::uint32_t>(coeff), std::memory_order_relaxed);
-    return YARG_AUDIO_OK;
-}
-
 int noiseGateDspSetParams(yarg_noise_gate_dsp* dsp, const yarg_noise_gate_params* params) noexcept {
     if (!dsp || !params || params->size < sizeof(yarg_noise_gate_params)) {
         return YARG_AUDIO_ERROR_INVALID_ARGUMENT;

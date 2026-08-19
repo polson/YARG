@@ -140,9 +140,14 @@ namespace YARG.Audio.BASS
         private const float MONITOR_NOISE_GATE_HOLD_MS = 50.0f;
         private const float MONITOR_NOISE_GATE_RELEASE_MS = 120.0f;
 
+        private const float MONITOR_REVERB_DRY_MIX = 1.0f;
+        private const float MONITOR_REVERB_ROOM_SIZE = 0.42f;
+        private const float MONITOR_REVERB_DAMP = 0.35f;
+        private const float MONITOR_REVERB_WIDTH = 0.0f;
+
         private readonly string          _name;
         private readonly BassNoiseGateDsp _noiseGate;
-        private readonly BassFreeverbDsp _reverb;
+        private readonly IBassReverbDsp   _reverb;
         private readonly int             _sourceHandle;
         private readonly int[]?          _channelMap;
         private readonly Dictionary<int, RecordingEffects> _recordingEffects = new();
@@ -153,7 +158,7 @@ namespace YARG.Audio.BASS
         private          int          _monitorHandle;
 
         private BassMicSignal(string name, int sampleRate, int sourceHandle, int[]? channelMap, int monitorHandle,
-            int analysisHandle, BassNoiseGateDsp noiseGate, BassFreeverbDsp reverb)
+            int analysisHandle, BassNoiseGateDsp noiseGate, IBassReverbDsp reverb)
         {
             _name = name;
             SampleRate = sampleRate;
@@ -228,7 +233,7 @@ namespace YARG.Audio.BASS
                 }
 
                 BassNoiseGateDsp? noiseGate = null;
-                BassFreeverbDsp? reverb = null;
+                IBassReverbDsp? reverb = null;
                 if (withEffects)
                 {
                     noiseGate = BassNoiseGateDsp.Attach(handle,
@@ -241,8 +246,9 @@ namespace YARG.Audio.BASS
                         return false;
                     }
 
-                    reverb = BassFreeverbDsp.Create(handle, dryMix: 1.0f, wetMix: GetReverbWet(), roomSize: 0.42f,
-                        damp: 0.35f, width: 0f, priority: 1);
+                    reverb = BassHelpers.CreateReverb(GetReverbMode(), handle, dryMix: MONITOR_REVERB_DRY_MIX,
+                        wetMix: GetReverbWet(), roomSize: MONITOR_REVERB_ROOM_SIZE, damp: MONITOR_REVERB_DAMP,
+                        width: MONITOR_REVERB_WIDTH, priority: 1);
                     if (reverb == null)
                     {
                         noiseGate.Dispose();
@@ -325,7 +331,7 @@ namespace YARG.Audio.BASS
             int monitorHandle = 0;
             int analysisHandle = 0;
             BassNoiseGateDsp? noiseGate = null;
-            BassFreeverbDsp? reverb = null;
+            IBassReverbDsp? reverb = null;
 
             try
             {
@@ -369,7 +375,9 @@ namespace YARG.Audio.BASS
                     return null;
                 }
 
-                reverb = BassFreeverbDsp.Create(monitorHandle, dryMix: 1.0f, wetMix: GetReverbWet(), roomSize: 0.42f, damp: 0.35f, width: 0f, priority: 1);
+                reverb = BassHelpers.CreateReverb(GetReverbMode(), monitorHandle, dryMix: MONITOR_REVERB_DRY_MIX,
+                    wetMix: GetReverbWet(), roomSize: MONITOR_REVERB_ROOM_SIZE, damp: MONITOR_REVERB_DAMP,
+                    width: MONITOR_REVERB_WIDTH, priority: 1);
                 if (reverb == null)
                 {
                     YargLogger.LogError($"Failed to add reverb to mic '{name}' monitor split");
@@ -424,7 +432,8 @@ namespace YARG.Audio.BASS
 
         public void SetReverbLevel(float wet)
         {
-            _reverb.SetWetMix(wet);
+            _reverb.SetParams(MONITOR_REVERB_DRY_MIX, wet, MONITOR_REVERB_ROOM_SIZE, MONITOR_REVERB_DAMP,
+                MONITOR_REVERB_WIDTH);
             lock (_streamLock)
             {
                 foreach (var pair in _recordingEffects)
@@ -435,6 +444,9 @@ namespace YARG.Audio.BASS
         }
 
         private static float GetReverbWet() => SettingsManager.Settings?.VocalReverb?.Value ?? 0.25f;
+
+        private static ReverbMode GetReverbMode() =>
+            SettingsManager.Settings?.ReverbImplementation?.Value ?? ReverbMode.Performance;
 
         private static bool AddMonitoringEffects(int handle)
         {
@@ -499,15 +511,17 @@ namespace YARG.Audio.BASS
         private readonly struct RecordingEffects
         {
             private readonly BassNoiseGateDsp? _noiseGate;
-            private readonly BassFreeverbDsp? _reverb;
+            private readonly IBassReverbDsp?    _reverb;
 
-            public RecordingEffects(BassNoiseGateDsp? noiseGate, BassFreeverbDsp? reverb)
+            public RecordingEffects(BassNoiseGateDsp? noiseGate, IBassReverbDsp? reverb)
             {
                 _noiseGate = noiseGate;
                 _reverb = reverb;
             }
 
-            public void SetReverbWet(float wet) => _reverb?.SetWetMix(wet);
+            public void SetReverbWet(float wet) =>
+                _reverb?.SetParams(MONITOR_REVERB_DRY_MIX, wet, MONITOR_REVERB_ROOM_SIZE, MONITOR_REVERB_DAMP,
+                    MONITOR_REVERB_WIDTH);
 
             public void Dispose()
             {
