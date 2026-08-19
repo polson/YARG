@@ -70,7 +70,8 @@ namespace YARG.Audio.BASS.Effects
                 return false;
             }
 
-            return YargAudioNative.TryInvoke(this, handle => Native.SetParams(handle, in parms));
+            var parameters = parms;
+            return YargAudioNative.TryInvoke(this, handle => Native.SetParams(handle, in parameters));
         }
 
         protected override void Destroy(IntPtr handle)

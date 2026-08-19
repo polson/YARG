@@ -30,7 +30,8 @@ namespace YARG.Audio.BASS.Native
                 return false;
             }
 
-            return YargAudioNative.TryInvoke(this, _ => NativeSetParams(parms));
+            var parameters = parms;
+            return YargAudioNative.TryInvoke(this, _ => NativeSetParams(parameters));
         }
     }
 }
