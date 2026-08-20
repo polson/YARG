@@ -19,7 +19,7 @@
 
 Import YARG.Core into YARG as a normal folder, then archive the YARG.Core repo.
 
-1. Import Core's files into `YARG/YARG.Core` as one commit — Core's history stays in the archived repo, browsable and cloneable
+1. Import Core's files into `YARG/YARG.Core` as one commit; Core's history stays in the archived repo, browsable and cloneable
 2. Point Unity at the new folder
 3. Delete the submodule hacks
 4. Update the docs
@@ -79,23 +79,22 @@ YARC-Official/YARG          <- main Unity project
 
 Archive it. GitHub's archive makes the repo read-only in one click: Settings > Danger Zone > Archive this repository. The repo stays fully browsable and cloneable, so:
 
-* Community tools that clone YARG.Core keep working — clones are read-only anyway.
-* Core's history stays accessible — the archived repo keeps every commit; nothing is deleted.
+* Community tools that clone YARG.Core keep working; clones are read-only anyway.
+* Core's history stays accessible; the archived repo keeps every commit and nothing is deleted.
 * Open Core PRs can no longer merge, so work moves to YARG.
 
-If a community tool needs a Core fix after the archive, the fix lands in YARG, and anyone can get it from the monorepo.
+If a community tool needs a Core fix after the archive, they can clone YARG.
 
-## Risk assessment
+### Risk assessment
 
 * **YARG history: zero risk.** Every step is a normal, append-only commit; the merge is a plain PR merge, and undoing it is a plain revert. Nothing force-pushes or rewrites history.
 * **YARG.Core repo: zero risk.** Archiving deletes nothing and is reversible with one click. History, issues, and clones keep working.
-* **No automation to break.** No CI workflow, no branch protection — there is nothing that can go stale or crash.
 
 ## Migration steps
 
 ### 1. Make the PR
 
-1. **Import Core's files into YARG.** This step turns the submodule link into a real folder — as a single import commit, not Core's full history (Core's history stays in the archived repo).
+1. **Import Core's files into YARG.** This step turns the submodule link into a real folder, as a single import commit..
 
    From the **YARG** repo:
    ```bash
@@ -110,10 +109,10 @@ If a community tool needs a Core fix after the archive, the fix lands in YARG, a
    git read-tree --prefix=YARG.Core/ yarg-core/master^{tree}
    git commit -m "Import YARG.Core into monorepo"
    ```
-   This adds Core's files as a single import commit — the ~2k core commits do not enter YARG's history:
-   * `git log` stays YARG's own history plus the import and merge commits — no core commits mixed in.
+   This adds Core's files as a single import commit; the ~2k core commits do not enter YARG's history:
+   * `git log` stays YARG's own history plus the import and merge commits, with no core commits mixed in.
    * The existing `Core pointer update...` commits stay in YARG's history.
-   * Core's history stays browsable and cloneable in the archived repo — nothing is lost.
+   * Core's history stays browsable and cloneable in the archived repo; nothing is lost.
 2. **Verify in Unity.** Open the project in Unity and check it compiles with no errors. In batch mode:
    ```bash
    Unity.exe -batchmode -nographics -quit \
@@ -144,11 +143,7 @@ Merge the PR with the normal GitHub merge button. It is a plain merge commit lik
 
 ### 3. Archive YARG.Core
 
-1. Before archiving: if Core's CI publishes NuGet/UPM packages from the old repo, move that job to YARG first (check `.github/workflows` in YARG.Core for release jobs).
-2. Archive: `YARC-Official/YARG.Core` > Settings > Danger Zone > Archive this repository.
-3. Verify: the repo shows the archived banner; `git clone` still works; the history is still browsable.
-
-Archiving makes the repo read-only: no pushes, no new PRs. Issues and clones keep working, and unarchiving is one click if it is ever needed.
+`YARC-Official/YARG.Core` > Settings > Danger Zone > Archive this repository
 
 ### 4. Update your clone (after merge)
 
@@ -206,10 +201,6 @@ git push
 The merge is a plain merge commit, so undo it like any other PR:
 
 1. **Revert post-merge commits first.** If anything landed on `dev` after the merge and touched `YARG.Core/`, revert those commits first (newest first). A revert of the merge deletes the whole `YARG.Core/` folder; if a later commit changed files in it, the deletion conflicts with those changes.
-2. **Revert the merge commit itself** — GitHub's Revert button on the merged PR, or:
-   ```bash
-   git revert -m 1 <merge commit>
-   ```
-   A merge commit has two parents, so git needs `-m` to know which side to keep: `-m 1` keeps parent 1 — `dev` as it was before the merge — and undoes everything the merge introduced. After this, `dev` is back to its pre-merge state and `YARG.Core` is a gitlink again.
+2. **Revert the merge commit itself** just use GitHub's Revert button on the merged PR.
 
 If the old repo is ever needed writable again, unarchive it (one click, Settings > Danger Zone > Unarchive this repository).
