@@ -516,7 +516,9 @@ namespace YARG.Gameplay.Visuals
             float horizontalOffsetNdc = 0f)
         {
             if (highwayCount < 1)
+            {
                 return Matrix4x4.identity;
+            }
 
             // Divide screen into N equal regions: [-1, 1] => 2.0 width
             float laneWidth = 2.0f / highwayCount; // NDC horizontal span is [-1, 1] → 2.0
