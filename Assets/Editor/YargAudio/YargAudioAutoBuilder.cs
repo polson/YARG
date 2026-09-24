@@ -269,6 +269,12 @@ namespace YARG.Editor.YargAudio
                 return true;
             }
 
+            var thirdPartyDir = Path.Combine(nativeDir, "third_party");
+            if (Directory.Exists(thirdPartyDir) && HasFilesNewerThan(thirdPartyDir, destinationWriteTime))
+            {
+                return true;
+            }
+
             var cmakeLists = Path.Combine(nativeDir, "CMakeLists.txt");
             if (File.Exists(cmakeLists) && File.GetLastWriteTimeUtc(cmakeLists) > destinationWriteTime)
             {

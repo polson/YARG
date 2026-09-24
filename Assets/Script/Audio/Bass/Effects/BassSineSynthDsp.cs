@@ -39,7 +39,8 @@ namespace YARG.Audio.BASS.Effects
         /// <param name="tempoStreamHandle">Channel whose decode position yields the song position.</param>
         /// <param name="volume">Tone volume relative to the mix.</param>
         /// <param name="fadeSeconds">Seconds for a full volume ramp, used to declick note edges.</param>
-        internal static BassSineSynthDsp? Create(int tempoStreamHandle, float volume, float fadeSeconds)
+        internal static BassSineSynthDsp? Create(int tempoStreamHandle, float volume, float fadeSeconds,
+            BassStretchStream? stretchStream = null)
         {
             if (tempoStreamHandle == 0 || !IsFinite(volume) || !IsFinite(fadeSeconds) ||
                 volume < 0 || fadeSeconds <= 0)
@@ -59,6 +60,7 @@ namespace YARG.Audio.BASS.Effects
                 // Broadcast to every channel until the song routing publishes the configured
                 // output channel; SetOutputChannel is called before the DSP is attached.
                 OutputChannel = 0,
+                StretchStream = stretchStream?.DangerousGetHandle() ?? IntPtr.Zero,
             };
 
             try
@@ -73,6 +75,7 @@ namespace YARG.Audio.BASS.Effects
                 }
 
                 int result = YargAudioBindings.SineSynthDspCreate(in config, out var dsp);
+                GC.KeepAlive(stretchStream);
                 if (result == 0 && dsp != null && !dsp.IsInvalid)
                 {
                     return dsp;
@@ -247,6 +250,7 @@ namespace YARG.Audio.BASS.Effects
             public float Volume;
             public float FadeSeconds;
             public uint  OutputChannel;
+            public IntPtr StretchStream;
         }
     }
 }

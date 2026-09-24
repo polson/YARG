@@ -5,6 +5,7 @@ using ManagedBass.Fx;
 using ManagedBass.Mix;
 using YARG.Core.Audio;
 using YARG.Core.Logging;
+using YARG.Settings;
 
 namespace YARG.Audio.BASS
 {
@@ -15,16 +16,26 @@ namespace YARG.Audio.BASS
     internal sealed class BassTempoStream : IDisposable
     {
         private bool _disposed;
+        private float _pitch = 1f;
 
-        private BassTempoStream(int handle)
+        private BassTempoStream(int handle, BassStretchStream? stretchStream = null)
         {
             Handle = handle;
+            StretchStream = stretchStream;
         }
 
         internal int Handle { get; }
+        internal BassStretchStream? StretchStream { get; }
+        internal double CommandDelay => StretchStream?.CommandDelay ?? 0;
 
-        internal static BassTempoStream Create(int inputHandle)
+        internal static BassTempoStream? Create(int inputHandle, TempoEngine engine)
         {
+            if (engine == TempoEngine.Signalsmith)
+            {
+                var stream = BassStretchStream.Create(inputHandle);
+                return stream == null ? null : new BassTempoStream(stream.StreamHandle, stream);
+            }
+
             int handle = BassX.Require(
                 BassFx.TempoCreate(inputHandle, BassFlags.Decode),
                 "create tempo stream");
@@ -33,6 +44,21 @@ namespace YARG.Audio.BASS
 
         internal void SetSpeed(float speed, bool shiftPitch)
         {
+            if (StretchStream != null)
+            {
+                if (!GlobalAudioHandler.IsChipmunkSpeedup)
+                {
+                    _pitch = 1f;
+                }
+                else if (shiftPitch)
+                {
+                    _pitch = Math.Clamp(speed, 1f / 32f, 32f);
+                }
+
+                StretchStream.SetSpeed(speed, _pitch);
+                return;
+            }
+
             float percentageSpeed = speed * 100;
             float relativeSpeed = percentageSpeed - 100;
 
@@ -47,12 +73,19 @@ namespace YARG.Audio.BASS
             }
         }
 
-        internal void ResetPosition() => BassX.Check(
-            Bass.ChannelSetPosition(Handle, 0),
-            "reset tempo stream position");
+        internal void ResetPosition()
+        {
+            BassX.Check(Bass.ChannelSetPosition(Handle, 0), "reset tempo stream position");
+            StretchStream?.Flush();
+        }
 
         internal void Prime()
         {
+            if (StretchStream != null)
+            {
+                return;
+            }
+
             float[] buffer = new float[4096];
             Bass.ChannelGetData(Handle, buffer, (buffer.Length * sizeof(float)) | (int) DataFlags.Float);
             ResetPosition();
@@ -64,6 +97,11 @@ namespace YARG.Audio.BASS
 
         internal bool TryGetPositionSeconds(long positionBytes, out double position)
         {
+            if (StretchStream != null)
+            {
+                return StretchStream.TryGetPositionSeconds(positionBytes, out position);
+            }
+
             position = Bass.ChannelBytes2Seconds(Handle, positionBytes);
             if (position >= 0)
             {
@@ -74,6 +112,16 @@ namespace YARG.Audio.BASS
             return false;
         }
 
+        internal bool TryGetIdealPositionSeconds(long positionBytes, out double position)
+        {
+            if (StretchStream != null)
+            {
+                return StretchStream.TryGetIdealPositionSeconds(positionBytes, out position);
+            }
+
+            return TryGetPositionSeconds(positionBytes, out position);
+        }
+
         public void Dispose()
         {
             if (_disposed)
@@ -82,6 +130,12 @@ namespace YARG.Audio.BASS
             }
 
             _disposed = true;
+            if (StretchStream != null)
+            {
+                StretchStream.Dispose();
+                return;
+            }
+
             BassX.Check(Bass.StreamFree(Handle), $"free tempo stream {Handle}");
         }
 
