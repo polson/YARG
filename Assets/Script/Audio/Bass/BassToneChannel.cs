@@ -24,9 +24,9 @@ namespace YARG.Audio.BASS
         internal event Action<BassToneChannel>? Disposed;
 
         internal static BassToneChannel? Create(int tempoStreamHandle, double volume,
-            double fadeDuration)
+            double fadeDuration, BassStretchStream? stretchStream = null)
         {
-            var dsp = BassSineSynthDsp.Create(tempoStreamHandle, (float) volume, (float) fadeDuration);
+            var dsp = BassSineSynthDsp.Create(tempoStreamHandle, (float) volume, (float) fadeDuration, stretchStream);
             return dsp == null ? null : new BassToneChannel(dsp);
         }
 

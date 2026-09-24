@@ -270,7 +270,12 @@ namespace YARG.Audio.BASS
 
         protected override double GetControlPosition_Internal() => GetSyncPosition_Internal().Control;
 
-        protected override double GetTempoStreamLatency_Internal() => _connection?.GetCommandDelay() ?? 0;
+        protected override double GetTempoStreamLatency_Internal() =>
+            GetTransportLatency_Internal() + GetTempoResponseLatency_Internal();
+
+        protected override double GetTempoResponseLatency_Internal() => _stemPipeline.CommandDelay;
+
+        protected override double GetTransportLatency_Internal() => _connection?.GetCommandDelay() ?? 0;
 
         protected override double GetVolume_Internal()
         {
@@ -499,7 +504,8 @@ namespace YARG.Audio.BASS
             // GetFFTData, which is read from the tempo stream upstream of this point and drives the
             // venue visuals. Song position comes from the tempo stream, so the offset below is the
             // same mapping ConvertTempoBytesToSongPosition applies on the game thread.
-            var channel = BassToneChannel.Create(_stemPipeline.OutputHandle, volume, fadeDuration);
+            var channel = BassToneChannel.Create(_stemPipeline.OutputHandle, volume, fadeDuration,
+                _stemPipeline.StretchStream);
             if (channel == null)
             {
                 return null;
@@ -624,7 +630,7 @@ namespace YARG.Audio.BASS
             }
 
             bool heardValid = TryConvertTempoBytesToSongPosition(snapshot.HeardPosition, out heardPosition);
-            bool decodeValid = TryConvertTempoBytesToSongPosition(snapshot.DecodePosition, out decodePosition);
+            bool decodeValid = TryConvertTempoBytesToIdealPosition(snapshot.DecodePosition, out decodePosition);
             if (heardValid)
             {
                 _lastSongPosition = heardPosition;
@@ -642,6 +648,13 @@ namespace YARG.Audio.BASS
         private bool TryConvertTempoBytesToSongPosition(long tempoBytes, out double position)
         {
             bool succeeded = _stemPipeline.TryGetPositionSeconds(tempoBytes, out double seconds);
+            position = succeeded ? seconds - TotalStreamDelay + _seekPosition : _lastSongPosition;
+            return succeeded;
+        }
+
+        private bool TryConvertTempoBytesToIdealPosition(long tempoBytes, out double position)
+        {
+            bool succeeded = _stemPipeline.TryGetIdealPositionSeconds(tempoBytes, out double seconds);
             position = succeeded ? seconds - TotalStreamDelay + _seekPosition : _lastSongPosition;
             return succeeded;
         }

@@ -289,6 +289,7 @@ namespace YARG.Settings
                 nameof(Settings.DataStreamEnable),
                 nameof(Settings.SaveScoresWithBots),
                 nameof(Settings.ReverbImplementation),
+                nameof(Settings.TempoImplementation),
                 new HeaderMetadata("Accessibility"),
                 nameof(Settings.FontScaling),
                 new HeaderMetadata("OutputConfiguration"),

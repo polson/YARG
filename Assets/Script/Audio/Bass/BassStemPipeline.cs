@@ -9,6 +9,7 @@ using YARG.Core.Audio;
 using YARG.Core.Logging;
 using YARG.Core.Song;
 using YARG.Helpers;
+using YARG.Settings;
 
 namespace YARG.Audio.BASS
 {
@@ -54,6 +55,8 @@ namespace YARG.Audio.BASS
         }
 
         public int OutputHandle => _tempoStream.Handle;
+        internal BassStretchStream? StretchStream => _tempoStream.StretchStream;
+        internal double CommandDelay => _tempoStream.CommandDelay;
 
         public static BassStemPipeline? Create(int sampleRate, int channelCount, BassFlags flags,
             bool withCompressor = true, bool withNormalization = false, int processingThreads = 0)
@@ -71,10 +74,16 @@ namespace YARG.Audio.BASS
                 return null;
             }
 
-            BassTempoStream tempoStream;
+            BassTempoStream? tempoStream;
             try
             {
-                tempoStream = BassTempoStream.Create(mixer.Handle);
+                tempoStream = BassTempoStream.Create(mixer.Handle, SettingsManager.Settings.TempoImplementation.Value);
+                if (tempoStream == null)
+                {
+                    mixer.Dispose();
+                    return null;
+                }
+
                 tempoStream.Prime();
             }
             catch (BassX.BassOperationException exception)
@@ -205,6 +214,9 @@ namespace YARG.Audio.BASS
 
         public bool TryGetPositionSeconds(long positionBytes, out double seconds) =>
             _tempoStream.TryGetPositionSeconds(positionBytes, out seconds);
+
+        public bool TryGetIdealPositionSeconds(long positionBytes, out double seconds) =>
+            _tempoStream.TryGetIdealPositionSeconds(positionBytes, out seconds);
 
         public void SetDevice(int deviceId)
         {

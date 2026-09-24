@@ -17,6 +17,14 @@ namespace YARG.Audio.BASS.Native
         private static IntPtr _libraryHandle = IntPtr.Zero;
         private static string? _loadedPath;
 
+        private static StretchStreamCreateDelegate? _stretchStreamCreate;
+        private static StretchStreamSetSpeedDelegate? _stretchStreamSetSpeed;
+        private static StretchStreamFlushDelegate? _stretchStreamFlush;
+        private static StretchStreamGetLatencyDelegate? _stretchStreamGetLatency;
+        private static StretchStreamGetPositionDelegate? _stretchStreamGetPosition;
+        private static StretchStreamGetIdealPositionDelegate? _stretchStreamGetIdealPosition;
+        private static StretchStreamDestroyDelegate? _stretchStreamDestroy;
+
         private static GetAbiVersionDelegate? _getAbiVersion;
         private static GainDspAttachDelegate? _gainDspAttach;
         private static GainDspSetGainDelegate? _gainDspSetGain;
@@ -89,6 +97,27 @@ namespace YARG.Audio.BASS.Native
             BindAll(handle);
             return true;
         }
+
+        internal static int StretchStreamCreate(uint source, out BassStretchStream stream, out uint streamHandle, out int bassError) =>
+            EnsureBound(ref _stretchStreamCreate, "yarg_stretch_stream_create")(source, out stream, out streamHandle, out bassError);
+
+        internal static int StretchStreamSetSpeed(BassStretchStream stream, float speed, float pitch) =>
+            EnsureBound(ref _stretchStreamSetSpeed, "yarg_stretch_stream_set_speed")(stream, speed, pitch);
+
+        internal static int StretchStreamFlush(BassStretchStream stream) =>
+            EnsureBound(ref _stretchStreamFlush, "yarg_stretch_stream_flush")(stream);
+
+        internal static int StretchStreamGetLatency(BassStretchStream stream, out double seconds) =>
+            EnsureBound(ref _stretchStreamGetLatency, "yarg_stretch_stream_get_latency")(stream, out seconds);
+
+        internal static int StretchStreamGetPosition(BassStretchStream stream, long bytes, out double seconds) =>
+            EnsureBound(ref _stretchStreamGetPosition, "yarg_stretch_stream_get_position")(stream, bytes, out seconds);
+
+        internal static int StretchStreamGetIdealPosition(BassStretchStream stream, long bytes, out double seconds) =>
+            EnsureBound(ref _stretchStreamGetIdealPosition, "yarg_stretch_stream_get_ideal_position")(stream, bytes, out seconds);
+
+        internal static int StretchStreamDestroy(IntPtr stream) =>
+            EnsureBound(ref _stretchStreamDestroy, "yarg_stretch_stream_destroy")(stream);
 
         internal static uint GetAbiVersion() =>
             EnsureBound(ref _getAbiVersion, "yarg_audio_get_abi_version")();
@@ -232,6 +261,13 @@ namespace YARG.Audio.BASS.Native
 
         private static void BindAll(IntPtr handle)
         {
+            _stretchStreamCreate = GetFunction<StretchStreamCreateDelegate>(handle, "yarg_stretch_stream_create");
+            _stretchStreamSetSpeed = GetFunction<StretchStreamSetSpeedDelegate>(handle, "yarg_stretch_stream_set_speed");
+            _stretchStreamFlush = GetFunction<StretchStreamFlushDelegate>(handle, "yarg_stretch_stream_flush");
+            _stretchStreamGetLatency = GetFunction<StretchStreamGetLatencyDelegate>(handle, "yarg_stretch_stream_get_latency");
+            _stretchStreamGetPosition = GetFunction<StretchStreamGetPositionDelegate>(handle, "yarg_stretch_stream_get_position");
+            _stretchStreamGetIdealPosition = GetFunction<StretchStreamGetIdealPositionDelegate>(handle, "yarg_stretch_stream_get_ideal_position");
+            _stretchStreamDestroy = GetFunction<StretchStreamDestroyDelegate>(handle, "yarg_stretch_stream_destroy");
             _getAbiVersion = GetFunction<GetAbiVersionDelegate>(handle, "yarg_audio_get_abi_version");
             _gainDspAttach = GetFunction<GainDspAttachDelegate>(handle, "yarg_gain_dsp_attach");
             _gainDspSetGain = GetFunction<GainDspSetGainDelegate>(handle, "yarg_gain_dsp_set_gain");
@@ -366,6 +402,27 @@ namespace YARG.Audio.BASS.Native
             return IntPtr.Zero;
 #endif
         }
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int StretchStreamCreateDelegate(uint source, out BassStretchStream stream, out uint streamHandle, out int bassError);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int StretchStreamSetSpeedDelegate(BassStretchStream stream, float speed, float pitch);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int StretchStreamFlushDelegate(BassStretchStream stream);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int StretchStreamGetLatencyDelegate(BassStretchStream stream, out double seconds);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int StretchStreamGetPositionDelegate(BassStretchStream stream, long bytes, out double seconds);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int StretchStreamGetIdealPositionDelegate(BassStretchStream stream, long bytes, out double seconds);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int StretchStreamDestroyDelegate(IntPtr stream);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate uint GetAbiVersionDelegate();
