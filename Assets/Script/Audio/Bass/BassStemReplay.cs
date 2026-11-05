@@ -118,7 +118,7 @@ namespace YARG.Audio.BASS
 
                     foreach (var soundboard in soundboards)
                     {
-                        soundboard.PublishSeeds();
+                        soundboard.PublishSeeds(token);
                     }
                 }
                 catch (Exception ex)

@@ -1104,7 +1104,7 @@ namespace YARG.Gameplay.Player
 
         protected virtual void SpawnLanesFromNote(TNote parentNote)
         {
-            if (!Engine.BaseParameters.EnableLanes)
+            if (!Engine.BaseParameters.EnableLanes || IsAutoPlayed(parentNote))
             {
                 return;
             }
@@ -1115,9 +1115,10 @@ namespace YARG.Gameplay.Player
             }
 
             bool containsLaneStart = false;
+            bool followsAutoPlayed = parentNote.PreviousNote != null && IsAutoPlayed(parentNote.PreviousNote);
             foreach (var childNote in parentNote.AllNotes)
             {
-                if (childNote.IsLaneStart)
+                if (childNote.IsLaneStart || (followsAutoPlayed && childNote.IsLane))
                 {
                     containsLaneStart = true;
                     break;
@@ -1133,7 +1134,7 @@ namespace YARG.Gameplay.Player
                 var noteRef = parentNote;
                 var thisLaneFlag = parentNote.IsTrill ? NoteFlags.Trill : NoteFlags.Tremolo;
 
-                while (noteRef != null)
+                while (noteRef != null && !IsAutoPlayed(noteRef))
                 {
                     // Create one lane for single notes, create multiple lanes for non-drum chords
                     bool containsLaneEnd = false;
@@ -1183,13 +1184,29 @@ namespace YARG.Gameplay.Player
                         {
                             if (startTime - existingLane.EndTime <= LaneElement.COMBINE_LANE_THRESHOLD)
                             {
+                                bool crossesAutoPlayed = false;
+                                var previousNote = firstLaneNote.ParentOrSelf.PreviousNote;
+                                while (previousNote != null && previousNote.Time >= existingLane.EndTime)
+                                {
+                                    if (IsAutoPlayed(previousNote))
+                                    {
+                                        crossesAutoPlayed = true;
+                                        break;
+                                    }
+                                    previousNote = previousNote.PreviousNote;
+                                }
+                                if (crossesAutoPlayed)
+                                {
+                                    continue;
+                                }
+
                                 // New lane will overlap with existing one
                                 // Determine if the previous notes in this chart should prevent combining
                                 int notesToSearch = firstLaneNote.IsTrill ? 2 : 1;
                                 noteRef = firstLaneNote.PreviousNote;
                                 for (int n = 0; n < notesToSearch; n++)
                                 {
-                                    if (noteRef == null)
+                                    if (noteRef == null || IsAutoPlayed(noteRef))
                                     {
                                         break;
                                     }

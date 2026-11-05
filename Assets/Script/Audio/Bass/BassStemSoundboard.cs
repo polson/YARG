@@ -2,9 +2,9 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading;
 using ManagedBass;
 using ManagedBass.Fx;
-using YARG.Audio.PitchDetection;
 using YARG.Core.Audio;
 using YARG.Core.Engine.Guitar;
 using YARG.Core.Logging;
@@ -39,14 +39,12 @@ namespace YARG.Audio.BASS
             public readonly double         StartTime;
             public readonly double         EndTime;
             public readonly List<SeedNote> Notes;
-            public readonly int            FretCount;
 
-            public SeedSet(double startTime, double endTime, List<SeedNote> notes, int fretCount)
+            public SeedSet(double startTime, double endTime, List<SeedNote> notes)
             {
                 StartTime = startTime;
                 EndTime = endTime;
                 Notes = notes;
-                FretCount = fretCount;
             }
         }
 
@@ -59,10 +57,9 @@ namespace YARG.Audio.BASS
         private const double FREESTYLE_TRANSITION_INTERVAL_RATIO = 0.25;
         private const double LOOP_FADE_SECONDS = 0.02;
         private const double FALLBACK_LOOP_SECONDS = 0.15;
+        private const double SUSTAIN_LOOP_SECONDS = 0.4;
         private const double LOOP_BUFFER_SECONDS = 0.25;
-        private const double PITCH_ANALYSIS_SECONDS = 0.3;
-        private const double PITCH_BLOCK_SECONDS = 0.02;
-        private const int    VOICE_COUNT      = 4;
+        private const int    VOICE_COUNT      = 12;
         private const int    FLOAT_BYTES      = sizeof(float);
 
         private sealed class Clip
@@ -76,7 +73,6 @@ namespace YARG.Audio.BASS
             public float[] LoopTail = Array.Empty<float>();
             public int     LoopStartFrame;
             public int     LoopEndFrame;
-            public float   Pitch;
         }
 
         private readonly struct SeedClip
@@ -97,15 +93,13 @@ namespace YARG.Audio.BASS
         {
             public readonly double         StartTime;
             public readonly double         EndTime;
-            public readonly int            FretCount;
             public readonly Dictionary<int, List<SeedClip>> Clips = new();
-            public readonly List<Clip> SelectedClips = new();
+            public readonly Dictionary<int, Clip> SelectedClips = new();
 
-            public SeedClips(double startTime, double endTime, int fretCount)
+            public SeedClips(double startTime, double endTime)
             {
                 StartTime = startTime;
                 EndTime = endTime;
-                FretCount = fretCount;
             }
         }
 
@@ -134,6 +128,7 @@ namespace YARG.Audio.BASS
         private          List<SeedClips>            _seeds         = new();
         private          SeedClips?                 _activeSeeds;
         private          bool                       _useSoloSeeds;
+        private          double                     _requestedSoloTime;
         private readonly int                        _maxClipFrames;
         private readonly int                        _fadeFrames;
         private readonly int                        _attackFrames;
@@ -226,16 +221,19 @@ namespace YARG.Audio.BASS
             {
                 _activeSeeds = null;
                 _useSoloSeeds = !double.IsNaN(soloTime);
+                if (_useSoloSeeds)
+                {
+                    _requestedSoloTime = soloTime;
+                }
                 foreach (var seeds in _seeds)
                 {
                     if (soloTime >= seeds.StartTime && soloTime <= seeds.EndTime)
                     {
                         seeds.SelectedClips.Clear();
-                        foreach (var clips in seeds.Clips.Values)
+                        foreach (var clips in seeds.Clips)
                         {
-                            seeds.SelectedClips.Add(GetSeedClip(clips, songTime));
+                            seeds.SelectedClips.Add(clips.Key, GetSeedClip(clips.Value, songTime));
                         }
-                        seeds.SelectedClips.Sort((left, right) => left.Pitch.CompareTo(right.Pitch));
                         _activeSeeds = seeds;
                         break;
                     }
@@ -248,7 +246,7 @@ namespace YARG.Audio.BASS
             _pendingSeeds = new List<SeedClips>();
             foreach (var seedSet in _seedRequests)
             {
-                var seeds = new SeedClips(seedSet.StartTime, seedSet.EndTime, seedSet.FretCount);
+                var seeds = new SeedClips(seedSet.StartTime, seedSet.EndTime);
                 foreach (var note in seedSet.Notes)
                 {
                     long startFrame = (long) Math.Round(note.AudioSeconds * _replay.Frequency);
@@ -279,34 +277,76 @@ namespace YARG.Audio.BASS
                 {
                     clips.Sort((left, right) => left.SongTime.CompareTo(right.SongTime));
                 }
-                seeds.SelectedClips.Capacity = seeds.Clips.Count;
                 _pendingSeeds.Add(seeds);
             }
 
             _seedRequests = new List<SeedSet>();
         }
 
-        internal void PublishSeeds()
+        internal void PublishSeeds(CancellationToken token)
         {
-            foreach (var seeds in _pendingSeeds)
+            lock (_replay.Lock)
             {
+                _seeds = new List<SeedClips>();
+                _activeSeeds = null;
+            }
+
+            while (_pendingSeeds.Count > 0)
+            {
+                SeedClips seeds;
+                lock (_replay.Lock)
+                {
+                    int next = 0;
+                    for (int index = 0; index < _pendingSeeds.Count; index++)
+                    {
+                        var pending = _pendingSeeds[index];
+                        if (_requestedSoloTime >= pending.StartTime && _requestedSoloTime <= pending.EndTime)
+                        {
+                            next = index;
+                            break;
+                        }
+                    }
+                    seeds = _pendingSeeds[next];
+                    _pendingSeeds.RemoveAt(next);
+                }
+
                 foreach (var clips in seeds.Clips.Values)
                 {
                     foreach (var seed in clips)
                     {
+                        if (token.IsCancellationRequested)
+                        {
+                            return;
+                        }
+
                         seed.Clip.FilledFrames = seed.Clip.FrameCount;
-                        PrepareLoop(seed.Clip, seed.SustainStartFrame);
-                        seed.Clip.Pitch = EstimatePitch(seed.Clip, seed.SustainStartFrame);
+                        bool cleanLoop = PrepareLoop(seed.Clip, seed.SustainStartFrame);
+                        if (!cleanLoop && BassSustainStretch.TryRender(seed.Clip.Samples, frequency: _replay.Frequency,
+                            channels: _replay.ChannelCount, out var samples, out int bodyStartFrame))
+                        {
+                            seed.Clip.Samples = samples;
+                            seed.Clip.FrameCount = samples.Length / _replay.ChannelCount;
+                            seed.Clip.FilledFrames = seed.Clip.FrameCount;
+                            int fadeFrames = Math.Min(_loopFadeFrames, (seed.Clip.FrameCount - bodyStartFrame) / 4);
+                            int firstFrame = Math.Max(bodyStartFrame,
+                                seed.Clip.FrameCount - (int) Math.Round(SUSTAIN_LOOP_SECONDS * _replay.Frequency));
+                            int loopStart = BassSustainStretch.FindLoopStart(samples, frequency: _replay.Frequency,
+                                channels: _replay.ChannelCount, firstFrame: firstFrame,
+                                tailFrame: seed.Clip.FrameCount - fadeFrames, fadeFrames: fadeFrames);
+                            SetLoop(seed.Clip, bodyStart: loopStart, loopEnd: seed.Clip.FrameCount, fadeFrames: fadeFrames);
+                        }
                         ApplyStartFade(seed.Clip);
                     }
                 }
-            }
 
-            lock (_replay.Lock)
-            {
-                _seeds = _pendingSeeds;
-                _pendingSeeds = new List<SeedClips>();
-                _activeSeeds = null;
+                lock (_replay.Lock)
+                {
+                    if (token.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    _seeds.Add(seeds);
+                }
             }
         }
 
@@ -326,37 +366,87 @@ namespace YARG.Audio.BASS
 
                 if (_useSoloSeeds)
                 {
-                    long now = Stopwatch.GetTimestamp();
-                    double interval = (now - _lastFreestyleStrum) / (double) Stopwatch.Frequency;
-                    double transition = interval * FREESTYLE_TRANSITION_INTERVAL_RATIO;
-                    transition = Math.Clamp(transition, FREESTYLE_MIN_TRANSITION_SECONDS, FREESTYLE_MAX_TRANSITION_SECONDS);
-                    _lastFreestyleStrum = now;
-                    foreach (var previous in _voices)
+                    BeginFreestyleNote();
+                }
+
+                StartVoice(clip, key: key, semitones: semitones, gain: gain);
+                return true;
+            }
+        }
+
+        public bool PlayStrum(int fretMask, int semitones, double gain)
+        {
+            lock (_replay.Lock)
+            {
+                if (_disposed)
+                {
+                    return false;
+                }
+                if (!TryGetClip(fretMask, out _) && !TryGetFallbackClip(fretMask, out _))
+                {
+                    return false;
+                }
+
+                BeginFreestyleNote();
+                int fretCount = 0;
+                for (int fret = 1; fret < GuitarEngine.OPEN_MASK; fret <<= 1)
+                {
+                    if ((fretMask & fret) != 0)
                     {
-                        if (previous.Key != 0 || Bass.ChannelIsSliding(previous.Stream.Handle, ChannelAttribute.Volume))
-                        {
-                            FadeOut(previous, fadeSeconds: transition);
-                        }
+                        fretCount++;
                     }
                 }
 
-                var voice = PickVoice(key);
-                voice.Stream.Clear();
-
-                voice.Stream.SetVolume(_volume() * gain);
-                voice.Clip = clip;
-                voice.Generation = clip.Generation;
-                voice.PushedFrames = 0;
-                voice.Key = key;
-                bool hasLoop = clip.LoopEndFrame > clip.LoopStartFrame;
-                voice.IsLooping = _activeSeeds != null && hasLoop && (key & _heldFrets) == key;
-                voice.IsSustain = clip.IsSustain || voice.IsLooping;
-                voice.Pitch = (float) Math.Pow(2, semitones / 12.0);
-                SetPitch(voice);
-                voice.StartOrder = ++_playCount;
-                Feed(voice);
-                return true;
+                double fretGain = gain / Math.Sqrt(fretCount);
+                bool played = false;
+                for (int fret = 1; fret < GuitarEngine.OPEN_MASK; fret <<= 1)
+                {
+                    if ((fretMask & fret) == 0)
+                    {
+                        continue;
+                    }
+                    if (TryGetClip(fret, out var clip) || TryGetFallbackClip(fret, out clip))
+                    {
+                        StartVoice(clip, key: fret, semitones: semitones, gain: fretGain);
+                        played = true;
+                    }
+                }
+                return played;
             }
+        }
+
+        private void BeginFreestyleNote()
+        {
+            long now = Stopwatch.GetTimestamp();
+            double interval = (now - _lastFreestyleStrum) / (double) Stopwatch.Frequency;
+            double transition = interval * FREESTYLE_TRANSITION_INTERVAL_RATIO;
+            transition = Math.Clamp(transition, FREESTYLE_MIN_TRANSITION_SECONDS, FREESTYLE_MAX_TRANSITION_SECONDS);
+            _lastFreestyleStrum = now;
+            foreach (var previous in _voices)
+            {
+                if (previous.Key != 0 || Bass.ChannelIsSliding(previous.Stream.Handle, ChannelAttribute.Volume))
+                {
+                    FadeOut(previous, fadeSeconds: transition);
+                }
+            }
+        }
+
+        private void StartVoice(Clip clip, int key, int semitones, double gain)
+        {
+            var voice = PickVoice(key);
+            voice.Stream.Clear();
+            voice.Stream.SetVolume(_volume() * gain);
+            voice.Clip = clip;
+            voice.Generation = clip.Generation;
+            voice.PushedFrames = 0;
+            voice.Key = key;
+            bool hasLoop = clip.LoopEndFrame > clip.LoopStartFrame;
+            voice.IsLooping = _activeSeeds != null && hasLoop && (key & _heldFrets) == key;
+            voice.IsSustain = clip.IsSustain || voice.IsLooping;
+            voice.Pitch = (float) Math.Pow(2, semitones / 12.0);
+            SetPitch(voice);
+            voice.StartOrder = ++_playCount;
+            Feed(voice);
         }
 
         public void Release(int fretMask)
@@ -526,20 +616,38 @@ namespace YARG.Audio.BASS
                 }
 
                 var clips = _activeSeeds.SelectedClips;
-                if (key == GuitarEngine.OPEN_MASK)
+                if (key != GuitarEngine.OPEN_MASK)
                 {
-                    clip = clips[_random.Next(clips.Count)];
+                    return clips.TryGetValue(key, out clip!);
+                }
+
+                int availableFrets = 0;
+                for (int fretMask = 1; fretMask < GuitarEngine.OPEN_MASK; fretMask <<= 1)
+                {
+                    if (clips.TryGetValue(fretMask, out var fretClip))
+                    {
+                        availableFrets++;
+                        if (_random.Next(availableFrets) == 0)
+                        {
+                            clip = fretClip;
+                        }
+                    }
+                }
+                if (availableFrets > 0)
+                {
                     return true;
                 }
 
-                int fret = 0;
-                for (int mask = key; mask > 1; mask >>= 1)
+                int choice = _random.Next(clips.Count);
+                foreach (var candidate in clips.Values)
                 {
-                    fret++;
+                    if (choice == 0)
+                    {
+                        clip = candidate;
+                        break;
+                    }
+                    choice--;
                 }
-
-                int index = fret * (clips.Count - 1) / (_activeSeeds.FretCount - 1);
-                clip = clips[index];
                 return true;
             }
 
@@ -549,7 +657,7 @@ namespace YARG.Audio.BASS
         private bool TryGetFallbackClip(int key, out Clip clip)
         {
             clip = null!;
-            if (_useSoloSeeds || (key & (key - 1)) == 0)
+            if (!_useSoloSeeds && (key & (key - 1)) == 0)
             {
                 return false;
             }
@@ -560,6 +668,19 @@ namespace YARG.Audio.BASS
                 {
                     return true;
                 }
+            }
+
+            if (_useSoloSeeds)
+            {
+                if (_activeSeeds != null)
+                {
+                    foreach (var candidate in _activeSeeds.SelectedClips.Values)
+                    {
+                        clip = candidate;
+                        return true;
+                    }
+                }
+                return false;
             }
 
             foreach (var recorded in _clips.Values)
@@ -585,71 +706,6 @@ namespace YARG.Audio.BASS
             }
 
             return seeds[seeds.Count - 1].Clip;
-        }
-
-        private float EstimatePitch(Clip clip, int sustainStartFrame)
-        {
-            int channels = _replay.ChannelCount;
-            int frequency = _replay.Frequency;
-            int analysisFrames = (int) Math.Round(PITCH_ANALYSIS_SECONDS * frequency);
-            int firstFrame = Math.Max(sustainStartFrame, clip.LoopEndFrame - analysisFrames);
-            int frameCount = clip.LoopEndFrame - firstFrame;
-            int loudestChannel = 0;
-            double highestEnergy = 0;
-            for (int channel = 0; channel < channels; channel++)
-            {
-                double energy = 0;
-                for (int frame = firstFrame; frame < clip.LoopEndFrame; frame++)
-                {
-                    double sample = clip.Samples[frame * channels + channel];
-                    energy += sample * sample;
-                }
-                if (energy > highestEnergy)
-                {
-                    highestEnergy = energy;
-                    loudestChannel = channel;
-                }
-            }
-
-            var samples = new float[frameCount];
-            double sum = 0;
-            for (int frame = 0; frame < frameCount; frame++)
-            {
-                float sample = clip.Samples[(firstFrame + frame) * channels + loudestChannel];
-                samples[frame] = sample;
-                sum += sample;
-            }
-
-            var tracker = new PitchTracker(frequency);
-            tracker.Reset();
-            var pitches = new List<float>();
-            int blockFrames = (int) Math.Round(PITCH_BLOCK_SECONDS * frequency);
-            for (int frame = 0; frame < frameCount; frame += blockFrames)
-            {
-                int frames = Math.Min(blockFrames, frameCount - frame);
-                var pitch = tracker.ProcessBuffer(samples.AsSpan(frame, frames));
-                if (pitch.HasValue)
-                {
-                    pitches.Add(pitch.Value);
-                }
-            }
-
-            if (pitches.Count > 0)
-            {
-                pitches.Sort();
-                return pitches[pitches.Count / 2];
-            }
-
-            double mean = sum / frameCount;
-            int crossings = 0;
-            for (int frame = 1; frame < frameCount; frame++)
-            {
-                if (samples[frame - 1] <= mean && samples[frame] > mean)
-                {
-                    crossings++;
-                }
-            }
-            return (float) crossings * frequency / frameCount;
         }
 
         private Voice PickVoice(int key)
@@ -740,23 +796,32 @@ namespace YARG.Audio.BASS
             }
         }
 
-        private void PrepareLoop(Clip clip, int sustainStartFrame)
+        private bool PrepareLoop(Clip clip, int sustainStartFrame)
         {
             int channels = _replay.ChannelCount;
-            int fadeFrames = Math.Min(_loopFadeFrames, clip.FrameCount / 4);
-            if (!BassSustainLoop.TryFind(clip.Samples, frequency: _replay.Frequency, channels: channels,
-                firstFrame: sustainStartFrame, fadeFrames: fadeFrames, out int bodyStart, out int loopEnd))
+            int fadeFrames = Math.Min(_loopFadeFrames, (clip.FrameCount - sustainStartFrame) / 4);
+            bool cleanLoop = BassSustainLoop.TryFind(clip.Samples, frequency: _replay.Frequency, channels: channels,
+                firstFrame: sustainStartFrame, fadeFrames: fadeFrames, out int bodyStart, out int loopEnd);
+            if (!cleanLoop)
             {
                 YargLogger.LogFormatInfo("[LoopDebug] fallback: clip {0} ms, sustain start {1} ms, fill {2} ms",
                     clip.FrameCount * 1000.0 / _replay.Frequency, sustainStartFrame * 1000.0 / _replay.Frequency,
                     clip.FilledFrames * 1000.0 / _replay.Frequency);
-                int tailFrames = (int) Math.Round(FALLBACK_LOOP_SECONDS * _replay.Frequency);
-                bodyStart = Math.Max(sustainStartFrame, clip.FrameCount / 2);
+                double loopSeconds = sustainStartFrame > 0 ? SUSTAIN_LOOP_SECONDS : FALLBACK_LOOP_SECONDS;
+                int tailFrames = (int) Math.Round(loopSeconds * _replay.Frequency);
+                bodyStart = sustainStartFrame > 0 ? sustainStartFrame : clip.FrameCount / 2;
                 bodyStart = Math.Max(bodyStart, clip.FrameCount - tailFrames);
                 bodyStart = Math.Min(bodyStart, clip.FrameCount - fadeFrames * 2);
                 loopEnd = clip.FrameCount;
             }
 
+            SetLoop(clip, bodyStart: bodyStart, loopEnd: loopEnd, fadeFrames: fadeFrames);
+            return cleanLoop;
+        }
+
+        private void SetLoop(Clip clip, int bodyStart, int loopEnd, int fadeFrames)
+        {
+            int channels = _replay.ChannelCount;
             clip.LoopStartFrame = bodyStart + fadeFrames;
             clip.LoopEndFrame = loopEnd;
             clip.LoopTail = new float[fadeFrames * channels];

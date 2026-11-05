@@ -852,8 +852,7 @@ namespace YARG.Gameplay.Player
                 seedNotes.Add(CreateSeedNote(notes[index]));
             }
 
-            int fretCount = GetFretActionMax() - GuitarAction.GreenFret + 1;
-            return new BassStemSoundboard.SeedSet(notes[soloStart].Time, notes[soloEnd].Time, seedNotes, fretCount);
+            return new BassStemSoundboard.SeedSet(notes[soloStart].Time, notes[soloEnd].Time, seedNotes);
         }
 
         private BassStemSoundboard.SeedNote CreateSeedNote(GuitarNote note)
@@ -982,18 +981,24 @@ namespace YARG.Gameplay.Player
             if ((strummed || hammerOn) && _soundboard != null)
             {
                 _soundboard.SelectSeedSet(GetFreestyleSoloTime(), Engine.CurrentTime);
-                if (PlayHeldClips(playMask, 0))
+                if (strummed && playMask != 0)
                 {
-                    _freestylePhraseMask = playMask == 0 ? GuitarEngine.OPEN_MASK : playMask;
-                    _freestyleLastHeldTime = currentTime;
-                    if (hammerOn && !strummed)
-                    {
-                        _freestyleHopoLeniency.Start(currentTime);
-                    }
-                    else
-                    {
-                        _freestyleHopoLeniency.Reset();
-                    }
+                    _soundboard.PlayStrum(playMask, semitones: 0, gain: 1);
+                }
+                else
+                {
+                    int tapMask = playMask == 0 ? 0 : 1 << GetHighestFret(playMask);
+                    PlayHeldClips(tapMask, 0);
+                }
+                _freestylePhraseMask = playMask == 0 ? GuitarEngine.OPEN_MASK : playMask;
+                _freestyleLastHeldTime = currentTime;
+                if (hammerOn && !strummed)
+                {
+                    _freestyleHopoLeniency.Start(currentTime);
+                }
+                else
+                {
+                    _freestyleHopoLeniency.Reset();
                 }
             }
         }
