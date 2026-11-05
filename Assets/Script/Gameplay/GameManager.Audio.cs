@@ -232,6 +232,19 @@ namespace YARG.Gameplay
             }
         }
 
+        private void StartStemPrerenders()
+        {
+            if (_mixer == null)
+            {
+                return;
+            }
+
+            foreach (var channel in _mixer.Channels)
+            {
+                (channel as BassStemChannel)?.StartPrerender();
+            }
+        }
+
         public BassStemSoundboard CreateStemSoundboard(SongStem stem)
         {
             if (stem == _backgroundStem)

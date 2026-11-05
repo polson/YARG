@@ -1233,6 +1233,10 @@
                 "Name": "Realistic Miss SFX",
                 "Description": "If enabled, strumming the wrong fret will play the wrong note."
             },
+            "FreestyleSolos": {
+                "Name": "Freestyle Solos",
+                "Description": "If enabled, guitar solo notes are hidden and you can strum any frets to play your own solo. Solo notes are scored as if hit perfectly."
+            },
             "AlwaysOnDrumSFX": {
                 "Name": "Always-On Drum SFX",
                 "Description": "Enables Drum SFX at all times."

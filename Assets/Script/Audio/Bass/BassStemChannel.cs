@@ -84,6 +84,16 @@ namespace YARG.Audio.BASS
             return _replay?.CreateSoundboard(stemVolume);
         }
 
+        internal void SetPrerenderSource(byte[] bytes, int[] indices)
+        {
+            _replay?.SetPrerenderSource(bytes, indices);
+        }
+
+        public void StartPrerender()
+        {
+            _replay?.StartPrerender();
+        }
+
         private void FadeOutStreams()
         {
             if (!Bass.ChannelSlideAttribute(_streamHandles.Stream, ChannelAttribute.Volume, 0f, WRONG_NOTE_FADE_MILLISECONDS))

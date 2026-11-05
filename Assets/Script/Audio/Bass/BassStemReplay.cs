@@ -2,6 +2,8 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using ManagedBass;
 using ManagedBass.Fx;
 using YARG.Core.Audio;
@@ -14,6 +16,7 @@ namespace YARG.Audio.BASS
         private const double RECENT_SECONDS       = 3.0;
         private const int    CAPTURE_DSP_PRIORITY = 1;
         private const int    FLOAT_BYTES          = sizeof(float);
+        private const int    PRERENDER_SHUTDOWN_TIMEOUT_MS = 1000;
 
         private readonly int                        _stream;
         private readonly int                        _captureDsp;
@@ -26,6 +29,10 @@ namespace YARG.Audio.BASS
         private readonly List<BassStemSoundboard>   _soundboards = new();
         private          long                       _capturedFrames;
         private          double                     _originSeconds;
+        private          byte[]?                    _prerenderBytes;
+        private          int[]                      _prerenderIndices = Array.Empty<int>();
+        private          CancellationTokenSource?   _prerenderCts;
+        private          Task                       _prerenderTask = Task.CompletedTask;
 
         internal object Lock { get; } = new();
         internal int Frequency { get; }
@@ -62,6 +69,65 @@ namespace YARG.Audio.BASS
             return soundboard;
         }
 
+        public void SetPrerenderSource(byte[] bytes, int[] indices)
+        {
+            _prerenderBytes = bytes;
+            _prerenderIndices = indices;
+        }
+
+        public void StartPrerender()
+        {
+            var bytes = _prerenderBytes;
+            _prerenderBytes = null;
+            if (bytes == null || _prerenderCts != null)
+            {
+                return;
+            }
+
+            var jobs = new List<BassStemPrerender.Job>();
+            var soundboards = new List<BassStemSoundboard>();
+            lock (Lock)
+            {
+                foreach (var soundboard in _soundboards)
+                {
+                    int jobCount = jobs.Count;
+                    soundboard.PrepareSeedJobs(jobs);
+                    if (jobs.Count > jobCount)
+                    {
+                        soundboards.Add(soundboard);
+                    }
+                }
+            }
+
+            if (jobs.Count == 0)
+            {
+                return;
+            }
+
+            var indices = _prerenderIndices;
+            _prerenderCts = new CancellationTokenSource();
+            var token = _prerenderCts.Token;
+            _prerenderTask = Task.Factory.StartNew(() =>
+            {
+                try
+                {
+                    if (!BassStemPrerender.Decode(bytes, indices, Frequency, ChannelCount, jobs, token))
+                    {
+                        return;
+                    }
+
+                    foreach (var soundboard in soundboards)
+                    {
+                        soundboard.PublishSeeds();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    YargLogger.LogException(ex, "Stem pre-render failed.");
+                }
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        }
+
         public void ResetAfterSeek(double seconds)
         {
             lock (Lock)
@@ -94,6 +160,19 @@ namespace YARG.Audio.BASS
 
         public void Dispose()
         {
+            _prerenderBytes = null;
+            if (_prerenderCts != null)
+            {
+                _prerenderCts.Cancel();
+                if (!_prerenderTask.Wait(PRERENDER_SHUTDOWN_TIMEOUT_MS))
+                {
+                    YargLogger.LogError("Stem pre-render did not stop during audio teardown.");
+                }
+
+                _prerenderCts.Dispose();
+                _prerenderCts = null;
+            }
+
             if (!Bass.ChannelRemoveDSP(_stream, _captureDsp) && Bass.LastError != Errors.Handle)
             {
                 YargLogger.LogFormatError("Failed to remove stem capture: {0}!", Bass.LastError);

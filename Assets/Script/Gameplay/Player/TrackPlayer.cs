@@ -351,7 +351,7 @@ namespace YARG.Gameplay.Player
 
         public InstrumentDifficulty<TNote> NoteTrack { get; private set; }
 
-        private InstrumentDifficulty<TNote> OriginalNoteTrack { get; set; }
+        protected InstrumentDifficulty<TNote> OriginalNoteTrack { get; private set; }
 
         private int _currentMultiplier;
         private int _previousMultiplier;
@@ -781,7 +781,7 @@ namespace YARG.Gameplay.Player
                 OnNoteSpawned(note);
 
                 // Don't spawn hit or missed notes
-                if (note.WasHit || note.WasMissed)
+                if (note.WasHit || note.WasMissed || IsAutoPlayed(note))
                 {
                     continue;
                 }
@@ -1299,6 +1299,8 @@ namespace YARG.Gameplay.Player
             }
         }
 
+        protected virtual bool IsAutoPlayed(TNote note) => false;
+
         protected void SpawnNote(TNote note)
         {
             var poolable = NotePool.KeyedTakeWithoutEnabling(note);
@@ -1321,7 +1323,7 @@ namespace YARG.Gameplay.Player
 
         protected virtual void OnNoteHit(int index, TNote note)
         {
-            if (!Player.Profile.IsBot)
+            if (!Player.Profile.IsBot && !IsAutoPlayed(note))
             {
                 _autoCalibrator.RecordAccuracy(Engine.CurrentTime, note.Time);
             }

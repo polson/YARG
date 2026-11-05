@@ -550,6 +550,8 @@ namespace YARG.Settings
 
             public ToggleSetting UseRealisticMissFx { get; } = new(false);
 
+            public ToggleSetting FreestyleSolos { get; } = new(false);
+
             public ToggleSetting AlwaysOnDrumSFX { get; } = new(false);
 
             public ToggleSetting UseWhammyFx { get; } = new(true, v => GlobalAudioHandler.UseWhammyFx = v);

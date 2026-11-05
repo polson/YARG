@@ -35,6 +35,9 @@ namespace YARG.Gameplay.Player
 
         private const int WRONG_NOTE_SEMITONES_PER_FRET = 0;
 
+        private const double FREESTYLE_MUTE_LEAD_SECONDS = 0.1;
+        private const double FREESTYLE_TAP_WINDOW_SECONDS = 0.25;
+
         public bool UsingOpenLane { get; private set; }
 
         // Record of the most recent time that each BRE lane has been lit up by any of the actions that map to it
@@ -141,6 +144,13 @@ namespace YARG.Gameplay.Player
         private double _practiceSectionStartTime;
         private int _wrongNotePitchOffset;
         private BassStemSoundboard _soundboard;
+        private bool _freestyleStrumPending;
+        private int _freestyleTapMask;
+        private int _freestylePhraseMask;
+        private int _freestyleLastHeldMask;
+        private double _freestyleLastHeldTime;
+        private EngineTimer _freestyleHopoLeniency;
+        private float _whammyAxis;
 
         public override void Initialize(int index, YargPlayer player, SongChart chart, TrackView trackView, StemMixer mixer, int? currentHighScore)
         {
@@ -180,7 +190,8 @@ namespace YARG.Gameplay.Player
 
             if (!Player.IsReplay)
             {
-                EngineParams = GetEnginePreset().Create(StarMultiplierThresholds, SoloBonusStarMultiplierThresholds, isBass);
+                EngineParams = GetEnginePreset().Create(StarMultiplierThresholds, SoloBonusStarMultiplierThresholds, isBass,
+                    SettingsManager.Settings.FreestyleSolos.Value);
             }
             else
             {
@@ -188,6 +199,9 @@ namespace YARG.Gameplay.Player
             }
 
             FretToMostRecentTime = CreateFretToMostRecentTime();
+            _freestylePhraseMask = 0;
+            _freestyleTapMask = 0;
+            _freestyleHopoLeniency = new EngineTimer("Freestyle HOPO Leniency", EngineParams.HopoLeniency);
 
             if (EngineContainer != null)
             {
@@ -248,6 +262,10 @@ namespace YARG.Gameplay.Player
             GameManager.BeatEventHandler.Visual.Subscribe(_fretArray.PulseFretColors, BeatEventType.StrongBeat);
 
             _soundboard = GameManager.CreateStemSoundboard(_stem);
+            if (EngineParams.FreestyleSolos)
+            {
+                _soundboard?.RequestSeeds(BuildSeedSets());
+            }
         }
 
         protected virtual void InitializeIndicatorStripes()
@@ -272,6 +290,9 @@ namespace YARG.Gameplay.Player
             Engine.ReplaceChart(NoteTrack);
             ResetWrongNotePitch();
             _soundboard?.StopAll();
+            _freestylePhraseMask = 0;
+            _freestyleTapMask = 0;
+            _freestyleHopoLeniency.Reset();
 
             if (Player.Profile.RangeEnabled)
             {
@@ -428,7 +449,7 @@ namespace YARG.Gameplay.Player
         {
             for (var action = GuitarAction.GreenFret; action <= GetFretActionMax(); action++)
             {
-                _fretArray.SetPressed(GetFretIndex((int)action), Engine.IsFretHeld(action));
+                _fretArray.SetPressed(GetFretIndex((int)action), IsPlayerFretHeld(action));
             }
 
             if (UsingOpenLane) {
@@ -491,6 +512,9 @@ namespace YARG.Gameplay.Player
             base.ResetVisuals();
             ResetWrongNotePitch();
             _soundboard?.StopAll();
+            _freestylePhraseMask = 0;
+            _freestyleTapMask = 0;
+            _freestyleHopoLeniency.Reset();
 
             StrikelineAnimator.SetSustaining(false);
             _fretArray.ResetAll();
@@ -610,6 +634,12 @@ namespace YARG.Gameplay.Player
         {
             base.OnNoteHit(index, chordParent);
             ResetWrongNotePitch();
+
+            if (IsAutoPlayed(chordParent))
+            {
+                return;
+            }
+
             _soundboard?.StopAll();
             RecordNote(chordParent);
 
@@ -640,6 +670,9 @@ namespace YARG.Gameplay.Player
             base.OnDropOut();
             ResetWrongNotePitch();
             _soundboard?.StopAll();
+            _freestylePhraseMask = 0;
+            _freestyleTapMask = 0;
+            _freestyleHopoLeniency.Reset();
         }
 
         protected override void OnNoteMissed(int index, GuitarNote chordParent)
@@ -746,58 +779,98 @@ namespace YARG.Gameplay.Player
                 replaySemitones = offset;
             }
 
-            int heldMask = GetHeldFretMask();
-            if (_soundboard.Play(heldMask == 0 ? GuitarEngine.OPEN_MASK : heldMask, replaySemitones, 1))
-            {
-                return;
-            }
+            _soundboard.SelectSeedSet(double.NaN, Engine.CurrentTime);
+            PlayHeldClips(GetHeldFretMask(), replaySemitones);
+        }
 
-            int clipCount = 0;
-            int fretCount = 0;
-            for (int fretMask = 1; fretMask <= heldMask; fretMask <<= 1)
-            {
-                if ((heldMask & fretMask) == 0)
-                {
-                    continue;
-                }
-
-                fretCount++;
-                if (_soundboard.HasClip(fretMask))
-                {
-                    clipCount++;
-                }
-            }
-
-            if (fretCount < 2 || clipCount == 0)
-            {
-                return;
-            }
-
-            double gain = 1 / Math.Sqrt(clipCount);
-            for (int fretMask = 1; fretMask <= heldMask; fretMask <<= 1)
-            {
-                if ((heldMask & fretMask) != 0)
-                {
-                    _soundboard.Play(fretMask, replaySemitones, gain);
-                }
-            }
+        private bool PlayHeldClips(int heldMask, int semitones)
+        {
+            return _soundboard.Play(heldMask == 0 ? GuitarEngine.OPEN_MASK : heldMask, semitones, 1);
         }
 
         private void RecordNote(GuitarNote parent)
         {
-            if (!SettingsManager.Settings.UseRealisticMissFx.Value || _soundboard == null)
+            bool soundboardInUse = SettingsManager.Settings.UseRealisticMissFx.Value || EngineParams.FreestyleSolos;
+            if (!soundboardInUse || _soundboard == null || IsAutoPlayed(parent))
             {
                 return;
             }
 
-            bool isSustain = false;
+            _soundboard.Record(parent.NoteMask, GameManager.GetAudioPlaybackTime(parent.Time), GetClipDuration(parent),
+                HasSustain(parent));
+        }
+
+        private static double GetClipDuration(GuitarNote parent)
+        {
+            return parent.NextNote != null ? parent.NextNote.Time - parent.Time : double.MaxValue;
+        }
+
+        private static bool HasSustain(GuitarNote parent)
+        {
             foreach (var note in parent.AllNotes)
             {
-                isSustain |= note.IsSustain;
+                if (note.IsSustain)
+                {
+                    return true;
+                }
             }
 
-            double duration = parent.NextNote != null ? parent.NextNote.Time - parent.Time : double.MaxValue;
-            _soundboard.Record(parent.NoteMask, parent.Time, duration, isSustain);
+            return false;
+        }
+
+        private List<BassStemSoundboard.SeedSet> BuildSeedSets()
+        {
+            var seedSets = new List<BassStemSoundboard.SeedSet>();
+            var notes = OriginalNoteTrack.Notes;
+            int soloStart = 0;
+            while (soloStart < notes.Count)
+            {
+                if (!notes[soloStart].IsSolo)
+                {
+                    soloStart++;
+                    continue;
+                }
+
+                int soloEnd = soloStart;
+                while (soloEnd + 1 < notes.Count && notes[soloEnd + 1].IsSolo && !notes[soloEnd + 1].IsSoloStart)
+                {
+                    soloEnd++;
+                }
+
+                seedSets.Add(BuildSeedSet(notes, soloStart, soloEnd));
+                soloStart = soloEnd + 1;
+            }
+
+            return seedSets;
+        }
+
+        private BassStemSoundboard.SeedSet BuildSeedSet(List<GuitarNote> notes, int soloStart, int soloEnd)
+        {
+            var seedNotes = new List<BassStemSoundboard.SeedNote>();
+            for (int index = soloStart; index <= soloEnd; index++)
+            {
+                seedNotes.Add(CreateSeedNote(notes[index]));
+            }
+
+            int fretCount = GetFretActionMax() - GuitarAction.GreenFret + 1;
+            return new BassStemSoundboard.SeedSet(notes[soloStart].Time, notes[soloEnd].Time, seedNotes, fretCount);
+        }
+
+        private BassStemSoundboard.SeedNote CreateSeedNote(GuitarNote note)
+        {
+            return new BassStemSoundboard.SeedNote(note.NoteMask, note.Time, GameManager.GetAudioPlaybackTime(note.Time),
+                durationSeconds: GetClipDuration(note), sustainStartSeconds: 0, isSustain: HasSustain(note));
+        }
+
+        private double GetFreestyleSoloTime()
+        {
+            int index = Engine.NoteIndex;
+            if (index < Notes.Count && Notes[index].IsSolo)
+            {
+                return Notes[index].Time;
+            }
+
+            return index > 0 ? Notes[index - 1].Time : double.NaN;
         }
 
         private int GetHeldFretMask()
@@ -805,13 +878,134 @@ namespace YARG.Gameplay.Player
             int mask = 0;
             for (var action = GuitarAction.GreenFret; action <= GetFretActionMax(); action++)
             {
-                if (Engine.IsFretHeld(action))
+                if (IsPlayerFretHeld(action))
                 {
                     mask |= 1 << (int) action;
                 }
             }
 
             return mask;
+        }
+
+        protected bool IsPlayerFretHeld(GuitarAction action)
+        {
+            if (!Engine.IsFreestyleActive)
+            {
+                return Engine.IsFretHeld(action);
+            }
+
+            int inputMask = Engine.InputButtonMask | (Engine.InputButtonMask >> (int) GuitarAction.SoloGreenFret);
+            return (inputMask & (1 << (int) action)) != 0;
+        }
+
+        protected override bool IsAutoPlayed(GuitarNote note)
+        {
+            return EngineParams.FreestyleSolos && note.ParentOrSelf.IsSolo;
+        }
+
+        private bool IsInFreestyleSolo()
+        {
+            if (!Engine.IsFreestyleActive)
+            {
+                return false;
+            }
+
+            int index = Engine.NoteIndex;
+            if (index > 0 && Notes[index - 1].IsSolo)
+            {
+                return true;
+            }
+
+            return index < Notes.Count && Engine.CurrentTime >= Notes[index].Time - FREESTYLE_MUTE_LEAD_SECONDS;
+        }
+
+        protected override void UpdateInputs(double time)
+        {
+            base.UpdateInputs(time);
+
+            bool strummed = _freestyleStrumPending;
+            _freestyleStrumPending = false;
+            int tappedMask = _freestyleTapMask;
+            _freestyleTapMask = 0;
+
+            bool freestyleActive = IsInFreestyleSolo();
+            int heldMask = freestyleActive ? GetHeldFretMask() : 0;
+            bool wasHeld = _freestyleLastHeldMask != 0;
+            bool fretsChanged = heldMask != _freestyleLastHeldMask;
+            _freestyleLastHeldMask = heldMask;
+            _freestyleHopoLeniency.SetSpeed(EngineParams.SongSpeed);
+            double currentTime = Engine.CurrentTime;
+            if (_freestyleHopoLeniency.IsExpired(currentTime))
+            {
+                _freestyleHopoLeniency.Reset();
+            }
+
+            if (!freestyleActive || GameManager.IsSeekingReplay)
+            {
+                _freestylePhraseMask = 0;
+                _freestyleHopoLeniency.Reset();
+                _soundboard?.SetHeldFrets(0);
+                _soundboard?.SetWhammyPitch(0);
+                return;
+            }
+
+            if (_freestylePhraseMask != 0)
+            {
+                if (wasHeld)
+                {
+                    _freestyleLastHeldTime = currentTime;
+                }
+                else if (currentTime - _freestyleLastHeldTime > FREESTYLE_TAP_WINDOW_SECONDS * EngineParams.SongSpeed)
+                {
+                    _freestylePhraseMask = 0;
+                    _freestyleHopoLeniency.Reset();
+                }
+            }
+
+            int playMask = heldMask != 0 ? heldMask : tappedMask;
+            bool fretInput = fretsChanged || tappedMask != 0;
+            bool hammerOn = _freestylePhraseMask != 0 && fretInput && playMask != 0;
+            if (strummed && !hammerOn && _freestyleHopoLeniency.IsActive)
+            {
+                strummed = false;
+                _freestyleHopoLeniency.Reset();
+            }
+
+            int sustainMask = heldMask | _freestylePhraseMask;
+            if (strummed || hammerOn)
+            {
+                sustainMask |= playMask == 0 ? GuitarEngine.OPEN_MASK : playMask;
+            }
+            _soundboard?.SetHeldFrets(sustainMask);
+            _soundboard?.SetWhammyPitch(_whammyAxis);
+            SetStemMuteState(true);
+            if ((strummed || hammerOn) && _soundboard != null)
+            {
+                _soundboard.SelectSeedSet(GetFreestyleSoloTime(), Engine.CurrentTime);
+                if (PlayHeldClips(playMask, 0))
+                {
+                    _freestylePhraseMask = playMask == 0 ? GuitarEngine.OPEN_MASK : playMask;
+                    _freestyleLastHeldTime = currentTime;
+                    if (hammerOn && !strummed)
+                    {
+                        _freestyleHopoLeniency.Start(currentTime);
+                    }
+                    else
+                    {
+                        _freestyleHopoLeniency.Reset();
+                    }
+                }
+            }
+        }
+
+        protected override void UpdateMuteState(GuitarNote note, bool isMuted)
+        {
+            if (IsAutoPlayed(note))
+            {
+                return;
+            }
+
+            base.UpdateMuteState(note, isMuted);
         }
 
         private int GetFretMask(GuitarAction action)
@@ -884,6 +1078,11 @@ namespace YARG.Gameplay.Player
 
         protected virtual void OnSustainStart(GuitarNote parent)
         {
+            if (IsAutoPlayed(parent))
+            {
+                return;
+            }
+
             foreach (var note in parent.AllNotes)
             {
                 if (parent.IsDisjoint && parent != note) continue;
@@ -917,6 +1116,11 @@ namespace YARG.Gameplay.Player
 
         protected virtual void OnSustainEnd(GuitarNote parent, double timeEnded, bool finished)
         {
+            if (IsAutoPlayed(parent))
+            {
+                return;
+            }
+
             foreach (var note in parent.AllNotes)
             {
                 if (parent.IsDisjoint && parent != note) continue;
@@ -976,6 +1180,21 @@ namespace YARG.Gameplay.Player
         {
             base.OnInputQueued(input);
 
+            var action = input.GetAction<GuitarAction>();
+            if (input.Button && action is GuitarAction.StrumUp or GuitarAction.StrumDown)
+            {
+                _freestyleStrumPending = true;
+            }
+
+            if (input.Button)
+            {
+                int fretMask = GetFretMask(action);
+                if (fretMask != 0)
+                {
+                    _freestyleTapMask = fretMask;
+                }
+            }
+
             if (!input.Button && _soundboard != null)
             {
                 int fretMask = GetFretMask(input.GetAction<GuitarAction>());
@@ -986,10 +1205,14 @@ namespace YARG.Gameplay.Player
             }
 
             // Update the whammy factor
-            if (_sustainCount > 0 && input.GetAction<GuitarAction>() == GuitarAction.Whammy)
+            if (action == GuitarAction.Whammy)
             {
-                WhammyFactor = Mathf.Clamp01(input.Axis);
-                GameManager.ChangeStemWhammyPitch(_stem, WhammyFactor);
+                _whammyAxis = Mathf.Clamp01(input.Axis);
+                if (_sustainCount > 0)
+                {
+                    WhammyFactor = _whammyAxis;
+                    GameManager.ChangeStemWhammyPitch(_stem, WhammyFactor);
+                }
             }
         }
 
