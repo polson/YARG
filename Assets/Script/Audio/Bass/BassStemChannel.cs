@@ -82,11 +82,11 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public void ReplayNote(int semitones, double noteSeconds, double volume)
+        public void ReplayNote(int semitones, double noteSeconds, double durationSeconds, double volume)
         {
             lock (this)
             {
-                _replay?.Play(semitones, noteSeconds, volume * _normalizationGain());
+                _replay?.Play(semitones, noteSeconds, durationSeconds, volume * _normalizationGain());
             }
         }
 

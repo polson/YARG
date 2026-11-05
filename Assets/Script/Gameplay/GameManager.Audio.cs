@@ -232,7 +232,7 @@ namespace YARG.Gameplay
             }
         }
 
-        public void ReplayStemNote(SongStem stem, int semitones, double noteSeconds)
+        public void ReplayStemNote(SongStem stem, int semitones, double noteSeconds, double durationSeconds)
         {
             if (stem == _backgroundStem)
             {
@@ -241,7 +241,7 @@ namespace YARG.Gameplay
 
             if (_mixer?[stem] is BassStemChannel channel)
             {
-                channel.ReplayNote(semitones, noteSeconds, _stemStates[stem].Volume);
+                channel.ReplayNote(semitones, noteSeconds, durationSeconds, _stemStates[stem].Volume);
             }
         }
     }

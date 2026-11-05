@@ -1229,6 +1229,10 @@
                 "Name": "Overstrum/Overhit Sound Effects",
                 "Description": "Enables the overstrum/overhit sound effect."
             },
+            "UseRealisticMissFx": {
+                "Name": "Realistic Miss SFX",
+                "Description": "If enabled, strumming the wrong fret will play the wrong note."
+            },
             "AlwaysOnDrumSFX": {
                 "Name": "Always-On Drum SFX",
                 "Description": "Enables Drum SFX at all times."

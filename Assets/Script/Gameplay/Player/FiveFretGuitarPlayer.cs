@@ -710,6 +710,11 @@ namespace YARG.Gameplay.Player
 
         private void HandleOverstrum()
         {
+            if (!SettingsManager.Settings.UseRealisticMissFx.Value)
+            {
+                return;
+            }
+
             GuitarNote lastNote = GetLastPassedNote();
             if (lastNote == null)
             {
@@ -729,7 +734,7 @@ namespace YARG.Gameplay.Player
                 replaySemitones = offset;
             }
 
-            GameManager.ReplayStemNote(_stem, replaySemitones, lastNote.Time);
+            GameManager.ReplayStemNote(_stem, replaySemitones, lastNote.Time, lastNote.TimeLength);
         }
 
         private GuitarNote GetLastPassedNote()
