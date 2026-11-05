@@ -4,6 +4,7 @@ using DG.Tweening;
 using DG.Tweening.Core;
 using DG.Tweening.Plugins.Options;
 using UnityEngine;
+using YARG.Audio.BASS;
 using YARG.Core.Audio;
 using YARG.Settings;
 
@@ -211,6 +212,37 @@ namespace YARG.Gameplay
             // Set the pitch
             float percentActive = state.SetWhammyPitch(percent);
             GlobalAudioHandler.SetWhammyPitchSetting(stem, percentActive);
+        }
+
+        public bool CanShiftStemPitch(SongStem stem)
+        {
+            return stem != _backgroundStem && _mixer?[stem] is BassStemChannel channel && channel.CanPitchShift;
+        }
+
+        public void ChangeStemWrongNote(SongStem stem, int semitones)
+        {
+            if (stem == _backgroundStem)
+            {
+                return;
+            }
+
+            if (_mixer?[stem] is BassStemChannel channel)
+            {
+                channel.SetWrongNote(semitones);
+            }
+        }
+
+        public void ReplayStemNote(SongStem stem, int semitones, double noteSeconds)
+        {
+            if (stem == _backgroundStem)
+            {
+                return;
+            }
+
+            if (_mixer?[stem] is BassStemChannel channel)
+            {
+                channel.ReplayNote(semitones, noteSeconds, _stemStates[stem].Volume);
+            }
         }
     }
 }

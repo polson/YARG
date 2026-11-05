@@ -136,6 +136,7 @@ namespace YARG.Gameplay.Player
 
         protected SongStem _stem;
         private double _practiceSectionStartTime;
+        private int _wrongNotePitchOffset;
 
         public override void Initialize(int index, YargPlayer player, SongChart chart, TrackView trackView, StemMixer mixer, int? currentHighScore)
         {
@@ -263,6 +264,7 @@ namespace YARG.Gameplay.Player
         protected override void ResetDifficulty(double time)
         {
             Engine.ReplaceChart(NoteTrack);
+            ResetWrongNotePitch();
 
             if (Player.Profile.RangeEnabled)
             {
@@ -460,6 +462,11 @@ namespace YARG.Gameplay.Player
 
         public override void SetStemMuteState(bool muted)
         {
+            if (muted && _wrongNotePitchOffset != 0)
+            {
+                return;
+            }
+
             if (IsStemMuted != muted)
             {
                 GameManager.ChangeStemMuteState(_stem, muted);
@@ -475,6 +482,7 @@ namespace YARG.Gameplay.Player
         protected override void ResetVisuals()
         {
             base.ResetVisuals();
+            ResetWrongNotePitch();
 
             StrikelineAnimator.SetSustaining(false);
             _fretArray.ResetAll();
@@ -593,6 +601,7 @@ namespace YARG.Gameplay.Player
         protected override void OnNoteHit(int index, GuitarNote chordParent)
         {
             base.OnNoteHit(index, chordParent);
+            ResetWrongNotePitch();
 
             if (GameManager.Paused) return;
 
@@ -614,6 +623,12 @@ namespace YARG.Gameplay.Player
                     _fretArray.PlayHitAnimation(note.Fret);
                 }
             }
+        }
+
+        protected override void OnDropOut()
+        {
+            base.OnDropOut();
+            ResetWrongNotePitch();
         }
 
         protected override void OnNoteMissed(int index, GuitarNote chordParent)
@@ -659,6 +674,8 @@ namespace YARG.Gameplay.Player
                 }
             }
 
+            HandleOverstrum();
+
             // Play miss animation for every held fret that does not match the current note
             bool anyHeld = false;
             for (var action = GuitarAction.GreenFret; action <= GetFretActionMax(); action++)
@@ -689,6 +706,83 @@ namespace YARG.Gameplay.Player
                     _fretArray.PlayFullWidthMissAnimation();
                 }
             }
+        }
+
+        private void HandleOverstrum()
+        {
+            GuitarNote lastNote = GetLastPassedNote();
+            if (lastNote == null)
+            {
+                return;
+            }
+
+            int heldFret = GetHighestHeldFret();
+            int expectedFret = GetHighestFret(lastNote.NoteMask);
+            int offset = heldFret < 0 || expectedFret < 0 ? 0 : heldFret - expectedFret;
+
+            int replaySemitones = 0;
+            if (offset != 0 && GameManager.CanShiftStemPitch(_stem))
+            {
+                _wrongNotePitchOffset = offset;
+                SetStemMuteState(false);
+                GameManager.ChangeStemWrongNote(_stem, offset);
+                replaySemitones = offset;
+            }
+
+            GameManager.ReplayStemNote(_stem, replaySemitones, lastNote.Time);
+        }
+
+        private GuitarNote GetLastPassedNote()
+        {
+            int index = Math.Min(Engine.NoteIndex, Notes.Count - 1);
+            while (index >= 0 && Notes[index].Time > Engine.CurrentTime)
+            {
+                index--;
+            }
+
+            while (index + 1 < Notes.Count && Notes[index + 1].Time <= Engine.CurrentTime)
+            {
+                index++;
+            }
+
+            return index >= 0 ? Notes[index] : null;
+        }
+
+        private void ResetWrongNotePitch()
+        {
+            if (_wrongNotePitchOffset == 0)
+            {
+                return;
+            }
+
+            _wrongNotePitchOffset = 0;
+            GameManager.ChangeStemWrongNote(_stem, 0);
+        }
+
+        private int GetHighestHeldFret()
+        {
+            for (int fret = (int) GetFretActionMax(); fret >= 0; fret--)
+            {
+                if (Engine.IsFretHeld((GuitarAction) fret))
+                {
+                    return fret;
+                }
+            }
+
+            return -1;
+        }
+
+        private int GetHighestFret(int noteMask)
+        {
+            for (int fret = (int) GetFretActionMax(); fret >= 0; fret--)
+            {
+                if ((noteMask & (1 << fret)) != 0)
+                {
+                    return fret;
+                }
+            }
+
+            return -1;
         }
 
         protected virtual void OnSustainStart(GuitarNote parent)

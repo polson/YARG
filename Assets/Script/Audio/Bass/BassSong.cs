@@ -379,7 +379,7 @@ namespace YARG.Audio.BASS
         {
             var pitch = BassHelpers.SetPitchParams(stem, streamHandles, reverbHandles);
             var channel = new BassStemChannel(_manager, stem, _clampStemVolume, sourceHandle, pitch, streamHandles,
-                reverbHandles);
+                reverbHandles, () => _stemPipeline.NormalizationGain);
 
             double length = BassHelpers.GetLengthInSeconds(streamHandles.Stream);
             if (length > _length)

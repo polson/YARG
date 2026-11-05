@@ -150,9 +150,14 @@ namespace YARG.Gameplay.Player
             GameManager.EngineManager.Unregister(EngineContainer);
 
             SetStemMuteState(muted: false);
+            OnDropOut();
             ClosePlayerMenu();
 
             GameManager.RefreshAllPlayerMenus();
+        }
+
+        protected virtual void OnDropOut()
+        {
         }
 
         public void ShowDifficulties()
