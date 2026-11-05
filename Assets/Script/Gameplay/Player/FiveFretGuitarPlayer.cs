@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using YARG.Audio.BASS;
 using YARG.Core;
 using YARG.Core.Audio;
 using YARG.Core.Game;
@@ -31,6 +32,8 @@ namespace YARG.Gameplay.Player
         private const double DEDICATED_OPEN_FLASH_HOLD_DURATION = 0.05;
 
         private const int SHIFT_INDICATOR_MEASURES_BEFORE = 5;
+
+        private const int WRONG_NOTE_SEMITONES_PER_FRET = 0;
 
         public bool UsingOpenLane { get; private set; }
 
@@ -137,6 +140,7 @@ namespace YARG.Gameplay.Player
         protected SongStem _stem;
         private double _practiceSectionStartTime;
         private int _wrongNotePitchOffset;
+        private BassStemSoundboard _soundboard;
 
         public override void Initialize(int index, YargPlayer player, SongChart chart, TrackView trackView, StemMixer mixer, int? currentHighScore)
         {
@@ -242,6 +246,8 @@ namespace YARG.Gameplay.Player
             LaneElement.DefineLaneScale(Player.Profile.CurrentInstrument, LaneCount);
 
             GameManager.BeatEventHandler.Visual.Subscribe(_fretArray.PulseFretColors, BeatEventType.StrongBeat);
+
+            _soundboard = GameManager.CreateStemSoundboard(_stem);
         }
 
         protected virtual void InitializeIndicatorStripes()
@@ -265,6 +271,7 @@ namespace YARG.Gameplay.Player
         {
             Engine.ReplaceChart(NoteTrack);
             ResetWrongNotePitch();
+            _soundboard?.StopAll();
 
             if (Player.Profile.RangeEnabled)
             {
@@ -483,6 +490,7 @@ namespace YARG.Gameplay.Player
         {
             base.ResetVisuals();
             ResetWrongNotePitch();
+            _soundboard?.StopAll();
 
             StrikelineAnimator.SetSustaining(false);
             _fretArray.ResetAll();
@@ -602,6 +610,8 @@ namespace YARG.Gameplay.Player
         {
             base.OnNoteHit(index, chordParent);
             ResetWrongNotePitch();
+            _soundboard?.StopAll();
+            RecordNote(chordParent);
 
             if (GameManager.Paused) return;
 
@@ -629,11 +639,13 @@ namespace YARG.Gameplay.Player
         {
             base.OnDropOut();
             ResetWrongNotePitch();
+            _soundboard?.StopAll();
         }
 
         protected override void OnNoteMissed(int index, GuitarNote chordParent)
         {
             base.OnNoteMissed(index, chordParent);
+            RecordNote(chordParent);
 
             foreach (var note in chordParent.AllNotes)
             {
@@ -710,7 +722,7 @@ namespace YARG.Gameplay.Player
 
         private void HandleOverstrum()
         {
-            if (!SettingsManager.Settings.UseRealisticMissFx.Value)
+            if (!SettingsManager.Settings.UseRealisticMissFx.Value || _soundboard == null)
             {
                 return;
             }
@@ -723,7 +735,7 @@ namespace YARG.Gameplay.Player
 
             int heldFret = GetHighestHeldFret();
             int expectedFret = GetHighestFret(lastNote.NoteMask);
-            int offset = heldFret < 0 || expectedFret < 0 ? 0 : heldFret - expectedFret;
+            int offset = heldFret < 0 || expectedFret < 0 ? 0 : (heldFret - expectedFret) * WRONG_NOTE_SEMITONES_PER_FRET;
 
             int replaySemitones = 0;
             if (offset != 0 && GameManager.CanShiftStemPitch(_stem))
@@ -734,7 +746,87 @@ namespace YARG.Gameplay.Player
                 replaySemitones = offset;
             }
 
-            GameManager.ReplayStemNote(_stem, replaySemitones, lastNote.Time, lastNote.TimeLength);
+            int heldMask = GetHeldFretMask();
+            if (_soundboard.Play(heldMask == 0 ? GuitarEngine.OPEN_MASK : heldMask, replaySemitones, 1))
+            {
+                return;
+            }
+
+            int clipCount = 0;
+            int fretCount = 0;
+            for (int fretMask = 1; fretMask <= heldMask; fretMask <<= 1)
+            {
+                if ((heldMask & fretMask) == 0)
+                {
+                    continue;
+                }
+
+                fretCount++;
+                if (_soundboard.HasClip(fretMask))
+                {
+                    clipCount++;
+                }
+            }
+
+            if (fretCount < 2 || clipCount == 0)
+            {
+                return;
+            }
+
+            double gain = 1 / Math.Sqrt(clipCount);
+            for (int fretMask = 1; fretMask <= heldMask; fretMask <<= 1)
+            {
+                if ((heldMask & fretMask) != 0)
+                {
+                    _soundboard.Play(fretMask, replaySemitones, gain);
+                }
+            }
+        }
+
+        private void RecordNote(GuitarNote parent)
+        {
+            if (!SettingsManager.Settings.UseRealisticMissFx.Value || _soundboard == null)
+            {
+                return;
+            }
+
+            bool isSustain = false;
+            foreach (var note in parent.AllNotes)
+            {
+                isSustain |= note.IsSustain;
+            }
+
+            double duration = parent.NextNote != null ? parent.NextNote.Time - parent.Time : double.MaxValue;
+            _soundboard.Record(parent.NoteMask, parent.Time, duration, isSustain);
+        }
+
+        private int GetHeldFretMask()
+        {
+            int mask = 0;
+            for (var action = GuitarAction.GreenFret; action <= GetFretActionMax(); action++)
+            {
+                if (Engine.IsFretHeld(action))
+                {
+                    mask |= 1 << (int) action;
+                }
+            }
+
+            return mask;
+        }
+
+        private int GetFretMask(GuitarAction action)
+        {
+            if (action <= GetFretActionMax())
+            {
+                return 1 << (int) action;
+            }
+
+            if (action >= GuitarAction.SoloGreenFret && action <= GuitarAction.SoloOrangeFret)
+            {
+                return 1 << (action - GuitarAction.SoloGreenFret);
+            }
+
+            return 0;
         }
 
         private GuitarNote GetLastPassedNote()
@@ -883,6 +975,15 @@ namespace YARG.Gameplay.Player
         protected override void OnInputQueued(GameInput input)
         {
             base.OnInputQueued(input);
+
+            if (!input.Button && _soundboard != null)
+            {
+                int fretMask = GetFretMask(input.GetAction<GuitarAction>());
+                if (fretMask != 0)
+                {
+                    _soundboard.Release(fretMask);
+                }
+            }
 
             // Update the whammy factor
             if (_sustainCount > 0 && input.GetAction<GuitarAction>() == GuitarAction.Whammy)

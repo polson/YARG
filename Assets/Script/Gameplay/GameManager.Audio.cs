@@ -232,17 +232,19 @@ namespace YARG.Gameplay
             }
         }
 
-        public void ReplayStemNote(SongStem stem, int semitones, double noteSeconds, double durationSeconds)
+        public BassStemSoundboard CreateStemSoundboard(SongStem stem)
         {
             if (stem == _backgroundStem)
             {
-                return;
+                return null;
             }
 
             if (_mixer?[stem] is BassStemChannel channel)
             {
-                channel.ReplayNote(semitones, noteSeconds, durationSeconds, _stemStates[stem].Volume);
+                return channel.CreateSoundboard(() => _stemStates[stem].Volume);
             }
+
+            return null;
         }
     }
 }

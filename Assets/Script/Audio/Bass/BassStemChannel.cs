@@ -20,7 +20,6 @@ namespace YARG.Audio.BASS
         private          PitchShiftParametersStruct _pitchParams;
         private          IBassReverbDsp              _reverbDsp;
         private readonly BassStemReplay              _replay;
-        private readonly Func<double>                _normalizationGain;
 
         private          double _volume;
         private          bool   _isReverbing;
@@ -33,8 +32,7 @@ namespace YARG.Audio.BASS
             _streamHandles = streamHandles;
             _reverbHandles = reverbHandles;
             _pitchParams = pitchParams;
-            _normalizationGain = normalizationGain;
-            _replay = AudioHelpers.PitchBendAllowedStems.Contains(stem) ? new BassStemReplay(manager, streamHandles.Stream, pitchParams) : null;
+            _replay = AudioHelpers.PitchBendAllowedStems.Contains(stem) ? new BassStemReplay(manager, streamHandles.Stream, pitchParams, normalizationGain) : null;
 
             _length = Bass.ChannelGetLength(_streamHandles.Stream);
             if (_length < 0)
@@ -71,7 +69,6 @@ namespace YARG.Audio.BASS
                 if (semitones == 0)
                 {
                     ApplyPitchShift(1f);
-                    _replay?.Stop();
                     SetVolume_Internal(_volume);
                     return;
                 }
@@ -82,12 +79,9 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public void ReplayNote(int semitones, double noteSeconds, double durationSeconds, double volume)
+        public BassStemSoundboard CreateSoundboard(Func<double> stemVolume)
         {
-            lock (this)
-            {
-                _replay?.Play(semitones, noteSeconds, durationSeconds, volume * _normalizationGain());
-            }
+            return _replay?.CreateSoundboard(stemVolume);
         }
 
         private void FadeOutStreams()
