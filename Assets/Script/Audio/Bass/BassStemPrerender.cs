@@ -37,7 +37,6 @@ namespace YARG.Audio.BASS
             long originalPosition = original.Position;
             try
             {
-                original.Position = 0;
                 using var copy = new MemoryStream();
                 original.CopyTo(copy);
                 return copy.ToArray();

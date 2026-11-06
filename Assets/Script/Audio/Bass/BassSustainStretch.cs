@@ -157,7 +157,7 @@ namespace YARG.Audio.BASS
             return energy > 0 ? error / energy : 0;
         }
 
-        private static int FindAttackEnd(float[] samples, int frequency, int channels)
+        internal static int FindAttackEnd(float[] samples, int frequency, int channels)
         {
             int frameCount = samples.Length / channels;
             int blockFrames = (int) Math.Round(ANALYSIS_BLOCK_SECONDS * frequency);

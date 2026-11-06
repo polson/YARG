@@ -7,6 +7,7 @@
 #include "dsp/NoiseGateDsp.h"
 #include "dsp/SineSynthDsp.h"
 #include "one_shot/NativeOneShotStream.h"
+#include "stretch/StretchRender.h"
 #include "stretch/StretchTempoStream.h"
 #include "yarg_audio.h"
 
@@ -159,6 +160,49 @@ int32_t YARG_AUDIO_CALL yarg_stretch_stream_destroy(yarg_stretch_stream* stream)
         return YARG_AUDIO_ERROR_BASS;
     }
     delete stream;
+    return YARG_AUDIO_OK;
+}
+
+int32_t YARG_AUDIO_CALL yarg_stretch_render_create(uint32_t channels, uint32_t sample_rate,
+    float speed, yarg_stretch_render** render) {
+    using yarg::audio::StretchRender;
+    if (!render || channels == 0 || channels > 8 || sample_rate < 8000 || sample_rate > 192000 ||
+        !std::isfinite(speed) || speed < StretchRender::MIN_SPEED || speed > StretchRender::MAX_SPEED) {
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    }
+    *render = nullptr;
+    try {
+        *render = new yarg_stretch_render(static_cast<int>(channels),
+            static_cast<int>(sample_rate), speed);
+        return YARG_AUDIO_OK;
+    } catch (...) {
+        return YARG_AUDIO_ERROR_INTERNAL;
+    }
+}
+
+int32_t YARG_AUDIO_CALL yarg_stretch_render_begin(yarg_stretch_render* render, const float* input,
+    int64_t input_frames, int64_t start_frame) {
+    if (!render || !input || input_frames <= 0 || start_frame < 0 || start_frame >= input_frames) {
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    }
+    render->value.begin(input, input_frames, start_frame);
+    return YARG_AUDIO_OK;
+}
+
+int32_t YARG_AUDIO_CALL yarg_stretch_render_read(yarg_stretch_render* render, const float* input,
+    int64_t input_frames, int64_t output_frame, float* output, int32_t output_frames) {
+    if (!render || !input || input_frames <= 0 || !output || output_frames < 0) {
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    }
+    return render->value.read(input, input_frames, output_frame, output, output_frames)
+        ? YARG_AUDIO_OK : YARG_AUDIO_ERROR_INVALID_STATE;
+}
+
+int32_t YARG_AUDIO_CALL yarg_stretch_render_destroy(yarg_stretch_render* render) {
+    if (!render) {
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    }
+    delete render;
     return YARG_AUDIO_OK;
 }
 

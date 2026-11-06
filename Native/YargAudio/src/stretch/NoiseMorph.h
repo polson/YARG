@@ -48,7 +48,9 @@ class NoiseMorph {
     bool useGrains = false;
     std::vector<Sample> grainMask;
     Sample replacementStep = 0;
-    std::vector<Sample> history, magnitude, noise, broadbandNoise;
+    std::vector<Sample> history, sortedHistory, magnitude, noise, broadbandNoise;
+    std::vector<double> bandPower, bandLogPower;
+    std::array<Sample, RADIUS * 2 + 1> spectralWindow{};
     Sample peakMagnitude = 0;
     int channels = 0;
     int bands = 0;
@@ -62,9 +64,12 @@ public:
         bands = int(analysis.bands());
         replacementStep = Sample(analysis.defaultInterval()) / (sampleRate * REPLACEMENT_RISE_SECONDS);
         history.assign(bands * HISTORY, Sample(0));
+        sortedHistory.assign(bands * HISTORY, Sample(0));
         magnitude.assign(bands, Sample(0));
         noise.assign(bands, Sample(0));
         broadbandNoise.assign(bands, Sample(0));
+        bandPower.assign(bands, 0.0);
+        bandLogPower.assign(bands, 0.0);
         if (useGrains) {
             grains.configure(analysis, channels, sampleRate);
             grainMask.assign(bands, Sample(0));
@@ -76,6 +81,7 @@ public:
         historyIndex = historyCount = 0;
         peakMagnitude = 0;
         std::fill(history.begin(), history.end(), Sample(0));
+        std::fill(sortedHistory.begin(), sortedHistory.end(), Sample(0));
         std::fill(grainMask.begin(), grainMask.end(), Sample(0));
         if (useGrains) {
             grains.reset(seed);
@@ -136,10 +142,37 @@ private:
             }
             magnitude[b] = std::sqrt(power);
             peakMagnitude = std::max(peakMagnitude, magnitude[b]);
-            history[historyIndex * bands + b] = magnitude[b];
+            auto &stored = history[historyIndex * bands + b];
+            replaceSorted(sortedHistory.data() + b * HISTORY, HISTORY, stored, magnitude[b], [&](Sample *values) {
+                for (int i = 0; i < HISTORY; ++i) {
+                    values[i] = history[i * bands + b];
+                }
+            });
+            stored = magnitude[b];
         }
         historyIndex = (historyIndex + 1) % HISTORY;
         historyCount = std::min(historyCount + 1, HISTORY);
+    }
+
+    // Swaps one value in a sorted window, keeping it sorted; rebuilds it if the value is missing.
+    template<class Rebuild>
+    static void replaceSorted(Sample *values, int count, Sample removed, Sample added, Rebuild rebuild) {
+        int index = int(std::lower_bound(values, values + count, removed) - values);
+        if (index == count || values[index] != removed) {
+            rebuild(values);
+            std::sort(values, values + count);
+            index = int(std::lower_bound(values, values + count, removed) - values);
+            index = std::min(index, count - 1);
+        }
+        while (index + 1 < count && values[index + 1] < added) {
+            values[index] = values[index + 1];
+            ++index;
+        }
+        while (index > 0 && values[index - 1] > added) {
+            values[index] = values[index - 1];
+            --index;
+        }
+        values[index] = added;
     }
 
     // Temporal median finds steady tones; spectral median finds broadband hits.
@@ -148,34 +181,40 @@ private:
     void detectFuzzy() {
         const Sample floor = peakMagnitude * SILENCE_FLOOR_RATIO;
         const double floorPower = double(floor) * floor + 1e-60;
+        auto magnitudeAt = [&](int band) { return magnitude[std::clamp(band, 0, bands - 1)]; };
+        auto fillWindow = [&](Sample *values, int centre) {
+            for (int i = -RADIUS; i <= RADIUS; ++i) {
+                values[i + RADIUS] = magnitudeAt(centre + i);
+            }
+        };
         for (int b = 0; b < bands; ++b) {
+            const double value = magnitude[b];
+            bandPower[b] = value * value + floorPower;
+            bandLogPower[b] = std::log(bandPower[b]);
+        }
+        fillWindow(spectralWindow.data(), 0);
+        std::sort(spectralWindow.begin(), spectralWindow.end());
+        for (int b = 0; b < bands; ++b) {
+            if (b > 0) {
+                replaceSorted(spectralWindow.data(), RADIUS * 2 + 1, magnitudeAt(b - 1 - RADIUS),
+                    magnitudeAt(b + RADIUS), [&](Sample *values) { fillWindow(values, b - 1); });
+            }
             if (magnitude[b] < floor) {
                 noise[b] = 0;
                 broadbandNoise[b] = 0;
                 continue;
             }
-            std::array<Sample, HISTORY> temporal;
-            std::array<Sample, RADIUS * 2 + 1> spectral;
-            for (int i = 0; i < HISTORY; ++i) {
-                temporal[i] = history[i * bands + b];
-            }
-            for (int i = -RADIUS; i <= RADIUS; ++i) {
-                spectral[i + RADIUS] = magnitude[std::clamp(b + i, 0, bands - 1)];
-            }
             double powerSum = 0;
             double logPowerSum = 0;
             for (int i = -FLATNESS_RADIUS; i <= FLATNESS_RADIUS; ++i) {
-                const double value = spectral[i + RADIUS];
-                const double power = value * value + floorPower;
-                powerSum += power;
-                logPowerSum += std::log(power);
+                const int band = std::clamp(b + i, 0, bands - 1);
+                powerSum += bandPower[band];
+                logPowerSum += bandLogPower[band];
             }
             const double count = FLATNESS_RADIUS * 2 + 1;
             const Sample flatness = Sample(std::exp(logPowerSum / count) / (powerSum / count));
-            std::nth_element(temporal.begin(), temporal.begin() + HISTORY / 2, temporal.end());
-            std::nth_element(spectral.begin(), spectral.begin() + RADIUS, spectral.end());
-            const Sample steady = temporal[HISTORY / 2];
-            const Sample around = spectral[RADIUS];
+            const Sample steady = sortedHistory[b * HISTORY + HISTORY / 2];
+            const Sample around = spectralWindow[RADIUS];
             const Sample tonalness = steady / (steady + around + Sample(1e-30));
             const Sample sine = saturate(tonalness, SINE_LOW, SINE_HIGH);
             const Sample hit = saturate(Sample(1) - tonalness, TRANSIENT_LOW, TRANSIENT_HIGH);

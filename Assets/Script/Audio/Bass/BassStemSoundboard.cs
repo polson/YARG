@@ -8,6 +8,7 @@ using ManagedBass.Fx;
 using YARG.Core.Audio;
 using YARG.Core.Engine.Guitar;
 using YARG.Core.Logging;
+using YARG.Settings;
 
 namespace YARG.Audio.BASS
 {
@@ -59,6 +60,10 @@ namespace YARG.Audio.BASS
         private const double FALLBACK_LOOP_SECONDS = 0.15;
         private const double SUSTAIN_LOOP_SECONDS = 0.4;
         private const double LOOP_BUFFER_SECONDS = 0.25;
+        private const double STRETCH_REGION_PREROLL_SECONDS = 0.1;
+        private const double STRETCH_BLEED_GUARD_SECONDS = 0.03;
+        private const double STRETCH_MIN_BODY_SECONDS = 0.02;
+        private const double STRETCH_FADE_SECONDS = 0.01;
         private const int    VOICE_COUNT      = 12;
         private const int    FLOAT_BYTES      = sizeof(float);
 
@@ -80,12 +85,30 @@ namespace YARG.Audio.BASS
             public readonly double SongTime;
             public readonly Clip   Clip;
             public readonly int    SustainStartFrame;
+            public readonly long   StartFrame;
 
-            public SeedClip(double songTime, Clip clip, int sustainStartFrame)
+            public SeedClip(double songTime, Clip clip, int sustainStartFrame, long startFrame)
             {
                 SongTime = songTime;
                 Clip = clip;
                 SustainStartFrame = sustainStartFrame;
+                StartFrame = startFrame;
+            }
+        }
+
+        private sealed class StretchCandidate
+        {
+            public readonly int     Key;
+            public readonly int     Index;
+            public readonly float[] Raw;
+            public int              AttackFrames;
+            public BassSoloStretch.Target? Target;
+
+            public StretchCandidate(int key, int index, float[] raw)
+            {
+                Key = key;
+                Index = index;
+                Raw = raw;
             }
         }
 
@@ -95,6 +118,9 @@ namespace YARG.Audio.BASS
             public readonly double         EndTime;
             public readonly Dictionary<int, List<SeedClip>> Clips = new();
             public readonly Dictionary<int, Clip> SelectedClips = new();
+            public readonly List<StretchCandidate> StretchCandidates = new();
+            public float[] Region = Array.Empty<float>();
+            public long    RegionStartFrame;
 
             public SeedClips(double startTime, double endTime)
             {
@@ -244,6 +270,9 @@ namespace YARG.Audio.BASS
         internal void PrepareSeedJobs(List<BassStemPrerender.Job> jobs)
         {
             _pendingSeeds = new List<SeedClips>();
+            bool stretchAvailable = _seedRequests.Count > 0 &&
+                SettingsManager.Settings?.EffectsMode.Value == EffectsMode.Quality &&
+                BassStretchRender.IsAvailable();
             foreach (var seedSet in _seedRequests)
             {
                 var seeds = new SeedClips(seedSet.StartTime, seedSet.EndTime);
@@ -269,8 +298,13 @@ namespace YARG.Audio.BASS
                         clips = new List<SeedClip>();
                         seeds.Clips.Add(note.Key, clips);
                     }
-                    clips.Add(new SeedClip(note.SongTime, clip, sustainStart));
+                    clips.Add(new SeedClip(note.SongTime, clip, sustainStart, startFrame));
                     jobs.Add(new BassStemPrerender.Job(startFrame, frameCount, clip.Samples));
+                }
+
+                if (stretchAvailable)
+                {
+                    AddRegionJob(seeds, jobs);
                 }
 
                 foreach (var clips in seeds.Clips.Values)
@@ -291,35 +325,22 @@ namespace YARG.Audio.BASS
                 _activeSeeds = null;
             }
 
+            var published = new List<SeedClips>();
             while (_pendingSeeds.Count > 0)
             {
-                SeedClips seeds;
-                lock (_replay.Lock)
+                var seeds = TakeNextSeeds(_pendingSeeds);
+                foreach (var pair in seeds.Clips)
                 {
-                    int next = 0;
-                    for (int index = 0; index < _pendingSeeds.Count; index++)
-                    {
-                        var pending = _pendingSeeds[index];
-                        if (_requestedSoloTime >= pending.StartTime && _requestedSoloTime <= pending.EndTime)
-                        {
-                            next = index;
-                            break;
-                        }
-                    }
-                    seeds = _pendingSeeds[next];
-                    _pendingSeeds.RemoveAt(next);
-                }
-
-                foreach (var clips in seeds.Clips.Values)
-                {
-                    foreach (var seed in clips)
+                    for (int index = 0; index < pair.Value.Count; index++)
                     {
                         if (token.IsCancellationRequested)
                         {
                             return;
                         }
 
+                        var seed = pair.Value[index];
                         seed.Clip.FilledFrames = seed.Clip.FrameCount;
+                        var raw = seed.Clip.Samples;
                         bool cleanLoop = PrepareLoop(seed.Clip, seed.SustainStartFrame);
                         if (!cleanLoop && BassSustainStretch.TryRender(seed.Clip.Samples, frequency: _replay.Frequency,
                             channels: _replay.ChannelCount, out var samples, out int bodyStartFrame))
@@ -327,13 +348,11 @@ namespace YARG.Audio.BASS
                             seed.Clip.Samples = samples;
                             seed.Clip.FrameCount = samples.Length / _replay.ChannelCount;
                             seed.Clip.FilledFrames = seed.Clip.FrameCount;
-                            int fadeFrames = Math.Min(_loopFadeFrames, (seed.Clip.FrameCount - bodyStartFrame) / 4);
-                            int firstFrame = Math.Max(bodyStartFrame,
-                                seed.Clip.FrameCount - (int) Math.Round(SUSTAIN_LOOP_SECONDS * _replay.Frequency));
-                            int loopStart = BassSustainStretch.FindLoopStart(samples, frequency: _replay.Frequency,
-                                channels: _replay.ChannelCount, firstFrame: firstFrame,
-                                tailFrame: seed.Clip.FrameCount - fadeFrames, fadeFrames: fadeFrames);
-                            SetLoop(seed.Clip, bodyStart: loopStart, loopEnd: seed.Clip.FrameCount, fadeFrames: fadeFrames);
+                            LoopStretchedBody(seed.Clip, bodyStartFrame);
+                            if (seeds.Region.Length > 0)
+                            {
+                                seeds.StretchCandidates.Add(new StretchCandidate(pair.Key, index, raw));
+                            }
                         }
                         ApplyStartFade(seed.Clip);
                     }
@@ -347,7 +366,166 @@ namespace YARG.Audio.BASS
                     }
                     _seeds.Add(seeds);
                 }
+                published.Add(seeds);
             }
+
+            while (published.Count > 0)
+            {
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
+                StretchSeeds(TakeNextSeeds(published), token);
+            }
+        }
+
+        private SeedClips TakeNextSeeds(List<SeedClips> queue)
+        {
+            lock (_replay.Lock)
+            {
+                int next = 0;
+                for (int index = 0; index < queue.Count; index++)
+                {
+                    var pending = queue[index];
+                    if (_requestedSoloTime >= pending.StartTime && _requestedSoloTime <= pending.EndTime)
+                    {
+                        next = index;
+                        break;
+                    }
+                }
+                var seeds = queue[next];
+                queue.RemoveAt(next);
+                return seeds;
+            }
+        }
+
+        private void AddRegionJob(SeedClips seeds, List<BassStemPrerender.Job> jobs)
+        {
+            long firstFrame = long.MaxValue;
+            long endFrame = 0;
+            foreach (var clips in seeds.Clips.Values)
+            {
+                foreach (var seed in clips)
+                {
+                    firstFrame = Math.Min(firstFrame, seed.StartFrame);
+                    endFrame = Math.Max(endFrame, seed.StartFrame + seed.Clip.FrameCount);
+                }
+            }
+            if (endFrame <= firstFrame)
+            {
+                return;
+            }
+
+            seeds.RegionStartFrame = Math.Max(0,
+                firstFrame - (long) Math.Round(STRETCH_REGION_PREROLL_SECONDS * _replay.Frequency));
+            int frameCount = (int) (endFrame - seeds.RegionStartFrame);
+            seeds.Region = new float[frameCount * _replay.ChannelCount];
+            jobs.Add(new BassStemPrerender.Job(seeds.RegionStartFrame, frameCount, seeds.Region));
+        }
+
+        private void StretchSeeds(SeedClips seeds, CancellationToken token)
+        {
+            int frequency = _replay.Frequency;
+            int channels = _replay.ChannelCount;
+            int guardFrames = (int) Math.Round(STRETCH_BLEED_GUARD_SECONDS * frequency);
+            int minBodyFrames = (int) Math.Round(STRETCH_MIN_BODY_SECONDS * frequency);
+            var targets = new List<BassSoloStretch.Target>();
+            foreach (var candidate in seeds.StretchCandidates)
+            {
+                var seed = seeds.Clips[candidate.Key][candidate.Index];
+                candidate.AttackFrames = BassSustainStretch.FindAttackEnd(candidate.Raw, frequency, channels);
+                int bodyFrames = candidate.Raw.Length / channels - guardFrames - candidate.AttackFrames;
+                if (bodyFrames < minBodyFrames)
+                {
+                    continue;
+                }
+
+                long bodyStart = seed.StartFrame + candidate.AttackFrames - seeds.RegionStartFrame;
+                candidate.Target = new BassSoloStretch.Target(bodyStart, bodyFrames);
+                targets.Add(candidate.Target);
+            }
+
+            if (targets.Count > 0)
+            {
+                var stopwatch = Stopwatch.StartNew();
+                BassSoloStretch.Render(seeds.Region, frequency, channels, targets, token);
+                YargLogger.LogFormatInfo("[SoloStretch] {0} sustains in {1} ms",
+                    targets.Count, stopwatch.ElapsedMilliseconds);
+            }
+
+            foreach (var candidate in seeds.StretchCandidates)
+            {
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
+                var body = candidate.Target?.Output;
+                if (body != null)
+                {
+                    ReplaceSeedClip(seeds, candidate, BuildStretchedClip(candidate, body));
+                }
+            }
+
+            seeds.Region = Array.Empty<float>();
+            seeds.StretchCandidates.Clear();
+        }
+
+        private Clip BuildStretchedClip(StretchCandidate candidate, float[] body)
+        {
+            int channels = _replay.ChannelCount;
+            int attackFrames = candidate.AttackFrames;
+            int bodyFrames = body.Length / channels;
+            int fadeFrames = Math.Min((int) Math.Round(STRETCH_FADE_SECONDS * _replay.Frequency), bodyFrames);
+            var samples = new float[(attackFrames + bodyFrames) * channels];
+            Array.Copy(candidate.Raw, samples, attackFrames * channels);
+            for (int frame = 0; frame < bodyFrames; frame++)
+            {
+                float blend = frame < fadeFrames
+                    ? (float) (0.5 - 0.5 * Math.Cos(Math.PI * (frame + 1) / (fadeFrames + 1)))
+                    : 1;
+                for (int channel = 0; channel < channels; channel++)
+                {
+                    int output = (attackFrames + frame) * channels + channel;
+                    float raw = output < candidate.Raw.Length ? candidate.Raw[output] : 0;
+                    samples[output] = raw * (1 - blend) + body[frame * channels + channel] * blend;
+                }
+            }
+
+            var clip = new Clip
+            {
+                Samples = samples,
+                FrameCount = attackFrames + bodyFrames,
+                FilledFrames = attackFrames + bodyFrames,
+            };
+            LoopStretchedBody(clip, attackFrames + fadeFrames);
+            ApplyStartFade(clip);
+            return clip;
+        }
+
+        private void ReplaceSeedClip(SeedClips seeds, StretchCandidate candidate, Clip clip)
+        {
+            lock (_replay.Lock)
+            {
+                var clips = seeds.Clips[candidate.Key];
+                var old = clips[candidate.Index];
+                clip.IsSustain = old.Clip.IsSustain;
+                clips[candidate.Index] = new SeedClip(old.SongTime, clip, old.SustainStartFrame, old.StartFrame);
+                if (seeds.SelectedClips.TryGetValue(candidate.Key, out var selected) && selected == old.Clip)
+                {
+                    seeds.SelectedClips[candidate.Key] = clip;
+                }
+            }
+        }
+
+        private void LoopStretchedBody(Clip clip, int bodyStartFrame)
+        {
+            int fadeFrames = Math.Min(_loopFadeFrames, (clip.FrameCount - bodyStartFrame) / 4);
+            int firstFrame = Math.Max(bodyStartFrame,
+                clip.FrameCount - (int) Math.Round(SUSTAIN_LOOP_SECONDS * _replay.Frequency));
+            int loopStart = BassSustainStretch.FindLoopStart(clip.Samples, frequency: _replay.Frequency,
+                channels: _replay.ChannelCount, firstFrame: firstFrame,
+                tailFrame: clip.FrameCount - fadeFrames, fadeFrames: fadeFrames);
+            SetLoop(clip, bodyStart: loopStart, loopEnd: clip.FrameCount, fadeFrames: fadeFrames);
         }
 
         public bool Play(int key, int semitones, double gain)

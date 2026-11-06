@@ -25,3 +25,4 @@ void runSineSynthDspTests();
 void runScheduledSampleSourceTests();
 void runNativeOneShotStreamTests();
 void runStretchTempoStreamTests();
+void runStretchRenderTests();

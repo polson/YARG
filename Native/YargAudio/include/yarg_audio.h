@@ -21,6 +21,7 @@ extern "C" {
 #define YARG_AUDIO_ABI_VERSION 27u
 
 typedef struct yarg_stretch_stream yarg_stretch_stream;
+typedef struct yarg_stretch_render yarg_stretch_render;
 
 typedef struct yarg_read_ahead_stream yarg_read_ahead_stream;
 typedef struct yarg_gain_dsp yarg_gain_dsp;
@@ -132,6 +133,17 @@ YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_stream_get_latency(
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_stream_get_position(
     yarg_stretch_stream* stream, int64_t bytes, double* seconds);
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_stream_destroy(yarg_stretch_stream* stream);
+/* Offline constant-speed stretch over a caller-owned interleaved float buffer. Pass the same
+   buffer to begin and every read. After begin, output frame n maps to input frame
+   start_frame + n * speed. Reads move forward only; skipped output is rendered and discarded. */
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_render_create(
+    uint32_t channels, uint32_t sample_rate, float speed, yarg_stretch_render** render);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_render_begin(
+    yarg_stretch_render* render, const float* input, int64_t input_frames, int64_t start_frame);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_render_read(
+    yarg_stretch_render* render, const float* input, int64_t input_frames, int64_t output_frame,
+    float* output, int32_t output_frames);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_render_destroy(yarg_stretch_render* render);
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_gain_dsp_attach(
     uint32_t channel, float initial_gain, int32_t priority,
     yarg_gain_dsp** dsp, int32_t* bass_error);

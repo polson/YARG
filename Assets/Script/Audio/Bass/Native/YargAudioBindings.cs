@@ -25,6 +25,10 @@ namespace YARG.Audio.BASS.Native
         private static StretchStreamGetLatencyDelegate? _stretchStreamGetLatency;
         private static StretchStreamGetPositionDelegate? _stretchStreamGetPosition;
         private static StretchStreamDestroyDelegate? _stretchStreamDestroy;
+        private static StretchRenderCreateDelegate? _stretchRenderCreate;
+        private static StretchRenderBeginDelegate? _stretchRenderBegin;
+        private static StretchRenderReadDelegate? _stretchRenderRead;
+        private static StretchRenderDestroyDelegate? _stretchRenderDestroy;
 
         private static GetAbiVersionDelegate? _getAbiVersion;
         private static GainDspAttachDelegate? _gainDspAttach;
@@ -130,6 +134,20 @@ namespace YARG.Audio.BASS.Native
 
         internal static int StretchStreamDestroy(IntPtr stream) =>
             EnsureBound(ref _stretchStreamDestroy, "yarg_stretch_stream_destroy")(stream);
+
+        internal static int StretchRenderCreate(uint channels, uint sampleRate, float speed, out BassStretchRender render) =>
+            EnsureBound(ref _stretchRenderCreate, "yarg_stretch_render_create")(channels, sampleRate, speed, out render);
+
+        internal static int StretchRenderBegin(BassStretchRender render, IntPtr input, long inputFrames, long startFrame) =>
+            EnsureBound(ref _stretchRenderBegin, "yarg_stretch_render_begin")(render, input, inputFrames, startFrame);
+
+        internal static int StretchRenderRead(BassStretchRender render, IntPtr input, long inputFrames, long outputFrame,
+            IntPtr output, int outputFrames) =>
+            EnsureBound(ref _stretchRenderRead, "yarg_stretch_render_read")(render, input, inputFrames, outputFrame,
+                output, outputFrames);
+
+        internal static int StretchRenderDestroy(IntPtr render) =>
+            EnsureBound(ref _stretchRenderDestroy, "yarg_stretch_render_destroy")(render);
 
         internal static uint GetAbiVersion() =>
             EnsureBound(ref _getAbiVersion, "yarg_audio_get_abi_version")();
@@ -275,6 +293,10 @@ namespace YARG.Audio.BASS.Native
             _stretchStreamGetLatency = GetFunction<StretchStreamGetLatencyDelegate>(handle, "yarg_stretch_stream_get_latency");
             _stretchStreamGetPosition = GetFunction<StretchStreamGetPositionDelegate>(handle, "yarg_stretch_stream_get_position");
             _stretchStreamDestroy = GetFunction<StretchStreamDestroyDelegate>(handle, "yarg_stretch_stream_destroy");
+            _stretchRenderCreate = GetFunction<StretchRenderCreateDelegate>(handle, "yarg_stretch_render_create");
+            _stretchRenderBegin = GetFunction<StretchRenderBeginDelegate>(handle, "yarg_stretch_render_begin");
+            _stretchRenderRead = GetFunction<StretchRenderReadDelegate>(handle, "yarg_stretch_render_read");
+            _stretchRenderDestroy = GetFunction<StretchRenderDestroyDelegate>(handle, "yarg_stretch_render_destroy");
             _getAbiVersion = GetFunction<GetAbiVersionDelegate>(handle, "yarg_audio_get_abi_version");
             _gainDspAttach = GetFunction<GainDspAttachDelegate>(handle, "yarg_gain_dsp_attach");
             _gainDspSetGain = GetFunction<GainDspSetGainDelegate>(handle, "yarg_gain_dsp_set_gain");
@@ -418,6 +440,19 @@ namespace YARG.Audio.BASS.Native
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int StretchStreamDestroyDelegate(IntPtr stream);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int StretchRenderCreateDelegate(uint channels, uint sampleRate, float speed, out BassStretchRender render);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int StretchRenderBeginDelegate(BassStretchRender render, IntPtr input, long inputFrames, long startFrame);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int StretchRenderReadDelegate(BassStretchRender render, IntPtr input, long inputFrames,
+            long outputFrame, IntPtr output, int outputFrames);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int StretchRenderDestroyDelegate(IntPtr render);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate uint GetAbiVersionDelegate();

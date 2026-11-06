@@ -24,6 +24,7 @@ set(YARG_AUDIO_SOURCES
     src/PlatformDynamicLibrary.cpp
     src/ReadAheadStream.cpp
     src/RenderAheadMixer.cpp
+    src/stretch/StretchRender.cpp
     src/stretch/StretchTempoStream.cpp
     src/yarg_audio_c_api.cpp
 )
@@ -102,6 +103,7 @@ if(YARG_AUDIO_BUILD_TESTS)
         tests/NativeOneShotStreamTests.cpp
         tests/ReadAheadStreamTests.cpp
         tests/StretchTempoStreamTests.cpp
+        tests/StretchRenderTests.cpp
         src/AudioRingBuffer.cpp
         src/BassCoreBindings.cpp
         src/BassMixBindings.cpp
@@ -115,7 +117,8 @@ if(YARG_AUDIO_BUILD_TESTS)
         src/PlatformDynamicLibrary.cpp
         src/ReadAheadStream.cpp
         src/RenderAheadMixer.cpp
-        src/stretch/StretchTempoStream.cpp
+        src/stretch/StretchRender.cpp
+    src/stretch/StretchTempoStream.cpp
     )
     target_compile_features(yarg_audio_tests PRIVATE cxx_std_20)
     target_include_directories(yarg_audio_tests PRIVATE include src)
