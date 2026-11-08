@@ -3,6 +3,8 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using YARG.Core.Audio;
+using YARG.Core.Chart;
+using YARG.Core.Engine;
 using YARG.Core.Engine.Guitar;
 
 namespace YARG.Audio.BASS
@@ -20,9 +22,7 @@ namespace YARG.Audio.BASS
         {
             _lock = replay.Lock;
             _recorder = new BassStemClipRecorder(replay, replay.Format);
-            var renderer = new BassStemSeedRenderer(replay.Format, BassStretchRender.Create,
-                BassStemReplayPolicy.ShouldStretch);
-            _seeds = new BassStemSeedLibrary(renderer);
+            _seeds = new BassStemSeedLibrary(replay.Format, BassStretchRender.Create, BassStemReplay.ShouldStretch);
             _voices = new BassStemVoicePool(manager, replay.Format, pitchParams, volume);
         }
 
@@ -39,9 +39,10 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public void RequestSeeds(List<BassStemSeedSet> seedSets)
+        public void RequestSeeds(IReadOnlyList<SoloSection> phrases, List<GuitarNote> notes,
+            Func<double, double> playbackTime)
         {
-            _seeds.Request(seedSets);
+            _seeds.Request(phrases, notes, playbackTime);
         }
 
         public void SelectSeedSet(double soloTime, double songTime)
@@ -83,7 +84,7 @@ namespace YARG.Audio.BASS
                 }
 
                 _voices.FadePreviousVoices();
-                double fretGain = gain / Math.Sqrt(BassStemFretMask.Count(fretMask));
+                double fretGain = gain / Math.Sqrt(BassStemClipPolicy.FretCount(fretMask));
                 for (int fret = 1; fret < GuitarEngine.OPEN_MASK; fret <<= 1)
                 {
                     if ((fretMask & fret) == 0)
@@ -157,7 +158,7 @@ namespace YARG.Audio.BASS
             }
         }
 
-        internal void PrepareSeedJobs(List<BassStemSampleJob> jobs)
+        internal void PrepareSeedJobs(List<(long StartFrame, int FrameCount, float[] Samples)> jobs)
         {
             _seeds.PrepareJobs(jobs);
         }

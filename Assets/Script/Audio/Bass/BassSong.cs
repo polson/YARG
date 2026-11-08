@@ -360,7 +360,7 @@ namespace YARG.Audio.BASS
         protected override bool AddChannels_Internal(Stream stream, params StemInfo[] stemInfos)
         {
             byte[]? prerenderBytes = null;
-            if (stemInfos.Any(info => BassStemReplayPolicy.ShouldPrerender(info.Stem)))
+            if (stemInfos.Any(info => BassStemReplay.ShouldPrerender(info.Stem)))
             {
                 prerenderBytes = BassStemPrerender.CopyStream(stream);
             }

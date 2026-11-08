@@ -158,7 +158,7 @@ namespace YARG.Gameplay.Player
             }
             else
             {
-                int fretMask = BassStemFretMask.Highest(playMask, _maxFretIndex);
+                int fretMask = BassStemClipPolicy.HighestFret(playMask, _maxFretIndex);
                 _soundboard.Play(fretMask == 0 ? GuitarEngine.OPEN_MASK : fretMask, semitones: 0, gain: 1);
             }
 

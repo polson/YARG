@@ -30,7 +30,7 @@ namespace YARG.Audio.BASS
             _streamHandles = streamHandles;
             _reverbHandles = reverbHandles;
             _pitchParams = pitchParams;
-            _replay = BassStemReplayPolicy.ShouldCapture(stem)
+            _replay = BassStemReplay.ShouldCapture(stem)
                 ? new BassStemReplay(manager, streamHandles.Stream, pitchParams, normalizationGain)
                 : null;
 

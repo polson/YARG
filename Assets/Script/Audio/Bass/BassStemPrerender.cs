@@ -38,8 +38,8 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public static bool Decode(byte[] bytes, int[] indices, BassStemFormat format, List<BassStemSampleJob> jobs,
-            CancellationToken token)
+        public static bool Decode(byte[] bytes, int[] indices, BassStemFormat format,
+            List<(long StartFrame, int FrameCount, float[] Samples)> jobs, CancellationToken token)
         {
             using var stream = new MemoryStream(bytes, false);
             int handle = BassX.CreateSourceUnchecked(stream);
@@ -113,8 +113,8 @@ namespace YARG.Audio.BASS
             }
         }
 
-        private static void CopyChunk(BassStemSampleJob job, float[] buffer, long chunkStart, int chunkFrames, int sourceChannels,
-            int[] channelMap)
+        private static void CopyChunk((long StartFrame, int FrameCount, float[] Samples) job, float[] buffer,
+            long chunkStart, int chunkFrames, int sourceChannels, int[] channelMap)
         {
             long firstFrame = Math.Max(chunkStart, job.StartFrame);
             long lastFrame = Math.Min(chunkStart + chunkFrames, job.StartFrame + job.FrameCount);

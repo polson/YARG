@@ -272,8 +272,7 @@ namespace YARG.Gameplay.Player
                 return;
             }
 
-            _soundboard.RequestSeeds(BassStemSeedSetBuilder.Build(Engine.SoloPhrases,
-                NoteTrack.Notes, GameManager.GetAudioPlaybackTime));
+            _soundboard.RequestSeeds(Engine.SoloPhrases, NoteTrack.Notes, GameManager.GetAudioPlaybackTime);
         }
 
         protected virtual void InitializeIndicatorStripes()
@@ -757,7 +756,7 @@ namespace YARG.Gameplay.Player
         private void HandleOverstrum()
         {
             var soundboard = _soundboard;
-            if (soundboard == null || !BassStemReplayPolicy.ShouldPlayMissFx())
+            if (soundboard == null || !BassStemReplay.ShouldPlayMissFx())
             {
                 return;
             }
