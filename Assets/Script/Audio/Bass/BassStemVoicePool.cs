@@ -13,6 +13,8 @@ namespace YARG.Audio.BASS
     {
         private const int    VOICE_COUNT                         = 12;
         private const int    FLOAT_BYTES                         = sizeof(float);
+        private const double VOICE_FADE_SECONDS                  = 0.08;
+        private const double FREESTYLE_RELEASE_SECONDS           = 0.12;
         private const double FREESTYLE_MIN_TRANSITION_SECONDS    = 0.015;
         private const double FREESTYLE_MAX_TRANSITION_SECONDS    = 0.03;
         private const double FREESTYLE_TRANSITION_INTERVAL_RATIO = 0.25;
@@ -114,25 +116,25 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public void Release(int fretMask, double fadeSeconds)
+        public void Release(int fretMask)
         {
             foreach (var voice in _voices)
             {
                 if (voice.IsPlainSustainFor(fretMask))
                 {
-                    FadeOut(voice, fadeSeconds: fadeSeconds);
+                    FadeOut(voice);
                 }
             }
         }
 
-        public void SetHeldFrets(int fretMask, double fadeSeconds)
+        public void SetHeldFrets(int fretMask)
         {
             _heldFrets = fretMask;
             foreach (var voice in _voices)
             {
                 if (voice.IsLooping && voice.IsReleasedBy(fretMask))
                 {
-                    FadeOut(voice, fadeSeconds: fadeSeconds);
+                    FadeOut(voice);
                 }
             }
         }
@@ -154,13 +156,13 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public void StopAll(double fadeSeconds)
+        public void StopAll()
         {
             foreach (var voice in _voices)
             {
                 if (voice.IsAttached)
                 {
-                    FadeOut(voice, fadeSeconds: fadeSeconds);
+                    FadeOut(voice);
                 }
             }
         }
@@ -321,6 +323,11 @@ namespace YARG.Audio.BASS
             {
                 YargLogger.LogFormatError("Failed to set replay pitch: {0}!", Bass.LastError);
             }
+        }
+
+        private void FadeOut(Voice voice)
+        {
+            FadeOut(voice, fadeSeconds: voice.IsLooping ? FREESTYLE_RELEASE_SECONDS : VOICE_FADE_SECONDS);
         }
 
         private void FadeOut(Voice voice, double fadeSeconds)

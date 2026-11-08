@@ -7,11 +7,8 @@ using YARG.Core.Engine.Guitar;
 
 namespace YARG.Audio.BASS
 {
-    internal sealed class BassStemSoundboard : IDisposable
+    internal sealed class BassStemSoundboard : IFreestyleSoloAudio, IDisposable
     {
-        private const double VOICE_FADE_SECONDS        = 0.08;
-        private const double FREESTYLE_RELEASE_SECONDS = 0.12;
-
         private readonly object               _lock;
         private readonly BassStemClipRecorder _recorder;
         private readonly BassStemSeedLibrary  _seeds;
@@ -25,11 +22,9 @@ namespace YARG.Audio.BASS
             _recorder = new BassStemClipRecorder(replay, replay.Format);
             var renderer = new BassStemSeedRenderer(replay.Format, BassStretchRender.Create,
                 BassStemReplayPolicy.ShouldStretch);
-            _seeds = new BassStemSeedLibrary(replay.Lock, renderer);
+            _seeds = new BassStemSeedLibrary(renderer);
             _voices = new BassStemVoicePool(manager, replay.Format, pitchParams, volume);
         }
-
-        private double ReleaseFadeSeconds => _seeds.IsActive ? FREESTYLE_RELEASE_SECONDS : VOICE_FADE_SECONDS;
 
         public void Record(int key, double noteSeconds, double durationSeconds, bool isSustain)
         {
@@ -46,34 +41,22 @@ namespace YARG.Audio.BASS
 
         public void RequestSeeds(List<BassStemSeedSet> seedSets)
         {
-            lock (_lock)
-            {
-                _seeds.Request(seedSets);
-            }
+            _seeds.Request(seedSets);
         }
 
         public void SelectSeedSet(double soloTime, double songTime)
         {
-            lock (_lock)
-            {
-                _seeds.Select(soloTime, songTime);
-            }
+            _seeds.Select(soloTime, songTime);
         }
 
-        public void ClearSeedSet()
+        public void DeselectSeeds()
         {
-            lock (_lock)
-            {
-                _seeds.ClearSelection();
-            }
+            _seeds.ClearSelection();
         }
 
         public bool HasSeedSet(double soloTime)
         {
-            lock (_lock)
-            {
-                return !_disposed && _seeds.HasSeeds(soloTime);
-            }
+            return _seeds.HasSeeds(soloTime);
         }
 
         public void Play(int key, int semitones, double gain)
@@ -86,7 +69,7 @@ namespace YARG.Audio.BASS
                 }
 
                 _voices.FadePreviousVoices();
-                _voices.Start(clip, key: key, semitones: semitones, gain: gain, loopSustains: _seeds.IsActive);
+                _voices.Start(clip, key: key, semitones: semitones, gain: gain, loopSustains: _seeds.IsSelected);
             }
         }
 
@@ -114,7 +97,7 @@ namespace YARG.Audio.BASS
                     }
 
                     _voices.Start(clip, key: fret, semitones: semitones, gain: fretGain,
-                        loopSustains: _seeds.IsActive);
+                        loopSustains: _seeds.IsSelected);
                 }
             }
         }
@@ -128,7 +111,7 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                _voices.Release(fretMask, ReleaseFadeSeconds);
+                _voices.Release(fretMask);
             }
         }
 
@@ -141,7 +124,7 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                _voices.SetHeldFrets(fretMask, FREESTYLE_RELEASE_SECONDS);
+                _voices.SetHeldFrets(fretMask);
             }
         }
 
@@ -170,8 +153,18 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                _voices.StopAll(ReleaseFadeSeconds);
+                _voices.StopAll();
             }
+        }
+
+        internal void PrepareSeedJobs(List<BassStemSampleJob> jobs)
+        {
+            _seeds.PrepareJobs(jobs);
+        }
+
+        internal void PublishSeeds(CancellationToken token)
+        {
+            _seeds.Publish(token);
         }
 
         internal void Clear()
@@ -202,19 +195,6 @@ namespace YARG.Audio.BASS
             }
         }
 
-        internal void PrepareSeedJobs(List<BassStemSampleJob> jobs)
-        {
-            lock (_lock)
-            {
-                _seeds.PrepareJobs(jobs);
-            }
-        }
-
-        internal void PublishSeeds(CancellationToken token)
-        {
-            _seeds.Publish(token);
-        }
-
         public void Dispose()
         {
             lock (_lock)
@@ -225,13 +205,14 @@ namespace YARG.Audio.BASS
                 }
 
                 _disposed = true;
+                _seeds.Forget();
                 _voices.Dispose();
             }
         }
 
         private bool TryGetPlayableClip(int key, out BassStemClip clip)
         {
-            return _seeds.IsActive
+            return _seeds.IsSelected
                 ? BassStemClipPolicy.TryGetSeedClip(_seeds, key, out clip)
                 : BassStemClipPolicy.TryGetRecordedClip(_recorder, key, out clip);
         }

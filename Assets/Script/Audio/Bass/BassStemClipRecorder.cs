@@ -18,9 +18,9 @@ namespace YARG.Audio.BASS
 
         public void Record(int key, double noteSeconds, double durationSeconds, bool isSustain)
         {
-            long startFrame = _replay.SecondsToFrame(noteSeconds);
+            long startFrame = _replay.RingFrameAt(noteSeconds);
             int frameCount = BassStemClip.FramesFor(_format, durationSeconds);
-            if (frameCount <= 0 || startFrame < _replay.OldestFrame)
+            if (frameCount <= 0 || startFrame < _replay.OldestRingFrame)
             {
                 return;
             }
@@ -103,7 +103,7 @@ namespace YARG.Audio.BASS
         private void Fill(BassStemClip clip)
         {
             long nextFrame = clip.StartFrame + clip.FilledFrames;
-            long endFrame = Math.Min(_replay.CapturedFrames, clip.StartFrame + clip.FrameCount);
+            long endFrame = Math.Min(_replay.CapturedRingFrames, clip.StartFrame + clip.FrameCount);
             if (endFrame <= nextFrame)
             {
                 return;

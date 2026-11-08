@@ -781,7 +781,7 @@ namespace YARG.Gameplay.Player
                 OnNoteSpawned(note);
 
                 // Don't spawn hit or missed notes
-                if (note.WasHit || note.WasMissed || IsAutoPlayed(note))
+                if (note.WasHit || note.WasMissed || IsEnginePlayed(note))
                 {
                     continue;
                 }
@@ -1104,7 +1104,7 @@ namespace YARG.Gameplay.Player
 
         protected virtual void SpawnLanesFromNote(TNote parentNote)
         {
-            if (!Engine.BaseParameters.EnableLanes || IsAutoPlayed(parentNote))
+            if (!Engine.BaseParameters.EnableLanes || IsEnginePlayed(parentNote))
             {
                 return;
             }
@@ -1115,10 +1115,10 @@ namespace YARG.Gameplay.Player
             }
 
             bool containsLaneStart = false;
-            bool followsAutoPlayed = parentNote.PreviousNote != null && IsAutoPlayed(parentNote.PreviousNote);
+            bool followsEnginePlayed = parentNote.PreviousNote != null && IsEnginePlayed(parentNote.PreviousNote);
             foreach (var childNote in parentNote.AllNotes)
             {
-                if (childNote.IsLaneStart || (followsAutoPlayed && childNote.IsLane))
+                if (childNote.IsLaneStart || (followsEnginePlayed && childNote.IsLane))
                 {
                     containsLaneStart = true;
                     break;
@@ -1134,7 +1134,7 @@ namespace YARG.Gameplay.Player
                 var noteRef = parentNote;
                 var thisLaneFlag = parentNote.IsTrill ? NoteFlags.Trill : NoteFlags.Tremolo;
 
-                while (noteRef != null && !IsAutoPlayed(noteRef))
+                while (noteRef != null && !IsEnginePlayed(noteRef))
                 {
                     // Create one lane for single notes, create multiple lanes for non-drum chords
                     bool containsLaneEnd = false;
@@ -1184,7 +1184,7 @@ namespace YARG.Gameplay.Player
                         {
                             if (startTime - existingLane.EndTime <= LaneElement.COMBINE_LANE_THRESHOLD)
                             {
-                                if (CrossesAutoPlayedNote(firstLaneNote.ParentOrSelf, existingLane.EndTime))
+                                if (CrossesEnginePlayedNote(firstLaneNote.ParentOrSelf, existingLane.EndTime))
                                 {
                                     continue;
                                 }
@@ -1195,7 +1195,7 @@ namespace YARG.Gameplay.Player
                                 noteRef = firstLaneNote.PreviousNote;
                                 for (int n = 0; n < notesToSearch; n++)
                                 {
-                                    if (noteRef == null || IsAutoPlayed(noteRef))
+                                    if (noteRef == null || IsEnginePlayed(noteRef))
                                     {
                                         break;
                                     }
@@ -1305,14 +1305,14 @@ namespace YARG.Gameplay.Player
             }
         }
 
-        protected virtual bool IsAutoPlayed(TNote note) => false;
+        protected virtual bool IsEnginePlayed(TNote note) => false;
 
-        private bool CrossesAutoPlayedNote(TNote note, double laneEndTime)
+        private bool CrossesEnginePlayedNote(TNote note, double laneEndTime)
         {
             var previousNote = note.PreviousNote;
             while (previousNote != null && previousNote.Time >= laneEndTime)
             {
-                if (IsAutoPlayed(previousNote))
+                if (IsEnginePlayed(previousNote))
                 {
                     return true;
                 }
@@ -1345,7 +1345,7 @@ namespace YARG.Gameplay.Player
 
         protected virtual void OnNoteHit(int index, TNote note)
         {
-            if (!Player.Profile.IsBot && !IsAutoPlayed(note))
+            if (!Player.Profile.IsBot && !IsEnginePlayed(note))
             {
                 _autoCalibrator.RecordAccuracy(Engine.CurrentTime, note.Time);
             }

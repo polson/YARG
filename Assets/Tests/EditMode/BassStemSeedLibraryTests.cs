@@ -30,7 +30,7 @@ namespace YARG.Tests.EditMode
         private static BassStemSeedLibrary CreateLibrary()
         {
             var renderer = new BassStemSeedRenderer(FORMAT, CreateRender, () => false);
-            var library = new BassStemSeedLibrary(new object(), renderer);
+            var library = new BassStemSeedLibrary(renderer);
             library.Request(new List<BassStemSeedSet>
             {
                 new(startTime: 10.0, endTime: 12.0, notes: CreateNotes()),
@@ -46,7 +46,7 @@ namespace YARG.Tests.EditMode
         public void PrepareJobs_EmitsOneJobPerSeedNote()
         {
             var renderer = new BassStemSeedRenderer(FORMAT, CreateRender, () => false);
-            var library = new BassStemSeedLibrary(new object(), renderer);
+            var library = new BassStemSeedLibrary(renderer);
             library.Request(new List<BassStemSeedSet>
             {
                 new(startTime: 10.0, endTime: 12.0, notes: CreateNotes()),
@@ -74,7 +74,7 @@ namespace YARG.Tests.EditMode
 
             library.Select(soloTime: 10.5, songTime: 10.5);
 
-            Assert.That(library.IsActive, Is.True);
+            Assert.That(library.IsSelected, Is.True);
             Assert.That(library.TryGetClip(1, out var green), Is.True);
             Assert.That(library.TryGetClip(2, out var red), Is.True);
             Assert.That(green, Is.Not.SameAs(red));
@@ -129,7 +129,7 @@ namespace YARG.Tests.EditMode
 
             library.ClearSelection();
 
-            Assert.That(library.IsActive, Is.False);
+            Assert.That(library.IsSelected, Is.False);
             Assert.That(library.TryGetClip(1, out _), Is.False);
             Assert.That(library.TryGetAnyClip(out _), Is.False);
         }

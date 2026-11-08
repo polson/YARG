@@ -37,7 +37,8 @@ namespace YARG.Audio.BASS
 
         internal BassStemFormat Format { get; }
 
-        // Lock order: Lock then _ringLock. OnCapture takes only _ringLock.
+        // Lock order: Lock then _ringLock. OnCapture takes only _ringLock. The pre-render thread
+        // reaches this lock through the soundboards it renders for, never through a second one.
         internal object Lock { get; } = new();
 
         public BassStemReplay(AudioManager manager, int stream, PitchShiftParametersStruct pitchParams, Func<double> normalizationGain)
@@ -49,6 +50,8 @@ namespace YARG.Audio.BASS
             _normalizationGain = normalizationGain;
             Format = new BassStemFormat(frequency: info.Frequency, channels: info.Channels);
             _ringFrames = (int) (RECENT_SECONDS * Format.Frequency);
+
+            // Ring frame 0 is the playback position of the last seek; _originSeconds names it.
             _ring = new float[_ringFrames * Format.Channels];
 
             _captureProc = OnCapture;
@@ -148,7 +151,7 @@ namespace YARG.Audio.BASS
             }
         }
 
-        internal long CapturedFrames => _capturedFrames;
+        internal long CapturedRingFrames => _capturedFrames;
 
         public void Pump()
         {
@@ -161,11 +164,11 @@ namespace YARG.Audio.BASS
             }
         }
 
-        internal long OldestFrame => Math.Max(0, _capturedFrames - _ringFrames);
+        internal long OldestRingFrame => Math.Max(0, _capturedFrames - _ringFrames);
 
-        internal long SecondsToFrame(double seconds)
+        internal long RingFrameAt(double playbackSeconds)
         {
-            return (long) Math.Round((seconds - _originSeconds) * Format.Frequency);
+            return (long) Math.Round((playbackSeconds - _originSeconds) * Format.Frequency);
         }
 
         internal void CopyFrames(long firstFrame, int frameCount, float[] destination, int destinationFrame)

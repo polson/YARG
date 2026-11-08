@@ -13,13 +13,12 @@ namespace YARG.Audio.BASS
                 return false;
             }
 
-            var settings = SettingsManager.Settings;
-            return settings.UseRealisticMissFx.Value || settings.FreestyleSolos.Value;
+            return ShouldPlayMissFx() || FreestyleSolosRequested();
         }
 
         public static bool ShouldPrerender(SongStem stem)
         {
-            return SettingsManager.Settings.FreestyleSolos.Value &&
+            return FreestyleSolosRequested() &&
                 AudioHelpers.PitchBendAllowedStems.Contains(stem);
         }
 
@@ -32,6 +31,17 @@ namespace YARG.Audio.BASS
         {
             return BassStretchRender.IsAvailable() &&
                 SettingsManager.Settings.EffectsMode.Value == EffectsMode.Quality;
+        }
+
+        /// <summary>
+        /// Whether freestyle solo audio is needed this session. A replay follows its recorded engine
+        /// parameters, because the engine replays the solos the recording auto-played.
+        /// </summary>
+        private static bool FreestyleSolosRequested()
+        {
+            var state = GlobalVariables.State;
+            bool replayRequests = (state.IsReplay || state.PlayingWithReplay) && state.ReplayFreestyleSolos;
+            return replayRequests || SettingsManager.Settings.FreestyleSolos.Value;
         }
     }
 }

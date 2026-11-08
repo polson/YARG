@@ -257,8 +257,8 @@ namespace YARG.Gameplay.Player
             {
                 var blackFret = (SixFretGuitarFret)(pair + 1); // Black1=1, Black2=2, Black3=3
                 var whiteFret = (SixFretGuitarFret)(pair + 4); // White1=4, White2=5, White3=6
-                var blackHeld = IsPlayerFretHeld((GuitarAction)((int)blackFret - 1));
-                var whiteHeld = IsPlayerFretHeld((GuitarAction)((int)whiteFret - 1));
+                var blackHeld = IsFretDisplayed((GuitarAction)((int)blackFret - 1));
+                var whiteHeld = IsFretDisplayed((GuitarAction)((int)whiteFret - 1));
                 var fretIndex = (int)blackFret; // Matches _frets dict key (Black1=1)
 
                 _fretArray.SetPressed(fretIndex, blackHeld);
@@ -270,7 +270,7 @@ namespace YARG.Gameplay.Player
         {
             base.OnNoteHit(index, chordParent);
 
-            if (GameManager.Paused || IsAutoPlayed(chordParent)) return;
+            if (GameManager.Paused || IsEnginePlayed(chordParent)) return;
 
             foreach (var note in chordParent.AllNotes)
             {
@@ -344,7 +344,7 @@ namespace YARG.Gameplay.Player
 
         protected override void OnSustainStart(GuitarNote parent)
         {
-            if (IsAutoPlayed(parent))
+            if (IsEnginePlayed(parent))
             {
                 return;
             }
@@ -382,7 +382,7 @@ namespace YARG.Gameplay.Player
 
         protected override void OnSustainEnd(GuitarNote parent, double timeEnded, bool finished)
         {
-            if (IsAutoPlayed(parent))
+            if (IsEnginePlayed(parent))
             {
                 return;
             }

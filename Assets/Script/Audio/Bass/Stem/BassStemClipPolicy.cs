@@ -1,13 +1,6 @@
 #nullable enable
 namespace YARG.Audio.BASS
 {
-    internal interface IBassStemClipSource
-    {
-        bool TryGetClip(int key, out BassStemClip clip);
-        bool TryGetFretClip(int key, out BassStemClip clip);
-        bool TryGetAnyClip(out BassStemClip clip);
-    }
-
     internal static class BassStemClipPolicy
     {
         public static bool TryGetSeedClip(IBassStemClipSource source, int key, out BassStemClip clip)

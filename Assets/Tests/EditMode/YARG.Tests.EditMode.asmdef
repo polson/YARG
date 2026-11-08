@@ -5,6 +5,7 @@
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner",
         "YARG.Audio.Bass.Stem",
+        "YARG.Gameplay.Freestyle",
         "YARG.Core.Package"
     ],
     "includePlatforms": [

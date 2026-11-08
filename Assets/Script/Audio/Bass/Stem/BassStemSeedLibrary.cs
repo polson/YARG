@@ -8,7 +8,8 @@ namespace YARG.Audio.BASS
 {
     internal sealed class BassStemSeedLibrary : IBassStemClipSource
     {
-        private readonly object                _lock;
+        // Lock order: the stem lock (BassStemReplay.Lock) is always taken before this one.
+        private readonly object                _lock = new();
         private readonly BassStemSeedRenderer  _renderer;
         private readonly Random                _random = new();
         private          List<BassStemSeedSet>   _requests  = new();
@@ -17,87 +18,130 @@ namespace YARG.Audio.BASS
         private          BassStemSoloSeeds?      _selected;
         private          double                  _requestedSoloTime;
 
-        public BassStemSeedLibrary(object lockObject, BassStemSeedRenderer renderer)
+        public BassStemSeedLibrary(BassStemSeedRenderer renderer)
         {
-            _lock = lockObject;
             _renderer = renderer;
         }
 
-        public bool IsActive => _selected != null;
+        public bool IsSelected
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _selected != null;
+                }
+            }
+        }
 
         public void Request(List<BassStemSeedSet> seedSets)
         {
-            _requests = seedSets;
+            lock (_lock)
+            {
+                _requests = seedSets;
+            }
         }
 
         public void Select(double soloTime, double songTime)
         {
-            _requestedSoloTime = soloTime;
-            _selected = Find(soloTime);
-            _selected?.Select(songTime);
+            lock (_lock)
+            {
+                _requestedSoloTime = soloTime;
+                _selected = Find(soloTime);
+                _selected?.Select(songTime);
+            }
         }
 
         public void ClearSelection()
         {
-            _selected = null;
+            lock (_lock)
+            {
+                _selected = null;
+            }
+        }
+
+        public void Forget()
+        {
+            lock (_lock)
+            {
+                _requests = new List<BassStemSeedSet>();
+                _pending = new List<BassStemSeedJob>();
+                _published.Clear();
+                _selected = null;
+            }
         }
 
         public bool HasSeeds(double soloTime)
         {
-            var seeds = Find(soloTime);
-            return seeds != null && !seeds.IsEmpty;
+            lock (_lock)
+            {
+                var seeds = Find(soloTime);
+                return seeds != null && !seeds.IsEmpty;
+            }
         }
 
         public bool TryGetClip(int key, out BassStemClip clip)
         {
-            var selected = _selected;
-            if (selected == null)
+            lock (_lock)
             {
-                clip = null!;
-                return false;
-            }
+                var selected = _selected;
+                if (selected == null)
+                {
+                    clip = null!;
+                    return false;
+                }
 
-            if (key != GuitarEngine.OPEN_MASK)
-            {
-                return selected.TryGetClip(key, out clip);
-            }
+                if (key != GuitarEngine.OPEN_MASK)
+                {
+                    return selected.TryGetClip(key, out clip);
+                }
 
-            return TryGetRandomFretClip(selected, out clip) || selected.TryGetAnyClip(out clip);
+                return TryGetRandomFretClip(selected, out clip) || selected.TryGetAnyClip(out clip);
+            }
         }
 
         public bool TryGetFretClip(int key, out BassStemClip clip)
         {
-            var selected = _selected;
-            if (selected != null)
+            lock (_lock)
             {
-                for (int fret = 1; fret <= key; fret <<= 1)
+                var selected = _selected;
+                if (selected != null)
                 {
-                    if ((key & fret) != 0 && selected.TryGetClip(fret, out clip!))
+                    for (int fret = 1; fret <= key; fret <<= 1)
                     {
-                        return true;
+                        if ((key & fret) != 0 && selected.TryGetClip(fret, out clip!))
+                        {
+                            return true;
+                        }
                     }
                 }
-            }
 
-            clip = null!;
-            return false;
+                clip = null!;
+                return false;
+            }
         }
 
         public bool TryGetAnyClip(out BassStemClip clip)
         {
-            var selected = _selected;
-            if (selected != null)
+            lock (_lock)
             {
-                return selected.TryGetAnyClip(out clip);
-            }
+                var selected = _selected;
+                if (selected != null)
+                {
+                    return selected.TryGetAnyClip(out clip);
+                }
 
-            clip = null!;
-            return false;
+                clip = null!;
+                return false;
+            }
         }
 
         public void PrepareJobs(List<BassStemSampleJob> jobs)
         {
-            _pending = _renderer.BuildJobs(_requests, jobs);
+            lock (_lock)
+            {
+                _pending = _renderer.BuildJobs(_requests, jobs);
+            }
         }
 
         public void Publish(CancellationToken token)
@@ -106,13 +150,12 @@ namespace YARG.Audio.BASS
             double requestedSoloTime;
             lock (_lock)
             {
-                _published.Clear();
-                _selected = null;
                 pending = _pending;
                 _pending = new List<BassStemSeedJob>();
                 requestedSoloTime = _requestedSoloTime;
             }
 
+            var published = new List<BassStemSoloSeeds>(pending.Count);
             while (pending.Count > 0)
             {
                 var job = TakeNext(pending, requestedSoloTime);
@@ -121,15 +164,19 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                lock (_lock)
-                {
-                    _published.Add(job.Seeds);
-                }
-
                 if (!_renderer.Stretch(job, token))
                 {
                     return;
                 }
+
+                published.Add(job.Seeds);
+            }
+
+            lock (_lock)
+            {
+                _published.Clear();
+                _published.AddRange(published);
+                _selected = null;
             }
         }
 
