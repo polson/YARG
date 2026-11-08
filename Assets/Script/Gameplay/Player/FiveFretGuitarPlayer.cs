@@ -255,7 +255,14 @@ namespace YARG.Gameplay.Player
             _soundboard = GameManager.CreateStemSoundboard(_stem);
             if (EngineParams.FreestyleSolos)
             {
-                _soundboard?.RequestSeeds(BuildSeedSets());
+                if (_soundboard == null)
+                {
+                    YargLogger.LogWarning("Freestyle solos are enabled for this chart but stem replay is unavailable.");
+                }
+                else
+                {
+                    _soundboard.RequestSeeds(BuildSeedSets());
+                }
             }
         }
 
@@ -737,7 +744,7 @@ namespace YARG.Gameplay.Player
         private void HandleOverstrum()
         {
             var soundboard = _soundboard;
-            if (soundboard == null || !SettingsManager.Settings.UseRealisticMissFx.Value)
+            if (soundboard == null || !BassStemReplayPolicy.ShouldPlayMissFx())
             {
                 return;
             }
@@ -754,8 +761,7 @@ namespace YARG.Gameplay.Player
         private void RecordNote(GuitarNote parent)
         {
             var soundboard = _soundboard;
-            bool soundboardInUse = SettingsManager.Settings.UseRealisticMissFx.Value || EngineParams.FreestyleSolos;
-            if (!soundboardInUse || soundboard == null || IsAutoPlayed(parent))
+            if (soundboard == null || IsAutoPlayed(parent))
             {
                 return;
             }
@@ -983,7 +989,7 @@ namespace YARG.Gameplay.Player
             }
             else
             {
-                PlayFrets(soundboard, HighestFretMask(playMask));
+                PlayFrets(soundboard, BassStemFretMask.Highest(playMask, (int) GetFretActionMax()));
             }
 
             _freestyle.PhraseMask = playMask == 0 ? GuitarEngine.OPEN_MASK : playMask;
@@ -1041,20 +1047,6 @@ namespace YARG.Gameplay.Player
             if (action >= GuitarAction.SoloGreenFret && action <= GuitarAction.SoloOrangeFret)
             {
                 return 1 << (action - GuitarAction.SoloGreenFret);
-            }
-
-            return 0;
-        }
-
-        private int HighestFretMask(int noteMask)
-        {
-            for (int fret = (int) GetFretActionMax(); fret >= 0; fret--)
-            {
-                int mask = 1 << fret;
-                if ((noteMask & mask) != 0)
-                {
-                    return mask;
-                }
             }
 
             return 0;

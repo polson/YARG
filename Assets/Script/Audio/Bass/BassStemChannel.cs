@@ -30,7 +30,7 @@ namespace YARG.Audio.BASS
             _streamHandles = streamHandles;
             _reverbHandles = reverbHandles;
             _pitchParams = pitchParams;
-            _replay = IsReplayEnabled(stem)
+            _replay = BassStemReplayPolicy.ShouldCapture(stem)
                 ? new BassStemReplay(manager, streamHandles.Stream, pitchParams, normalizationGain)
                 : null;
 
@@ -53,17 +53,6 @@ namespace YARG.Audio.BASS
             // Calculate shift
             float shift = Mathf.Pow(2, -(GlobalAudioHandler.WhammyPitchShiftAmount * percent) / 12);
             ApplyPitchShift(shift);
-        }
-
-        private static bool IsReplayEnabled(SongStem stem)
-        {
-            if (!AudioHelpers.PitchBendAllowedStems.Contains(stem))
-            {
-                return false;
-            }
-
-            var settings = SettingsManager.Settings;
-            return settings.UseRealisticMissFx.Value || settings.FreestyleSolos.Value;
         }
 
         internal BassStemSoundboard CreateSoundboard(Func<double> stemVolume)

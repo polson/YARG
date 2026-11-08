@@ -101,7 +101,6 @@ namespace YARG.Audio.BASS
         public void PrepareJobs(List<BassStemSampleJob> jobs)
         {
             _pending = _renderer.BuildJobs(_requests, jobs);
-            _requests = new List<BassStemSeedSet>();
         }
 
         public void Publish(CancellationToken token)

@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Threading;
 using YARG.Core.Audio;
 using YARG.Core.Engine.Guitar;
-using YARG.Settings;
 
 namespace YARG.Audio.BASS
 {
@@ -19,13 +18,14 @@ namespace YARG.Audio.BASS
         private readonly BassStemVoicePool    _voices;
         private          bool                 _disposed;
 
-        internal BassStemSoundboard(BassStemReplay replay, object lockObject, AudioManager manager,
+        internal BassStemSoundboard(BassStemReplay replay, AudioManager manager,
             PitchShiftParametersStruct pitchParams, Func<double> volume)
         {
-            _lock = lockObject;
+            _lock = replay.Lock;
             _recorder = new BassStemClipRecorder(replay, replay.Format);
-            var renderer = new BassStemSeedRenderer(replay.Format, BassStretchRender.Create, StretchAvailable);
-            _seeds = new BassStemSeedLibrary(lockObject, renderer);
+            var renderer = new BassStemSeedRenderer(replay.Format, BassStretchRender.Create,
+                BassStemReplayPolicy.ShouldStretch);
+            _seeds = new BassStemSeedLibrary(replay.Lock, renderer);
             _voices = new BassStemVoicePool(manager, replay.Format, pitchParams, volume);
         }
 
@@ -100,7 +100,7 @@ namespace YARG.Audio.BASS
                 }
 
                 _voices.FadePreviousVoices();
-                double fretGain = gain / Math.Sqrt(CountFrets(fretMask));
+                double fretGain = gain / Math.Sqrt(BassStemFretMask.Count(fretMask));
                 for (int fret = 1; fret < GuitarEngine.OPEN_MASK; fret <<= 1)
                 {
                     if ((fretMask & fret) == 0)
@@ -234,26 +234,6 @@ namespace YARG.Audio.BASS
             return _seeds.IsActive
                 ? BassStemClipPolicy.TryGetSeedClip(_seeds, key, out clip)
                 : BassStemClipPolicy.TryGetRecordedClip(_recorder, key, out clip);
-        }
-
-        private static bool StretchAvailable()
-        {
-            return BassStretchRender.IsAvailable() &&
-                SettingsManager.Settings.EffectsMode.Value == EffectsMode.Quality;
-        }
-
-        private static int CountFrets(int fretMask)
-        {
-            int count = 0;
-            for (int fret = 1; fret < GuitarEngine.OPEN_MASK; fret <<= 1)
-            {
-                if ((fretMask & fret) != 0)
-                {
-                    count++;
-                }
-            }
-
-            return count;
         }
     }
 }

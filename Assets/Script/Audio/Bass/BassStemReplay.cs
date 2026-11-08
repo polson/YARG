@@ -27,7 +27,6 @@ namespace YARG.Audio.BASS
         private readonly PitchShiftParametersStruct _pitchParams;
         private readonly Func<double>               _normalizationGain;
         private readonly List<BassStemSoundboard>   _soundboards = new();
-        private readonly object                     _lock = new();
         private readonly object                     _ringLock = new();
         private          long                       _capturedFrames;
         private          double                     _originSeconds;
@@ -37,6 +36,8 @@ namespace YARG.Audio.BASS
         private          Task                       _prerenderTask = Task.CompletedTask;
 
         internal BassStemFormat Format { get; }
+
+        internal object Lock { get; } = new();
 
         public BassStemReplay(AudioManager manager, int stream, PitchShiftParametersStruct pitchParams, Func<double> normalizationGain)
         {
@@ -59,9 +60,9 @@ namespace YARG.Audio.BASS
 
         public BassStemSoundboard CreateSoundboard(Func<double> stemVolume)
         {
-            var soundboard = new BassStemSoundboard(this, _lock, _manager, _pitchParams,
+            var soundboard = new BassStemSoundboard(this, _manager, _pitchParams,
                 () => stemVolume() * _normalizationGain());
-            lock (_lock)
+            lock (Lock)
             {
                 _soundboards.Add(soundboard);
             }
@@ -78,7 +79,6 @@ namespace YARG.Audio.BASS
         public void StartPrerender()
         {
             var bytes = _prerenderBytes;
-            _prerenderBytes = null;
             if (bytes == null || _prerenderCts != null)
             {
                 return;
@@ -86,7 +86,7 @@ namespace YARG.Audio.BASS
 
             var jobs = new List<BassStemSampleJob>();
             var soundboards = new List<BassStemSoundboard>();
-            lock (_lock)
+            lock (Lock)
             {
                 foreach (var soundboard in _soundboards)
                 {
@@ -101,9 +101,11 @@ namespace YARG.Audio.BASS
 
             if (jobs.Count == 0)
             {
+                YargLogger.LogWarning("No freestyle seeds were registered for stem pre-rendering.");
                 return;
             }
 
+            _prerenderBytes = null;
             var indices = _prerenderIndices;
             _prerenderCts = new CancellationTokenSource();
             var token = _prerenderCts.Token;
@@ -130,7 +132,7 @@ namespace YARG.Audio.BASS
 
         public void ResetAfterSeek(double seconds)
         {
-            lock (_lock)
+            lock (Lock)
             {
                 lock (_ringLock)
                 {
@@ -149,7 +151,7 @@ namespace YARG.Audio.BASS
 
         public void Pump()
         {
-            lock (_lock)
+            lock (Lock)
             {
                 foreach (var soundboard in _soundboards)
                 {
@@ -199,7 +201,7 @@ namespace YARG.Audio.BASS
             }
 
             BassStemSoundboard[] soundboards;
-            lock (_lock)
+            lock (Lock)
             {
                 soundboards = _soundboards.ToArray();
                 _soundboards.Clear();
