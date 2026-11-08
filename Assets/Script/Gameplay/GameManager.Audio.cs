@@ -217,17 +217,23 @@ namespace YARG.Gameplay
 
         private void StartStemPrerenders()
         {
-            foreach (var channel in StemChannels())
+            for (int index = 0; index < _mixer.Channels.Count; index++)
             {
-                channel.StartPrerender();
+                if (_mixer.Channels[index] is BassStemChannel channel)
+                {
+                    channel.StartPrerender();
+                }
             }
         }
 
         private void PumpStemSoundboards()
         {
-            foreach (var channel in StemChannels())
+            for (int index = 0; index < _mixer.Channels.Count; index++)
             {
-                channel.PumpReplay();
+                if (_mixer.Channels[index] is BassStemChannel channel)
+                {
+                    channel.PumpReplay();
+                }
             }
         }
 
@@ -239,22 +245,6 @@ namespace YARG.Gameplay
             }
 
             return GetStemChannel(stem)?.CreateSoundboard(() => _stemStates[stem].Volume);
-        }
-
-        private IEnumerable<BassStemChannel> StemChannels()
-        {
-            if (_mixer == null)
-            {
-                yield break;
-            }
-
-            foreach (var channel in _mixer.Channels)
-            {
-                if (channel is BassStemChannel bassChannel)
-                {
-                    yield return bassChannel;
-                }
-            }
         }
 
         private BassStemChannel GetStemChannel(SongStem stem)

@@ -872,13 +872,12 @@ namespace YARG.Gameplay.Player
                 return Engine.IsFretHeld(action);
             }
 
-            int inputMask = Engine.InputButtonMask | (Engine.InputButtonMask >> (int) GuitarAction.SoloGreenFret);
-            return (inputMask & (1 << (int) action)) != 0;
+            return (Engine.PlayerButtonMask & (1 << (int) action)) != 0;
         }
 
         protected override bool IsAutoPlayed(GuitarNote note)
         {
-            return EngineParams.FreestyleSolos && note.ParentOrSelf.IsSolo;
+            return Engine.IsAutoPlayed(note.ParentOrSelf);
         }
 
         private bool IsInFreestyleSolo()

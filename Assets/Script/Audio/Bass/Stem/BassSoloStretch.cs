@@ -41,12 +41,14 @@ namespace YARG.Audio.BASS
             long maxSpan = format.FramesFor(MAX_SPAN_SECONDS);
             var spans = new List<List<BassSoloStretchTarget>>();
             long spanStart = 0;
-            long spanEnd = 0;
+            long spanCoverage = 0;
             foreach (var target in targets)
             {
-                long gapFromSpanEnd = target.BodyStartFrame - spanEnd;
+                long gapFromCoverage = target.BodyStartFrame - spanCoverage;
                 long spanLength = target.BodyStartFrame - spanStart;
-                bool startsNewSpan = spans.Count == 0 || gapFromSpanEnd > maxGap || spanLength > maxSpan;
+                bool gapTooBig = gapFromCoverage > maxGap;
+                bool spanTooLong = spanLength > maxSpan;
+                bool startsNewSpan = spans.Count == 0 || gapTooBig || spanTooLong;
                 if (startsNewSpan)
                 {
                     spans.Add(new List<BassSoloStretchTarget>());
@@ -54,7 +56,7 @@ namespace YARG.Audio.BASS
                 }
 
                 spans[spans.Count - 1].Add(target);
-                spanEnd = Math.Max(spanEnd, target.BodyStartFrame + target.BodyFrames);
+                spanCoverage = Math.Max(spanCoverage, target.BodyStartFrame + target.BodyFrames);
             }
             return spans;
         }

@@ -16,7 +16,6 @@ namespace YARG.Audio.BASS
         private          List<BassStemSoloSeeds> _published = new();
         private          BassStemSoloSeeds?      _selected;
         private          double                  _requestedSoloTime;
-        private          bool                    _active;
 
         public BassStemSeedLibrary(object lockObject, BassStemSeedRenderer renderer)
         {
@@ -24,7 +23,7 @@ namespace YARG.Audio.BASS
             _renderer = renderer;
         }
 
-        public bool IsActive => _active;
+        public bool IsActive => _selected != null;
 
         public void Request(List<BassStemSeedSet> seedSets)
         {
@@ -33,7 +32,6 @@ namespace YARG.Audio.BASS
 
         public void Select(double soloTime, double songTime)
         {
-            _active = true;
             _requestedSoloTime = soloTime;
             _selected = Find(soloTime);
             _selected?.Select(songTime);
@@ -41,7 +39,6 @@ namespace YARG.Audio.BASS
 
         public void ClearSelection()
         {
-            _active = false;
             _selected = null;
         }
 
