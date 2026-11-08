@@ -37,6 +37,7 @@ namespace YARG.Audio.BASS
 
         internal BassStemFormat Format { get; }
 
+        // Lock order: Lock then _ringLock. OnCapture takes only _ringLock.
         internal object Lock { get; } = new();
 
         public BassStemReplay(AudioManager manager, int stream, PitchShiftParametersStruct pitchParams, Func<double> normalizationGain)
