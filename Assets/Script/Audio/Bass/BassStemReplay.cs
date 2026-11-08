@@ -225,18 +225,13 @@ namespace YARG.Audio.BASS
                 return false;
             }
 
-            return ShouldPlayMissFx() || FreestyleSolosRequested();
+            return FreestyleSolosRequested();
         }
 
         public static bool ShouldPrerender(SongStem stem)
         {
             return FreestyleSolosRequested() &&
                 AudioHelpers.PitchBendAllowedStems.Contains(stem);
-        }
-
-        public static bool ShouldPlayMissFx()
-        {
-            return SettingsManager.Settings.UseRealisticMissFx.Value;
         }
 
         public static bool ShouldStretch()

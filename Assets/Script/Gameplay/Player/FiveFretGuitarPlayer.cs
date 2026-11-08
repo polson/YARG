@@ -719,8 +719,6 @@ namespace YARG.Gameplay.Player
                 }
             }
 
-            HandleOverstrum();
-
             // Play miss animation for every held fret that does not match the current note
             bool anyHeld = false;
             for (var action = GuitarAction.GreenFret; action <= GetFretActionMax(); action++)
@@ -753,19 +751,6 @@ namespace YARG.Gameplay.Player
             }
         }
 
-        private void HandleOverstrum()
-        {
-            var soundboard = _soundboard;
-            if (soundboard == null || !BassStemReplay.ShouldPlayMissFx())
-            {
-                return;
-            }
-
-            soundboard.DeselectSeeds();
-            int heldMask = GetHeldFretMask();
-            soundboard.Play(heldMask == 0 ? GuitarEngine.OPEN_MASK : heldMask, semitones: 0, gain: 1);
-        }
-
         private void RecordNote(GuitarNote parent)
         {
             var soundboard = _soundboard;
@@ -776,11 +761,6 @@ namespace YARG.Gameplay.Player
 
             soundboard.Record(parent.NoteMask, GameManager.GetAudioPlaybackTime(parent.Time),
                 BassStemNote.ClipDuration(parent), BassStemNote.HasSustain(parent));
-        }
-
-        private int GetHeldFretMask()
-        {
-            return Engine.PlayerButtonMask & AllFretRows;
         }
 
         protected bool IsFretDisplayed(GuitarAction action)

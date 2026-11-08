@@ -93,14 +93,6 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public void ClearSelection()
-        {
-            lock (_lock)
-            {
-                _selected = null;
-            }
-        }
-
         public void Forget()
         {
             lock (_lock)

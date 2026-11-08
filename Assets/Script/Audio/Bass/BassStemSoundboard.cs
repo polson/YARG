@@ -50,11 +50,6 @@ namespace YARG.Audio.BASS
             _seeds.Select(soloTime, songTime);
         }
 
-        public void DeselectSeeds()
-        {
-            _seeds.ClearSelection();
-        }
-
         public bool HasSeedSet(double soloTime)
         {
             return _seeds.HasSeeds(soloTime);

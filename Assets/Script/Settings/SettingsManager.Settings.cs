@@ -548,8 +548,6 @@ namespace YARG.Settings
 
             public ToggleSetting OverstrumAndOverhitSoundEffects { get; } = new(true);
 
-            public ToggleSetting UseRealisticMissFx { get; } = new(false);
-
             public ToggleSetting FreestyleSolos { get; } = new(false);
 
             public ToggleSetting AlwaysOnDrumSFX { get; } = new(false);
