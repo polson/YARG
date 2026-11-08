@@ -6,7 +6,7 @@ using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
 {
-    internal sealed class BassStretchRender : SafeHandleZeroOrMinusOneIsInvalid
+    internal sealed class BassStretchRender : SafeHandleZeroOrMinusOneIsInvalid, IBassStretchRender
     {
         private BassStretchRender() : base(true)
         {
@@ -54,7 +54,7 @@ namespace YARG.Audio.BASS
             }
         }
 
-        internal unsafe bool Begin(float[] input, int channels, long startFrame)
+        public unsafe bool Begin(float[] input, int channels, long startFrame)
         {
             fixed (float* source = input)
             {
@@ -63,7 +63,7 @@ namespace YARG.Audio.BASS
             }
         }
 
-        internal unsafe bool Read(float[] input, int channels, long outputFrame, float[] output)
+        public unsafe bool Read(float[] input, int channels, long outputFrame, float[] output)
         {
             fixed (float* source = input)
             fixed (float* destination = output)

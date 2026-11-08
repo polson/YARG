@@ -13,20 +13,6 @@ namespace YARG.Audio.BASS
         private const int CHUNK_FRAMES = 16384;
         private const int FLOAT_BYTES  = sizeof(float);
 
-        internal sealed class Job
-        {
-            public readonly long    StartFrame;
-            public readonly int     FrameCount;
-            public readonly float[] Samples;
-
-            public Job(long startFrame, int frameCount, float[] samples)
-            {
-                StartFrame = startFrame;
-                FrameCount = frameCount;
-                Samples = samples;
-            }
-        }
-
         public static byte[]? CopyStream(Stream original)
         {
             if (!original.CanRead || !original.CanSeek)
@@ -52,7 +38,7 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public static bool Decode(byte[] bytes, int[] indices, int frequency, int channelCount, List<Job> jobs,
+        public static bool Decode(byte[] bytes, int[] indices, BassStemFormat format, List<BassStemSampleJob> jobs,
             CancellationToken token)
         {
             using var stream = new MemoryStream(bytes, false);
@@ -68,10 +54,10 @@ namespace YARG.Audio.BASS
                 Bass.ChannelGetInfo(handle, out ChannelInfo info);
                 int sourceChannels = info.Channels;
                 int[] channelMap = indices.Length > 0 ? indices : CreateIdentityMap(sourceChannels);
-                if (info.Frequency != frequency || channelMap.Length != channelCount)
+                if (info.Frequency != format.Frequency || channelMap.Length != format.Channels)
                 {
                     YargLogger.LogFormatError("Pre-rendered stem format ({0} Hz, {1} channels) does not match playback ({2} Hz, {3} channels)!",
-                        info.Frequency, channelMap.Length, frequency, channelCount);
+                        info.Frequency, channelMap.Length, format.Frequency, format.Channels);
                     return false;
                 }
 
@@ -93,7 +79,8 @@ namespace YARG.Audio.BASS
                         return false;
                     }
 
-                    int bytesRead = Bass.ChannelGetData(handle, buffer, (buffer.Length * FLOAT_BYTES) | (int) DataFlags.Float);
+                    int byteCount = buffer.Length * FLOAT_BYTES;
+                    int bytesRead = Bass.ChannelGetData(handle, buffer, byteCount | (int) DataFlags.Float);
                     if (bytesRead <= 0)
                     {
                         break;
@@ -126,7 +113,7 @@ namespace YARG.Audio.BASS
             }
         }
 
-        private static void CopyChunk(Job job, float[] buffer, long chunkStart, int chunkFrames, int sourceChannels,
+        private static void CopyChunk(BassStemSampleJob job, float[] buffer, long chunkStart, int chunkFrames, int sourceChannels,
             int[] channelMap)
         {
             long firstFrame = Math.Max(chunkStart, job.StartFrame);

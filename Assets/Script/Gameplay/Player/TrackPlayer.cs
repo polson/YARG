@@ -1184,18 +1184,7 @@ namespace YARG.Gameplay.Player
                         {
                             if (startTime - existingLane.EndTime <= LaneElement.COMBINE_LANE_THRESHOLD)
                             {
-                                bool crossesAutoPlayed = false;
-                                var previousNote = firstLaneNote.ParentOrSelf.PreviousNote;
-                                while (previousNote != null && previousNote.Time >= existingLane.EndTime)
-                                {
-                                    if (IsAutoPlayed(previousNote))
-                                    {
-                                        crossesAutoPlayed = true;
-                                        break;
-                                    }
-                                    previousNote = previousNote.PreviousNote;
-                                }
-                                if (crossesAutoPlayed)
+                                if (CrossesAutoPlayedNote(firstLaneNote.ParentOrSelf, existingLane.EndTime))
                                 {
                                     continue;
                                 }
@@ -1317,6 +1306,22 @@ namespace YARG.Gameplay.Player
         }
 
         protected virtual bool IsAutoPlayed(TNote note) => false;
+
+        private bool CrossesAutoPlayedNote(TNote note, double laneEndTime)
+        {
+            var previousNote = note.PreviousNote;
+            while (previousNote != null && previousNote.Time >= laneEndTime)
+            {
+                if (IsAutoPlayed(previousNote))
+                {
+                    return true;
+                }
+
+                previousNote = previousNote.PreviousNote;
+            }
+
+            return false;
+        }
 
         protected void SpawnNote(TNote note)
         {

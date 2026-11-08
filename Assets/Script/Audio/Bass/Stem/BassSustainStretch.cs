@@ -16,28 +16,29 @@ namespace YARG.Audio.BASS
         private const float SHORT_BODY_SPEED = 0.15f;
         private const float BODY_SPEED = 0.25f;
 
-        internal static bool TryRender(float[] samples, int frequency, int channels,
+        internal static bool TryRender(float[] samples, BassStemFormat format,
             out float[] rendered, out int bodyStartFrame)
         {
             rendered = Array.Empty<float>();
             bodyStartFrame = 0;
+            int channels = format.Channels;
             int frameCount = samples.Length / channels;
-            if (frameCount < MIN_CAPTURE_SECONDS * frequency || frameCount > MAX_CAPTURE_SECONDS * frequency)
+            if (frameCount < MIN_CAPTURE_SECONDS * format.Frequency ||
+                frameCount > MAX_CAPTURE_SECONDS * format.Frequency)
             {
                 return false;
             }
 
-            int attackFrames = FindAttackEnd(samples, frequency, channels);
+            int attackFrames = FindAttackEnd(samples, format);
             int sustainFrames = frameCount - attackFrames;
-            float speed = sustainFrames < SHORT_BODY_SECONDS * frequency ? SHORT_BODY_SPEED : BODY_SPEED;
+            float speed = sustainFrames < SHORT_BODY_SECONDS * format.Frequency ? SHORT_BODY_SPEED : BODY_SPEED;
             int bodyFrames = (int) Math.Round(sustainFrames / (double) speed);
-            int grainFrames = (int) Math.Round(GRAIN_SECONDS * frequency);
-            grainFrames = Math.Min(grainFrames, sustainFrames / 2);
+            int grainFrames = Math.Min(format.FramesFor(GRAIN_SECONDS), sustainFrames / 2);
             int overlapFrames = grainFrames / 2;
             int hopFrames = grainFrames - overlapFrames;
-            int searchFrames = (int) Math.Round(SEARCH_SECONDS * frequency);
-            int searchStep = Math.Max(1, frequency / 2000);
-            int sampleStep = Math.Max(1, frequency / 8000);
+            int searchFrames = format.FramesFor(SEARCH_SECONDS);
+            int searchStep = Math.Max(1, format.Frequency / 2000);
+            int sampleStep = Math.Max(1, format.Frequency / 8000);
             int channel = FindLoudestChannel(samples, channels, firstFrame: attackFrames);
             int lastSource = frameCount - grainFrames;
             var fade = new float[overlapFrames];
@@ -75,15 +76,15 @@ namespace YARG.Audio.BASS
             return true;
         }
 
-        internal static int FindLoopStart(float[] samples, int frequency, int channels, int firstFrame,
+        internal static int FindLoopStart(float[] samples, BassStemFormat format, int firstFrame,
             int tailFrame, int fadeFrames)
         {
-            int searchFrames = (int) Math.Round(SEARCH_SECONDS * frequency);
+            int searchFrames = format.FramesFor(SEARCH_SECONDS);
             int lastFrame = Math.Min(firstFrame + searchFrames, tailFrame - fadeFrames);
-            int channel = FindLoudestChannel(samples, channels, firstFrame);
-            return FindMatch(samples, samples, channels, channel, outputFrame: tailFrame,
+            int channel = FindLoudestChannel(samples, format.Channels, firstFrame);
+            return FindMatch(samples, samples, format.Channels, channel, outputFrame: tailFrame,
                 firstFrame: firstFrame, lastFrame: lastFrame, targetFrame: firstFrame, frames: fadeFrames,
-                searchStep: Math.Max(1, frequency / 2000), sampleStep: Math.Max(1, frequency / 8000));
+                searchStep: Math.Max(1, format.Frequency / 2000), sampleStep: Math.Max(1, format.Frequency / 8000));
         }
 
         private static int FindLoudestChannel(float[] samples, int channels, int firstFrame)
@@ -126,8 +127,9 @@ namespace YARG.Audio.BASS
 
             int coarseFrame = bestFrame;
             bestScore = double.MaxValue;
-            for (int candidate = Math.Max(firstFrame, coarseFrame - searchStep);
-                candidate <= Math.Min(lastFrame, coarseFrame + searchStep); candidate++)
+            int firstCandidate = Math.Max(firstFrame, coarseFrame - searchStep);
+            int lastCandidate = Math.Min(lastFrame, coarseFrame + searchStep);
+            for (int candidate = firstCandidate; candidate <= lastCandidate; candidate++)
             {
                 double score = MatchError(samples, output, channels, channel, sourceFrame: candidate,
                     outputFrame: outputFrame, frames: frames, sampleStep: 1);
@@ -157,13 +159,13 @@ namespace YARG.Audio.BASS
             return energy > 0 ? error / energy : 0;
         }
 
-        internal static int FindAttackEnd(float[] samples, int frequency, int channels)
+        internal static int FindAttackEnd(float[] samples, BassStemFormat format)
         {
+            int channels = format.Channels;
             int frameCount = samples.Length / channels;
-            int blockFrames = (int) Math.Round(ANALYSIS_BLOCK_SECONDS * frequency);
-            int minAttackFrames = (int) Math.Round(MIN_ATTACK_SECONDS * frequency);
-            int maxAttackFrames = (int) Math.Round(MAX_ATTACK_SECONDS * frequency);
-            maxAttackFrames = Math.Min(maxAttackFrames, frameCount * 2 / 3);
+            int blockFrames = format.FramesFor(ANALYSIS_BLOCK_SECONDS);
+            int minAttackFrames = format.FramesFor(MIN_ATTACK_SECONDS);
+            int maxAttackFrames = Math.Min(format.FramesFor(MAX_ATTACK_SECONDS), frameCount * 2 / 3);
             int blockCount = maxAttackFrames / blockFrames;
             var powers = new double[blockCount];
             int peakBlock = 0;

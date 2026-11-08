@@ -13,6 +13,7 @@ namespace YARG.Gameplay
     public partial class GameManager
     {
         private const double DEFAULT_VOLUME = 1.0;
+
         public class StemState
         {
             private SongStem _stem;
@@ -214,24 +215,6 @@ namespace YARG.Gameplay
             GlobalAudioHandler.SetWhammyPitchSetting(stem, percentActive);
         }
 
-        public bool CanShiftStemPitch(SongStem stem)
-        {
-            return stem != _backgroundStem && _mixer?[stem] is BassStemChannel channel && channel.CanPitchShift;
-        }
-
-        public void ChangeStemWrongNote(SongStem stem, int semitones)
-        {
-            if (stem == _backgroundStem)
-            {
-                return;
-            }
-
-            if (_mixer?[stem] is BassStemChannel channel)
-            {
-                channel.SetWrongNote(semitones);
-            }
-        }
-
         private void StartStemPrerenders()
         {
             if (_mixer == null)
@@ -245,7 +228,20 @@ namespace YARG.Gameplay
             }
         }
 
-        public BassStemSoundboard CreateStemSoundboard(SongStem stem)
+        private void PumpStemSoundboards()
+        {
+            if (_mixer == null)
+            {
+                return;
+            }
+
+            foreach (var channel in _mixer.Channels)
+            {
+                (channel as BassStemChannel)?.PumpReplay();
+            }
+        }
+
+        internal BassStemSoundboard CreateStemSoundboard(SongStem stem)
         {
             if (stem == _backgroundStem)
             {

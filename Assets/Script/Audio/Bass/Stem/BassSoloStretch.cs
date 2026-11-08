@@ -14,24 +14,11 @@ namespace YARG.Audio.BASS
         private const double MAX_GAP_SECONDS  = 0.5;
         private const double MAX_SPAN_SECONDS = 4.0;
 
-        internal sealed class Target
-        {
-            public readonly long BodyStartFrame;
-            public readonly int  BodyFrames;
-            public float[]?      Output;
-
-            public Target(long bodyStartFrame, int bodyFrames)
-            {
-                BodyStartFrame = bodyStartFrame;
-                BodyFrames = bodyFrames;
-            }
-        }
-
-        internal static void Render(float[] region, int frequency, int channels, List<Target> targets,
-            CancellationToken token)
+        internal static void Render(float[] region, BassStemFormat format, List<BassSoloStretchTarget> targets,
+            CancellationToken token, BassStretchRenderFactory createRender)
         {
             targets.Sort((left, right) => left.BodyStartFrame.CompareTo(right.BodyStartFrame));
-            var spans = SplitSpans(targets, frequency);
+            var spans = SplitSpans(targets, format);
             var options = new ParallelOptions
             {
                 MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2),
@@ -43,43 +30,46 @@ namespace YARG.Audio.BASS
                     state.Stop();
                     return;
                 }
-                RenderSpan(region, frequency, channels, span, token);
+                RenderSpan(region, format, span, token, createRender);
             });
         }
 
-        private static List<List<Target>> SplitSpans(List<Target> targets, int frequency)
+        private static List<List<BassSoloStretchTarget>> SplitSpans(List<BassSoloStretchTarget> targets,
+            BassStemFormat format)
         {
-            long maxGap = (long) Math.Round(MAX_GAP_SECONDS * frequency);
-            long maxSpan = (long) Math.Round(MAX_SPAN_SECONDS * frequency);
-            var spans = new List<List<Target>>();
-            List<Target>? span = null;
+            long maxGap = format.FramesFor(MAX_GAP_SECONDS);
+            long maxSpan = format.FramesFor(MAX_SPAN_SECONDS);
+            var spans = new List<List<BassSoloStretchTarget>>();
             long spanStart = 0;
             long spanEnd = 0;
             foreach (var target in targets)
             {
-                if (span == null || target.BodyStartFrame - spanEnd > maxGap ||
-                    target.BodyStartFrame - spanStart > maxSpan)
+                long gapFromSpanEnd = target.BodyStartFrame - spanEnd;
+                long spanLength = target.BodyStartFrame - spanStart;
+                bool startsNewSpan = spans.Count == 0 || gapFromSpanEnd > maxGap || spanLength > maxSpan;
+                if (startsNewSpan)
                 {
-                    span = new List<Target>();
-                    spans.Add(span);
+                    spans.Add(new List<BassSoloStretchTarget>());
                     spanStart = target.BodyStartFrame;
                 }
-                span.Add(target);
+
+                spans[spans.Count - 1].Add(target);
                 spanEnd = Math.Max(spanEnd, target.BodyStartFrame + target.BodyFrames);
             }
             return spans;
         }
 
-        private static void RenderSpan(float[] region, int frequency, int channels, List<Target> span,
-            CancellationToken token)
+        private static void RenderSpan(float[] region, BassStemFormat format, List<BassSoloStretchTarget> span,
+            CancellationToken token, BassStretchRenderFactory createRender)
         {
-            using var render = BassStretchRender.Create(channels, frequency, SPEED);
+            int channels = format.Channels;
+            using var render = createRender(channels, format.Frequency, SPEED);
             if (render == null)
             {
                 return;
             }
 
-            long preroll = (long) Math.Round(PREROLL_SECONDS * frequency);
+            long preroll = format.FramesFor(PREROLL_SECONDS);
             long startFrame = 0;
             long nextOutputFrame = 0;
             bool started = false;

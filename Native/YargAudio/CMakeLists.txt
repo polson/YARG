@@ -118,7 +118,7 @@ if(YARG_AUDIO_BUILD_TESTS)
         src/ReadAheadStream.cpp
         src/RenderAheadMixer.cpp
         src/stretch/StretchRender.cpp
-    src/stretch/StretchTempoStream.cpp
+        src/stretch/StretchTempoStream.cpp
     )
     target_compile_features(yarg_audio_tests PRIVATE cxx_std_20)
     target_include_directories(yarg_audio_tests PRIVATE include src)

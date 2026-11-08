@@ -12,8 +12,6 @@ namespace YARG.Audio.BASS
 {
     public sealed class BassStemChannel : StemChannel
     {
-        private const int WRONG_NOTE_FADE_MILLISECONDS = 500;
-
         private readonly int                        _sourceHandle;
         private          StreamHandle               _streamHandles;
         private          StreamHandle               _reverbHandles;
@@ -32,7 +30,9 @@ namespace YARG.Audio.BASS
             _streamHandles = streamHandles;
             _reverbHandles = reverbHandles;
             _pitchParams = pitchParams;
-            _replay = AudioHelpers.PitchBendAllowedStems.Contains(stem) ? new BassStemReplay(manager, streamHandles.Stream, pitchParams, normalizationGain) : null;
+            _replay = IsReplayEnabled(stem)
+                ? new BassStemReplay(manager, streamHandles.Stream, pitchParams, normalizationGain)
+                : null;
 
             _length = Bass.ChannelGetLength(_streamHandles.Stream);
             if (_length < 0)
@@ -55,31 +55,18 @@ namespace YARG.Audio.BASS
             ApplyPitchShift(shift);
         }
 
-        public bool CanPitchShift => _streamHandles.PitchFX != 0;
-
-        public void SetWrongNote(int semitones)
+        private static bool IsReplayEnabled(SongStem stem)
         {
-            lock (this)
+            if (!AudioHelpers.PitchBendAllowedStems.Contains(stem))
             {
-                if (_streamHandles.PitchFX == 0)
-                {
-                    return;
-                }
-
-                if (semitones == 0)
-                {
-                    ApplyPitchShift(1f);
-                    SetVolume_Internal(_volume);
-                    return;
-                }
-
-                ApplyPitchShift(Mathf.Pow(2, semitones / 12f));
-                SetVolume_Internal(_volume);
-                FadeOutStreams();
+                return false;
             }
+
+            var settings = SettingsManager.Settings;
+            return settings.UseRealisticMissFx.Value || settings.FreestyleSolos.Value;
         }
 
-        public BassStemSoundboard CreateSoundboard(Func<double> stemVolume)
+        internal BassStemSoundboard CreateSoundboard(Func<double> stemVolume)
         {
             return _replay?.CreateSoundboard(stemVolume);
         }
@@ -89,22 +76,14 @@ namespace YARG.Audio.BASS
             _replay?.SetPrerenderSource(bytes, indices);
         }
 
-        public void StartPrerender()
+        internal void StartPrerender()
         {
             _replay?.StartPrerender();
         }
 
-        private void FadeOutStreams()
+        internal void PumpReplay()
         {
-            if (!Bass.ChannelSlideAttribute(_streamHandles.Stream, ChannelAttribute.Volume, 0f, WRONG_NOTE_FADE_MILLISECONDS))
-            {
-                YargLogger.LogFormatError("Failed to fade stem: {0}!", Bass.LastError);
-            }
-
-            if (!Bass.ChannelSlideAttribute(_reverbHandles.Stream, ChannelAttribute.Volume, 0f, WRONG_NOTE_FADE_MILLISECONDS))
-            {
-                YargLogger.LogFormatError("Failed to fade reverb: {0}!", Bass.LastError);
-            }
+            _replay?.Pump();
         }
 
         private void ApplyPitchShift(float shift)

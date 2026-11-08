@@ -319,6 +319,7 @@ namespace YARG.Gameplay
 
             // Update handlers
             _songRunner.Update();
+            PumpStemSoundboards();
 
             ApplySongSpeed();
             BeatEventHandler.Update(_songRunner.SongTime, _songRunner.VisualTime);

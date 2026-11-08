@@ -27,6 +27,8 @@ namespace YARG.Audio.BASS
         private readonly PitchShiftParametersStruct _pitchParams;
         private readonly Func<double>               _normalizationGain;
         private readonly List<BassStemSoundboard>   _soundboards = new();
+        private readonly object                     _lock = new();
+        private readonly object                     _ringLock = new();
         private          long                       _capturedFrames;
         private          double                     _originSeconds;
         private          byte[]?                    _prerenderBytes;
@@ -34,9 +36,7 @@ namespace YARG.Audio.BASS
         private          CancellationTokenSource?   _prerenderCts;
         private          Task                       _prerenderTask = Task.CompletedTask;
 
-        internal object Lock { get; } = new();
-        internal int Frequency { get; }
-        internal int ChannelCount { get; }
+        internal BassStemFormat Format { get; }
 
         public BassStemReplay(AudioManager manager, int stream, PitchShiftParametersStruct pitchParams, Func<double> normalizationGain)
         {
@@ -45,10 +45,9 @@ namespace YARG.Audio.BASS
             _stream = stream;
             _pitchParams = pitchParams;
             _normalizationGain = normalizationGain;
-            Frequency = info.Frequency;
-            ChannelCount = info.Channels;
-            _ringFrames = (int) (RECENT_SECONDS * Frequency);
-            _ring = new float[_ringFrames * ChannelCount];
+            Format = new BassStemFormat(frequency: info.Frequency, channels: info.Channels);
+            _ringFrames = (int) (RECENT_SECONDS * Format.Frequency);
+            _ring = new float[_ringFrames * Format.Channels];
 
             _captureProc = OnCapture;
             _captureDsp = Bass.ChannelSetDSP(stream, _captureProc, IntPtr.Zero, CAPTURE_DSP_PRIORITY);
@@ -60,8 +59,9 @@ namespace YARG.Audio.BASS
 
         public BassStemSoundboard CreateSoundboard(Func<double> stemVolume)
         {
-            var soundboard = new BassStemSoundboard(this, _manager, _pitchParams, () => stemVolume() * _normalizationGain());
-            lock (Lock)
+            var soundboard = new BassStemSoundboard(this, _lock, _manager, _pitchParams,
+                () => stemVolume() * _normalizationGain());
+            lock (_lock)
             {
                 _soundboards.Add(soundboard);
             }
@@ -84,9 +84,9 @@ namespace YARG.Audio.BASS
                 return;
             }
 
-            var jobs = new List<BassStemPrerender.Job>();
+            var jobs = new List<BassStemSampleJob>();
             var soundboards = new List<BassStemSoundboard>();
-            lock (Lock)
+            lock (_lock)
             {
                 foreach (var soundboard in _soundboards)
                 {
@@ -111,7 +111,7 @@ namespace YARG.Audio.BASS
             {
                 try
                 {
-                    if (!BassStemPrerender.Decode(bytes, indices, Frequency, ChannelCount, jobs, token))
+                    if (!BassStemPrerender.Decode(bytes, indices, Format, jobs, token))
                     {
                         return;
                     }
@@ -130,10 +130,14 @@ namespace YARG.Audio.BASS
 
         public void ResetAfterSeek(double seconds)
         {
-            lock (Lock)
+            lock (_lock)
             {
-                _capturedFrames = 0;
-                _originSeconds = seconds;
+                lock (_ringLock)
+                {
+                    _capturedFrames = 0;
+                    _originSeconds = seconds;
+                }
+
                 foreach (var soundboard in _soundboards)
                 {
                     soundboard.Clear();
@@ -143,19 +147,35 @@ namespace YARG.Audio.BASS
 
         internal long CapturedFrames => _capturedFrames;
 
+        public void Pump()
+        {
+            lock (_lock)
+            {
+                foreach (var soundboard in _soundboards)
+                {
+                    soundboard.Pump();
+                }
+            }
+        }
+
         internal long OldestFrame => Math.Max(0, _capturedFrames - _ringFrames);
 
         internal long SecondsToFrame(double seconds)
         {
-            return (long) Math.Round((seconds - _originSeconds) * Frequency);
+            return (long) Math.Round((seconds - _originSeconds) * Format.Frequency);
         }
 
         internal void CopyFrames(long firstFrame, int frameCount, float[] destination, int destinationFrame)
         {
-            int ringFrame = (int) (firstFrame % _ringFrames);
-            int firstCount = Math.Min(frameCount, _ringFrames - ringFrame);
-            Array.Copy(_ring, ringFrame * ChannelCount, destination, destinationFrame * ChannelCount, firstCount * ChannelCount);
-            Array.Copy(_ring, 0, destination, (destinationFrame + firstCount) * ChannelCount, (frameCount - firstCount) * ChannelCount);
+            int channels = Format.Channels;
+            lock (_ringLock)
+            {
+                int ringFrame = (int) (firstFrame % _ringFrames);
+                int firstCount = Math.Min(frameCount, _ringFrames - ringFrame);
+                Array.Copy(_ring, ringFrame * channels, destination, destinationFrame * channels, firstCount * channels);
+                Array.Copy(_ring, 0, destination, (destinationFrame + firstCount) * channels,
+                    (frameCount - firstCount) * channels);
+            }
         }
 
         public void Dispose()
@@ -179,7 +199,7 @@ namespace YARG.Audio.BASS
             }
 
             BassStemSoundboard[] soundboards;
-            lock (Lock)
+            lock (_lock)
             {
                 soundboards = _soundboards.ToArray();
                 _soundboards.Clear();
@@ -193,19 +213,15 @@ namespace YARG.Audio.BASS
 
         private void OnCapture(int _, int __, IntPtr buffer, int length, IntPtr ___)
         {
+            int channels = Format.Channels;
             int sampleCount = length / FLOAT_BYTES;
-            lock (Lock)
+            lock (_ringLock)
             {
-                int ringStart = (int) (_capturedFrames % _ringFrames) * ChannelCount;
+                int ringStart = (int) (_capturedFrames % _ringFrames) * channels;
                 int firstCount = Math.Min(sampleCount, _ring.Length - ringStart);
                 Marshal.Copy(buffer, _ring, ringStart, firstCount);
                 Marshal.Copy(IntPtr.Add(buffer, firstCount * FLOAT_BYTES), _ring, 0, sampleCount - firstCount);
-                _capturedFrames += sampleCount / ChannelCount;
-
-                foreach (var soundboard in _soundboards)
-                {
-                    soundboard.OnCaptured();
-                }
+                _capturedFrames += sampleCount / channels;
             }
         }
     }
