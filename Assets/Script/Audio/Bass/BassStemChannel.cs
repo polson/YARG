@@ -30,7 +30,7 @@ namespace YARG.Audio.BASS
             _streamHandles = streamHandles;
             _reverbHandles = reverbHandles;
             _pitchParams = pitchParams;
-            _replay = BassStemReplay.ShouldCapture(stem)
+            _replay = BassStemReplay.IsFreestyleStem(stem)
                 ? new BassStemReplay(manager, streamHandles.Stream, pitchParams, normalizationGain)
                 : null;
 
@@ -134,7 +134,7 @@ namespace YARG.Audio.BASS
 
             // Publish after the mixer seek so the next DSP callback cannot retain pre-seek tail.
             _reverbDsp?.RequestReset();
-            _replay?.ResetAfterSeek(position);
+            _replay?.ResetAfterSeek();
         }
 
         protected override void SetVolume_Internal(double volume)

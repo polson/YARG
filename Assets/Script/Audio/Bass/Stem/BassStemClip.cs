@@ -8,20 +8,19 @@ namespace YARG.Audio.BASS
     {
         private const double MAX_CLIP_SECONDS      = 3.0;
         private const double START_FADE_SECONDS    = 0.004;
-        private const double END_FADE_SECONDS      = 0.08;
         private const double LOOP_FADE_SECONDS     = 0.02;
         private const double SUSTAIN_LOOP_SECONDS  = 0.4;
         private const double FALLBACK_LOOP_SECONDS = 0.15;
 
-        public float[]      Samples = Array.Empty<float>();
-        public long         StartFrame;
-        public int          FrameCount;
-        public int          FilledFrames;
-        public bool         IsSustain;
-        public int          Generation;
-        public BassStemLoop Loop = BassStemLoop.NONE;
+        public float[] Samples = Array.Empty<float>();
+        public int     FrameCount;
+        public bool    IsSustain;
+        public int     LoopStartFrame;
+        public int     LoopEndFrame;
+        public int     LoopFadeFrames;
+        public float[] LoopTail = Array.Empty<float>();
 
-        public bool HasLoop => Loop.HasBody;
+        public bool HasLoop => LoopEndFrame > LoopStartFrame;
 
         public static int MaxFrames(BassStemFormat format)
         {
@@ -46,34 +45,16 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public void ApplyEndFade(int firstFrame, int frameCount, BassStemFormat format)
+        public bool PrepareLoop(BassStemFormat format)
         {
-            int fadeFrames = Math.Min(format.FramesFor(END_FADE_SECONDS), FrameCount);
-            int fadeStart = FrameCount - fadeFrames;
-            for (int frame = Math.Max(firstFrame, fadeStart); frame < firstFrame + frameCount; frame++)
-            {
-                float gain = (float) (FrameCount - frame) / fadeFrames;
-                for (int channel = 0; channel < format.Channels; channel++)
-                {
-                    Samples[frame * format.Channels + channel] *= gain;
-                }
-            }
-        }
-
-        public bool PrepareLoop(int sustainStartFrame, BassStemFormat format)
-        {
-            int fadeFrames = Math.Min(format.FramesFor(LOOP_FADE_SECONDS), (FrameCount - sustainStartFrame) / 4);
-            bool cleanLoop = BassSustainLoop.TryFind(Samples, format, firstFrame: sustainStartFrame,
+            int fadeFrames = Math.Min(format.FramesFor(LOOP_FADE_SECONDS), FrameCount / 4);
+            bool cleanLoop = BassSustainLoop.TryFind(Samples, format, firstFrame: 0,
                 fadeFrames: fadeFrames, out int bodyStart, out int loopEnd);
             if (!cleanLoop)
             {
-                YargLogger.LogFormatInfo("[LoopDebug] fallback: clip {0} ms, sustain start {1} ms, fill {2} ms",
-                    FrameCount * 1000.0 / format.Frequency, sustainStartFrame * 1000.0 / format.Frequency,
-                    FilledFrames * 1000.0 / format.Frequency);
-                double loopSeconds = sustainStartFrame > 0 ? SUSTAIN_LOOP_SECONDS : FALLBACK_LOOP_SECONDS;
-                int tailFrames = format.FramesFor(loopSeconds);
-                bodyStart = sustainStartFrame > 0 ? sustainStartFrame : FrameCount / 2;
-                bodyStart = Math.Max(bodyStart, FrameCount - tailFrames);
+                YargLogger.LogFormatInfo("[LoopDebug] fallback: clip {0} ms", FrameCount * 1000.0 / format.Frequency);
+                int tailFrames = format.FramesFor(FALLBACK_LOOP_SECONDS);
+                bodyStart = Math.Max(FrameCount / 2, FrameCount - tailFrames);
                 bodyStart = Math.Min(bodyStart, FrameCount - fadeFrames * 2);
                 loopEnd = FrameCount;
             }
@@ -91,6 +72,21 @@ namespace YARG.Audio.BASS
             SetLoop(bodyStart: loopStart, loopEnd: FrameCount, fadeFrames: fadeFrames, format: format);
         }
 
+        public int NextLoopSegment(int pushedFrames, int remaining, out bool fromTail, out int sourceFrame)
+        {
+            int fadeStart = LoopEndFrame - LoopFadeFrames;
+            if (pushedFrames < fadeStart)
+            {
+                fromTail = false;
+                sourceFrame = pushedFrames;
+                return Math.Min(remaining, fadeStart - pushedFrames);
+            }
+
+            fromTail = true;
+            sourceFrame = pushedFrames - fadeStart;
+            return Math.Min(remaining, LoopEndFrame - pushedFrames);
+        }
+
         private void SetLoop(int bodyStart, int loopEnd, int fadeFrames, BassStemFormat format)
         {
             int channels = format.Channels;
@@ -106,8 +102,10 @@ namespace YARG.Audio.BASS
                 }
             }
 
-            Loop = new BassStemLoop(startFrame: bodyStart + fadeFrames, endFrame: loopEnd, fadeFrames: fadeFrames,
-                tail: tail);
+            LoopStartFrame = bodyStart + fadeFrames;
+            LoopEndFrame = loopEnd;
+            LoopFadeFrames = fadeFrames;
+            LoopTail = tail;
         }
     }
 }

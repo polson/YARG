@@ -1,4 +1,5 @@
 #nullable enable
+using System;
 using System.Collections.Generic;
 
 namespace YARG.Audio.BASS
@@ -6,15 +7,13 @@ namespace YARG.Audio.BASS
     internal sealed class BassStemSeed
     {
         public readonly double       SongSeconds;
-        public readonly int          SustainStartFrame;
         public readonly long         StartFrame;
         public          BassStemClip Clip;
 
-        public BassStemSeed(double songSeconds, BassStemClip clip, int sustainStartFrame, long startFrame)
+        public BassStemSeed(double songSeconds, BassStemClip clip, long startFrame)
         {
             SongSeconds = songSeconds;
             Clip = clip;
-            SustainStartFrame = sustainStartFrame;
             StartFrame = startFrame;
         }
     }
@@ -24,16 +23,24 @@ namespace YARG.Audio.BASS
         public readonly double                                StartTime;
         public readonly double                                EndTime;
         public readonly Dictionary<int, List<BassStemSeed>>   ByKey = new();
+        public readonly List<(int Key, double SongSeconds, double PlaybackSeconds, double DurationSeconds, bool IsSustain)> Notes;
+        public readonly List<(BassStemSeed Seed, float[] Raw, int AttackFrames)> Candidates = new();
+        public          float[]                                                  Region = Array.Empty<float>();
+        public          long                                                     RegionStartFrame;
 
         private double _songSeconds;
 
-        public BassStemSoloSeeds(double startTime, double endTime)
+        public BassStemSoloSeeds(double startTime, double endTime,
+            List<(int Key, double SongSeconds, double PlaybackSeconds, double DurationSeconds, bool IsSustain)> notes)
         {
             StartTime = startTime;
             EndTime = endTime;
+            Notes = notes;
         }
 
         public bool IsEmpty => ByKey.Count == 0;
+
+        public bool HasRegion => Region.Length > 0;
 
         public bool Covers(double soloTime)
         {

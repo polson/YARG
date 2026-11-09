@@ -15,8 +15,7 @@ namespace YARG.Audio.BASS
         private const double MAX_SPAN_SECONDS = 4.0;
 
         internal static float[]?[] Render(float[] region, BassStemFormat format,
-            List<(long BodyStartFrame, int BodyFrames)> bodies, CancellationToken token,
-            BassStretchRenderFactory createRender)
+            List<(long BodyStartFrame, int BodyFrames)> bodies, CancellationToken token)
         {
             var outputs = new float[bodies.Count][];
             var order = new List<int>(bodies.Count);
@@ -38,7 +37,7 @@ namespace YARG.Audio.BASS
                     state.Stop();
                     return;
                 }
-                RenderSpan(region, format, span, bodies, outputs, token, createRender);
+                RenderSpan(region, format, span, bodies, outputs, token);
             });
             return outputs;
         }
@@ -72,11 +71,10 @@ namespace YARG.Audio.BASS
         }
 
         private static void RenderSpan(float[] region, BassStemFormat format, List<int> span,
-            List<(long BodyStartFrame, int BodyFrames)> bodies, float[]?[] outputs, CancellationToken token,
-            BassStretchRenderFactory createRender)
+            List<(long BodyStartFrame, int BodyFrames)> bodies, float[]?[] outputs, CancellationToken token)
         {
             int channels = format.Channels;
-            using var render = createRender(channels, format.Frequency, SPEED);
+            using var render = BassStretchRender.Create(channels, format.Frequency, SPEED);
             if (render == null)
             {
                 return;

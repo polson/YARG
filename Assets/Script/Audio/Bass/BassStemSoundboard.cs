@@ -9,34 +9,19 @@ using YARG.Core.Engine.Guitar;
 
 namespace YARG.Audio.BASS
 {
-    internal sealed class BassStemSoundboard : IFreestyleSoloAudio, IDisposable
+    internal sealed class BassStemSoundboard : IDisposable
     {
-        private readonly object               _lock;
-        private readonly BassStemClipRecorder _recorder;
-        private readonly BassStemSeedLibrary  _seeds;
-        private readonly BassStemVoicePool    _voices;
-        private          bool                 _disposed;
+        private readonly object              _lock;
+        private readonly BassStemSeedLibrary _seeds;
+        private readonly BassStemVoicePool   _voices;
+        private          bool                _disposed;
 
         internal BassStemSoundboard(BassStemReplay replay, AudioManager manager,
             PitchShiftParametersStruct pitchParams, Func<double> volume)
         {
             _lock = replay.Lock;
-            _recorder = new BassStemClipRecorder(replay, replay.Format);
-            _seeds = new BassStemSeedLibrary(replay.Format, BassStretchRender.Create, BassStemReplay.ShouldStretch);
+            _seeds = new BassStemSeedLibrary(replay.Format);
             _voices = new BassStemVoicePool(manager, replay.Format, pitchParams, volume);
-        }
-
-        public void Record(int key, double noteSeconds, double durationSeconds, bool isSustain)
-        {
-            lock (_lock)
-            {
-                if (_disposed)
-                {
-                    return;
-                }
-
-                _recorder.Record(key, noteSeconds, durationSeconds, isSustain);
-            }
         }
 
         public void RequestSeeds(IReadOnlyList<SoloSection> phrases, List<GuitarNote> notes,
@@ -59,13 +44,13 @@ namespace YARG.Audio.BASS
         {
             lock (_lock)
             {
-                if (_disposed || !TryGetPlayableClip(key, out var clip))
+                if (_disposed || !_seeds.TryGetClip(key, out var clip))
                 {
                     return;
                 }
 
                 _voices.FadePreviousVoices();
-                _voices.Start(clip, key: key, semitones: semitones, gain: gain, loopSustains: _seeds.IsSelected);
+                _voices.Start(clip, key: key, semitones: semitones, gain: gain);
             }
         }
 
@@ -73,13 +58,13 @@ namespace YARG.Audio.BASS
         {
             lock (_lock)
             {
-                if (_disposed || !TryGetPlayableClip(fretMask, out _))
+                if (_disposed || !_seeds.TryGetClip(fretMask, out _))
                 {
                     return;
                 }
 
                 _voices.FadePreviousVoices();
-                double fretGain = gain / Math.Sqrt(BassStemClipPolicy.FretCount(fretMask));
+                double fretGain = gain / Math.Sqrt(FretCount(fretMask));
                 for (int fret = 1; fret < GuitarEngine.OPEN_MASK; fret <<= 1)
                 {
                     if ((fretMask & fret) == 0)
@@ -87,13 +72,12 @@ namespace YARG.Audio.BASS
                         continue;
                     }
 
-                    if (!TryGetPlayableClip(fret, out var clip))
+                    if (!_seeds.TryGetClip(fret, out var clip))
                     {
                         continue;
                     }
 
-                    _voices.Start(clip, key: fret, semitones: semitones, gain: fretGain,
-                        loopSustains: _seeds.IsSelected);
+                    _voices.Start(clip, key: fret, semitones: semitones, gain: fretGain);
                 }
             }
         }
@@ -172,7 +156,6 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                _recorder.Clear();
                 _voices.Clear();
             }
         }
@@ -186,7 +169,6 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                _recorder.Pump();
                 _voices.Pump();
             }
         }
@@ -206,11 +188,18 @@ namespace YARG.Audio.BASS
             }
         }
 
-        private bool TryGetPlayableClip(int key, out BassStemClip clip)
+        private static int FretCount(int fretMask)
         {
-            return _seeds.IsSelected
-                ? BassStemClipPolicy.TryGetSeedClip(_seeds, key, out clip)
-                : BassStemClipPolicy.TryGetRecordedClip(_recorder, key, out clip);
+            int count = 0;
+            for (int fret = 1; fret < GuitarEngine.OPEN_MASK; fret <<= 1)
+            {
+                if ((fretMask & fret) != 0)
+                {
+                    count++;
+                }
+            }
+
+            return count;
         }
     }
 }

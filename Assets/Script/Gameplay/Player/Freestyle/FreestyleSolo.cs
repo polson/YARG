@@ -14,7 +14,7 @@ namespace YARG.Gameplay.Player
         private const double MUTE_LEAD_SECONDS = 0.1;
         private const double TAP_WINDOW_SECONDS = 0.25;
 
-        private readonly IFreestyleSoloAudio _soundboard;
+        private readonly BassStemSoundboard _soundboard;
         private readonly GuitarEngine _engine;
         private readonly Action<bool> _setStemMuted;
         private readonly int _fretRowMask;
@@ -28,7 +28,7 @@ namespace YARG.Gameplay.Player
         private int _lastHeldMask;
         private double _lastHeldTime;
 
-        public FreestyleSolo(IFreestyleSoloAudio soundboard, GuitarEngine engine, Action<bool> setStemMuted,
+        public FreestyleSolo(BassStemSoundboard soundboard, GuitarEngine engine, Action<bool> setStemMuted,
             int fretRowMask, int maxFretIndex, double hopoLeniency)
         {
             _soundboard = soundboard;
@@ -158,7 +158,7 @@ namespace YARG.Gameplay.Player
             }
             else
             {
-                int fretMask = BassStemClipPolicy.HighestFret(playMask, _maxFretIndex);
+                int fretMask = HighestFret(playMask, _maxFretIndex);
                 _soundboard.Play(fretMask == 0 ? GuitarEngine.OPEN_MASK : fretMask, semitones: 0, gain: 1);
             }
 
@@ -172,6 +172,20 @@ namespace YARG.Gameplay.Player
             {
                 _hopoLeniency.Reset();
             }
+        }
+
+        private static int HighestFret(int noteMask, int highestFret)
+        {
+            for (int fret = highestFret; fret >= 0; fret--)
+            {
+                int mask = 1 << fret;
+                if ((noteMask & mask) != 0)
+                {
+                    return mask;
+                }
+            }
+
+            return 0;
         }
 
         private void SetMuted(bool muted)

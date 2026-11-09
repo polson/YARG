@@ -6,7 +6,7 @@ using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
 {
-    internal sealed class BassStretchRender : SafeHandleZeroOrMinusOneIsInvalid, IBassStretchRender
+    internal sealed class BassStretchRender : SafeHandleZeroOrMinusOneIsInvalid
     {
         private BassStretchRender() : base(true)
         {

@@ -1,7 +1,6 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ManagedBass;
@@ -14,23 +13,12 @@ namespace YARG.Audio.BASS
 {
     internal sealed class BassStemReplay : IDisposable
     {
-        private const double RECENT_SECONDS       = 3.0;
-        private const int    CAPTURE_DSP_PRIORITY = 1;
-        private const int    FLOAT_BYTES          = sizeof(float);
-        private const int    PRERENDER_SHUTDOWN_TIMEOUT_MS = 1000;
+        private const int PRERENDER_SHUTDOWN_TIMEOUT_MS = 1000;
 
-        private readonly int                        _stream;
-        private readonly int                        _captureDsp;
-        private readonly DSPProcedure               _captureProc;
-        private readonly float[]                    _ring;
-        private readonly int                        _ringFrames;
         private readonly AudioManager               _manager;
         private readonly PitchShiftParametersStruct _pitchParams;
         private readonly Func<double>               _normalizationGain;
         private readonly List<BassStemSoundboard>   _soundboards = new();
-        private readonly object                     _ringLock = new();
-        private          long                       _capturedFrames;
-        private          double                     _originSeconds;
         private          byte[]?                    _prerenderBytes;
         private          int[]                      _prerenderIndices = Array.Empty<int>();
         private          CancellationTokenSource?   _prerenderCts;
@@ -38,29 +26,15 @@ namespace YARG.Audio.BASS
 
         internal BassStemFormat Format { get; }
 
-        // Lock order: Lock then _ringLock. OnCapture takes only _ringLock. The pre-render thread
-        // reaches this lock through the soundboards it renders for, never through a second one.
         internal object Lock { get; } = new();
 
         public BassStemReplay(AudioManager manager, int stream, PitchShiftParametersStruct pitchParams, Func<double> normalizationGain)
         {
             Bass.ChannelGetInfo(stream, out ChannelInfo info);
             _manager = manager;
-            _stream = stream;
             _pitchParams = pitchParams;
             _normalizationGain = normalizationGain;
             Format = new BassStemFormat(frequency: info.Frequency, channels: info.Channels);
-            _ringFrames = (int) (RECENT_SECONDS * Format.Frequency);
-
-            // Ring frame 0 is the playback position of the last seek; _originSeconds names it.
-            _ring = new float[_ringFrames * Format.Channels];
-
-            _captureProc = OnCapture;
-            _captureDsp = Bass.ChannelSetDSP(stream, _captureProc, IntPtr.Zero, CAPTURE_DSP_PRIORITY);
-            if (_captureDsp == 0)
-            {
-                YargLogger.LogFormatError("Failed to capture stem audio for replay: {0}!", Bass.LastError);
-            }
         }
 
         public BassStemSoundboard CreateSoundboard(Func<double> stemVolume)
@@ -135,24 +109,16 @@ namespace YARG.Audio.BASS
             }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         }
 
-        public void ResetAfterSeek(double seconds)
+        public void ResetAfterSeek()
         {
             lock (Lock)
             {
-                lock (_ringLock)
-                {
-                    _capturedFrames = 0;
-                    _originSeconds = seconds;
-                }
-
                 foreach (var soundboard in _soundboards)
                 {
                     soundboard.Clear();
                 }
             }
         }
-
-        internal long CapturedRingFrames => _capturedFrames;
 
         public void Pump()
         {
@@ -162,26 +128,6 @@ namespace YARG.Audio.BASS
                 {
                     soundboard.Pump();
                 }
-            }
-        }
-
-        internal long OldestRingFrame => Math.Max(0, _capturedFrames - _ringFrames);
-
-        internal long RingFrameAt(double playbackSeconds)
-        {
-            return (long) Math.Round((playbackSeconds - _originSeconds) * Format.Frequency);
-        }
-
-        internal void CopyFrames(long firstFrame, int frameCount, float[] destination, int destinationFrame)
-        {
-            int channels = Format.Channels;
-            lock (_ringLock)
-            {
-                int ringFrame = (int) (firstFrame % _ringFrames);
-                int firstCount = Math.Min(frameCount, _ringFrames - ringFrame);
-                Array.Copy(_ring, ringFrame * channels, destination, destinationFrame * channels, firstCount * channels);
-                Array.Copy(_ring, 0, destination, (destinationFrame + firstCount) * channels,
-                    (frameCount - firstCount) * channels);
             }
         }
 
@@ -200,11 +146,6 @@ namespace YARG.Audio.BASS
                 _prerenderCts = null;
             }
 
-            if (!Bass.ChannelRemoveDSP(_stream, _captureDsp) && Bass.LastError != Errors.Handle)
-            {
-                YargLogger.LogFormatError("Failed to remove stem capture: {0}!", Bass.LastError);
-            }
-
             BassStemSoundboard[] soundboards;
             lock (Lock)
             {
@@ -218,20 +159,9 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public static bool ShouldCapture(SongStem stem)
+        public static bool IsFreestyleStem(SongStem stem)
         {
-            if (!AudioHelpers.PitchBendAllowedStems.Contains(stem))
-            {
-                return false;
-            }
-
-            return FreestyleSolosRequested();
-        }
-
-        public static bool ShouldPrerender(SongStem stem)
-        {
-            return FreestyleSolosRequested() &&
-                AudioHelpers.PitchBendAllowedStems.Contains(stem);
+            return AudioHelpers.PitchBendAllowedStems.Contains(stem) && FreestyleSolosRequested();
         }
 
         public static bool ShouldStretch()
@@ -249,20 +179,6 @@ namespace YARG.Audio.BASS
             var state = GlobalVariables.State;
             bool replayRequests = (state.IsReplay || state.PlayingWithReplay) && state.ReplayFreestyleSolos;
             return replayRequests || SettingsManager.Settings.FreestyleSolos.Value;
-        }
-
-        private void OnCapture(int _, int __, IntPtr buffer, int length, IntPtr ___)
-        {
-            int channels = Format.Channels;
-            int sampleCount = length / FLOAT_BYTES;
-            lock (_ringLock)
-            {
-                int ringStart = (int) (_capturedFrames % _ringFrames) * channels;
-                int firstCount = Math.Min(sampleCount, _ring.Length - ringStart);
-                Marshal.Copy(buffer, _ring, ringStart, firstCount);
-                Marshal.Copy(IntPtr.Add(buffer, firstCount * FLOAT_BYTES), _ring, 0, sampleCount - firstCount);
-                _capturedFrames += sampleCount / channels;
-            }
         }
     }
 }

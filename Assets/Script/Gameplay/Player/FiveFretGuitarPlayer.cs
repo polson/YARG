@@ -639,7 +639,6 @@ namespace YARG.Gameplay.Player
             }
 
             _soundboard?.StopAll();
-            RecordNote(chordParent);
 
             if (GameManager.Paused) return;
 
@@ -678,7 +677,6 @@ namespace YARG.Gameplay.Player
         protected override void OnNoteMissed(int index, GuitarNote chordParent)
         {
             base.OnNoteMissed(index, chordParent);
-            RecordNote(chordParent);
 
             foreach (var note in chordParent.AllNotes)
             {
@@ -749,18 +747,6 @@ namespace YARG.Gameplay.Player
                     _fretArray.PlayFullWidthMissAnimation();
                 }
             }
-        }
-
-        private void RecordNote(GuitarNote parent)
-        {
-            var soundboard = _soundboard;
-            if (soundboard == null || IsEnginePlayed(parent))
-            {
-                return;
-            }
-
-            soundboard.Record(parent.NoteMask, GameManager.GetAudioPlaybackTime(parent.Time),
-                BassStemNote.ClipDuration(parent), BassStemNote.HasSustain(parent));
         }
 
         protected bool IsFretDisplayed(GuitarAction action)

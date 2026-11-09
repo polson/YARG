@@ -13,7 +13,7 @@ namespace YARG.Audio.BASS
     /// <summary>
     /// Turns the engine's solo phrases into the seed sets the stem soundboard renders from.
     /// </summary>
-    internal sealed class BassStemSeedLibrary : IBassStemClipSource
+    internal sealed class BassStemSeedLibrary
     {
         private const double STRETCH_REGION_PREROLL_SECONDS = 0.1;
         private const double STRETCH_BLEED_GUARD_SECONDS    = 0.03;
@@ -21,39 +21,23 @@ namespace YARG.Audio.BASS
         private const double STRETCH_FADE_SECONDS           = 0.01;
 
         // Lock order: the stem lock (BassStemReplay.Lock) is always taken before this one.
-        private readonly object                   _lock = new();
-        private readonly BassStemFormat           _format;
-        private readonly BassStretchRenderFactory _createRender;
-        private readonly Func<bool>               _stretchAvailable;
-        private readonly Random                   _random = new();
-        private          List<BassStemSeedJob>    _requests  = new();
-        private          List<BassStemSeedJob>    _pending   = new();
-        private          List<BassStemSoloSeeds>  _published = new();
-        private          BassStemSoloSeeds?       _selected;
-        private          double                   _requestedSoloTime;
+        private readonly object                  _lock = new();
+        private readonly BassStemFormat          _format;
+        private readonly Random                  _random = new();
+        private          List<BassStemSoloSeeds> _requests  = new();
+        private          List<BassStemSoloSeeds> _pending   = new();
+        private          List<BassStemSoloSeeds> _published = new();
+        private          BassStemSoloSeeds?      _selected;
+        private          double                  _requestedSoloTime;
 
-        public BassStemSeedLibrary(BassStemFormat format, BassStretchRenderFactory createRender,
-            Func<bool> stretchAvailable)
+        public BassStemSeedLibrary(BassStemFormat format)
         {
             _format = format;
-            _createRender = createRender;
-            _stretchAvailable = stretchAvailable;
-        }
-
-        public bool IsSelected
-        {
-            get
-            {
-                lock (_lock)
-                {
-                    return _selected != null;
-                }
-            }
         }
 
         public void Request(IReadOnlyList<SoloSection> phrases, List<GuitarNote> notes, Func<double, double> playbackTime)
         {
-            var requests = new List<BassStemSeedJob>(phrases.Count);
+            var requests = new List<BassStemSoloSeeds>(phrases.Count);
             foreach (var phrase in phrases)
             {
                 var seedNotes = new List<(int Key, double SongSeconds, double PlaybackSeconds, double DurationSeconds, bool IsSustain)>();
@@ -65,7 +49,7 @@ namespace YARG.Audio.BASS
                     }
 
                     seedNotes.Add((note.NoteMask, note.Time, playbackTime(note.Time),
-                        BassStemNote.ClipDuration(note), BassStemNote.HasSustain(note)));
+                        ClipDuration(note), HasSustain(note)));
                 }
 
                 if (seedNotes.Count == 0)
@@ -73,8 +57,7 @@ namespace YARG.Audio.BASS
                     continue;
                 }
 
-                var seeds = new BassStemSoloSeeds(seedNotes[0].SongSeconds, seedNotes[^1].SongSeconds);
-                requests.Add(new BassStemSeedJob(seeds, seedNotes));
+                requests.Add(new BassStemSoloSeeds(seedNotes[0].SongSeconds, seedNotes[^1].SongSeconds, seedNotes));
             }
 
             lock (_lock)
@@ -97,8 +80,8 @@ namespace YARG.Audio.BASS
         {
             lock (_lock)
             {
-                _requests = new List<BassStemSeedJob>();
-                _pending = new List<BassStemSeedJob>();
+                _requests = new List<BassStemSoloSeeds>();
+                _pending = new List<BassStemSoloSeeds>();
                 _published.Clear();
                 _selected = null;
             }
@@ -124,48 +107,25 @@ namespace YARG.Audio.BASS
                     return false;
                 }
 
-                if (key != GuitarEngine.OPEN_MASK)
+                if (key == GuitarEngine.OPEN_MASK)
                 {
-                    return selected.TryGetClip(key, out clip);
+                    return TryGetRandomFretClip(selected, out clip) || selected.TryGetAnyClip(out clip);
                 }
 
-                return TryGetRandomFretClip(selected, out clip) || selected.TryGetAnyClip(out clip);
-            }
-        }
-
-        public bool TryGetFretClip(int key, out BassStemClip clip)
-        {
-            lock (_lock)
-            {
-                var selected = _selected;
-                if (selected != null)
+                if (selected.TryGetClip(key, out clip))
                 {
-                    for (int fret = 1; fret <= key; fret <<= 1)
+                    return true;
+                }
+
+                for (int fret = 1; fret <= key; fret <<= 1)
+                {
+                    if ((key & fret) != 0 && selected.TryGetClip(fret, out clip))
                     {
-                        if ((key & fret) != 0 && selected.TryGetClip(fret, out clip!))
-                        {
-                            return true;
-                        }
+                        return true;
                     }
                 }
 
-                clip = null!;
-                return false;
-            }
-        }
-
-        public bool TryGetAnyClip(out BassStemClip clip)
-        {
-            lock (_lock)
-            {
-                var selected = _selected;
-                if (selected != null)
-                {
-                    return selected.TryGetAnyClip(out clip);
-                }
-
-                clip = null!;
-                return false;
+                return selected.TryGetAnyClip(out clip);
             }
         }
 
@@ -179,12 +139,12 @@ namespace YARG.Audio.BASS
 
         public void Publish(CancellationToken token)
         {
-            List<BassStemSeedJob> pending;
+            List<BassStemSoloSeeds> pending;
             double requestedSoloTime;
             lock (_lock)
             {
                 pending = _pending;
-                _pending = new List<BassStemSeedJob>();
+                _pending = new List<BassStemSoloSeeds>();
                 requestedSoloTime = _requestedSoloTime;
             }
 
@@ -202,7 +162,7 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                published.Add(job.Seeds);
+                published.Add(job);
             }
 
             lock (_lock)
@@ -213,11 +173,11 @@ namespace YARG.Audio.BASS
             }
         }
 
-        private List<BassStemSeedJob> BuildJobs(List<BassStemSeedJob> requests,
+        private List<BassStemSoloSeeds> BuildJobs(List<BassStemSoloSeeds> requests,
             List<(long StartFrame, int FrameCount, float[] Samples)> jobs)
         {
-            bool stretchAvailable = _stretchAvailable();
-            var renderJobs = new List<BassStemSeedJob>();
+            bool stretchAvailable = BassStemReplay.ShouldStretch();
+            var renderJobs = new List<BassStemSoloSeeds>();
             foreach (var job in requests)
             {
                 foreach (var note in job.Notes)
@@ -230,7 +190,7 @@ namespace YARG.Audio.BASS
                     AddRegionJob(job, jobs);
                 }
 
-                foreach (var keyed in job.Seeds.ByKey.Values)
+                foreach (var keyed in job.ByKey.Values)
                 {
                     keyed.Sort((left, right) => left.SongSeconds.CompareTo(right.SongSeconds));
                 }
@@ -241,7 +201,7 @@ namespace YARG.Audio.BASS
             return renderJobs;
         }
 
-        private void AddNoteSeed(BassStemSeedJob job,
+        private void AddNoteSeed(BassStemSoloSeeds job,
             (int Key, double SongSeconds, double PlaybackSeconds, double DurationSeconds, bool IsSustain) note,
             List<(long StartFrame, int FrameCount, float[] Samples)> jobs)
         {
@@ -258,22 +218,21 @@ namespace YARG.Audio.BASS
                 FrameCount = frameCount,
                 IsSustain = note.IsSustain,
             };
-            if (!job.Seeds.ByKey.TryGetValue(note.Key, out var keyed))
+            if (!job.ByKey.TryGetValue(note.Key, out var keyed))
             {
                 keyed = new List<BassStemSeed>();
-                job.Seeds.ByKey.Add(note.Key, keyed);
+                job.ByKey.Add(note.Key, keyed);
             }
 
-            keyed.Add(new BassStemSeed(songSeconds: note.SongSeconds, clip: clip, sustainStartFrame: 0,
-                startFrame: startFrame));
+            keyed.Add(new BassStemSeed(songSeconds: note.SongSeconds, clip: clip, startFrame: startFrame));
             jobs.Add((startFrame, frameCount, clip.Samples));
         }
 
-        private void AddRegionJob(BassStemSeedJob job, List<(long StartFrame, int FrameCount, float[] Samples)> jobs)
+        private void AddRegionJob(BassStemSoloSeeds job, List<(long StartFrame, int FrameCount, float[] Samples)> jobs)
         {
             long firstFrame = long.MaxValue;
             long endFrame = 0;
-            foreach (var keyed in job.Seeds.ByKey.Values)
+            foreach (var keyed in job.ByKey.Values)
             {
                 foreach (var seed in keyed)
                 {
@@ -293,9 +252,9 @@ namespace YARG.Audio.BASS
             jobs.Add((job.RegionStartFrame, frameCount, job.Region));
         }
 
-        private bool Prepare(BassStemSeedJob job, CancellationToken token)
+        private bool Prepare(BassStemSoloSeeds job, CancellationToken token)
         {
-            foreach (var pair in job.Seeds.ByKey)
+            foreach (var pair in job.ByKey)
             {
                 foreach (var seed in pair.Value)
                 {
@@ -311,17 +270,15 @@ namespace YARG.Audio.BASS
             return true;
         }
 
-        private void PrepareSeed(BassStemSeedJob job, BassStemSeed seed)
+        private void PrepareSeed(BassStemSoloSeeds job, BassStemSeed seed)
         {
             var clip = seed.Clip;
-            clip.FilledFrames = clip.FrameCount;
             var raw = clip.Samples;
-            bool cleanLoop = clip.PrepareLoop(seed.SustainStartFrame, _format);
+            bool cleanLoop = clip.PrepareLoop(_format);
             if (!cleanLoop && BassSustainStretch.TryRender(clip.Samples, _format, out var samples, out int bodyStartFrame))
             {
                 clip.Samples = samples;
                 clip.FrameCount = samples.Length / _format.Channels;
-                clip.FilledFrames = clip.FrameCount;
                 clip.LoopStretchedBody(bodyStartFrame, _format);
                 if (job.HasRegion)
                 {
@@ -332,7 +289,7 @@ namespace YARG.Audio.BASS
             clip.ApplyStartFade(_format);
         }
 
-        private bool Stretch(BassStemSeedJob job, CancellationToken token)
+        private bool Stretch(BassStemSoloSeeds job, CancellationToken token)
         {
             if (!job.HasRegion)
             {
@@ -361,7 +318,7 @@ namespace YARG.Audio.BASS
             if (bodies.Count > 0)
             {
                 var stopwatch = Stopwatch.StartNew();
-                outputs = BassSoloStretch.Render(job.Region, _format, bodies, token, _createRender);
+                outputs = BassSoloStretch.Render(job.Region, _format, bodies, token);
                 YargLogger.LogFormatInfo("[SoloStretch] {0} sustains in {1} ms",
                     bodies.Count, stopwatch.ElapsedMilliseconds);
             }
@@ -410,7 +367,6 @@ namespace YARG.Audio.BASS
             {
                 Samples = samples,
                 FrameCount = attackFrames + bodyFrames,
-                FilledFrames = attackFrames + bodyFrames,
                 IsSustain = seed.Clip.IsSustain,
             };
             clip.LoopStretchedBody(attackFrames + fadeFrames, _format);
@@ -431,9 +387,31 @@ namespace YARG.Audio.BASS
             return null;
         }
 
-        private static BassStemSeedJob TakeNext(List<BassStemSeedJob> queue, double soloTime)
+        /// <summary>
+        /// The two derived properties of a chart note that the stem layer needs: how long its clip runs
+        /// and whether it holds.
+        /// </summary>
+        private static double ClipDuration(GuitarNote note)
         {
-            int index = Math.Max(queue.FindIndex(job => job.Seeds.Covers(soloTime)), 0);
+            return note.NextNote != null ? note.NextNote.Time - note.Time : double.MaxValue;
+        }
+
+        private static bool HasSustain(GuitarNote note)
+        {
+            foreach (var child in note.AllNotes)
+            {
+                if (child.IsSustain)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static BassStemSoloSeeds TakeNext(List<BassStemSoloSeeds> queue, double soloTime)
+        {
+            int index = Math.Max(queue.FindIndex(job => job.Covers(soloTime)), 0);
             var job = queue[index];
             queue.RemoveAt(index);
             return job;

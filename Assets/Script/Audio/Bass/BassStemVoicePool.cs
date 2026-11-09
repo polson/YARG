@@ -26,7 +26,6 @@ namespace YARG.Audio.BASS
             public readonly int        PitchFx;
             public float      Pitch;
             public BassStemClip? Clip;
-            public int        Generation;
             public int        PushedFrames;
             public int        Key;
             public bool       IsSustain;
@@ -83,16 +82,15 @@ namespace YARG.Audio.BASS
 
         private int LoopBufferFrames => _format.FramesFor(LOOP_BUFFER_SECONDS);
 
-        public void Start(BassStemClip clip, int key, int semitones, double gain, bool loopSustains)
+        public void Start(BassStemClip clip, int key, int semitones, double gain)
         {
             var voice = PickVoice(key);
             voice.Stream.Clear();
             voice.Stream.SetVolume(_volume() * gain);
             voice.Clip = clip;
-            voice.Generation = clip.Generation;
             voice.PushedFrames = 0;
             voice.Key = key;
-            voice.IsLooping = loopSustains && clip.HasLoop && voice.IsFullyHeld(_heldFrets);
+            voice.IsLooping = clip.HasLoop && voice.IsFullyHeld(_heldFrets);
             voice.IsSustain = clip.IsSustain || voice.IsLooping;
             voice.Pitch = (float) Math.Pow(2, semitones / 12.0);
             SetPitch(voice);
@@ -251,19 +249,13 @@ namespace YARG.Audio.BASS
                 return;
             }
 
-            if (clip.Generation != voice.Generation)
-            {
-                voice.Clip = null;
-                return;
-            }
-
             if (voice.IsLooping)
             {
                 FeedLoop(voice, clip);
                 return;
             }
 
-            int frames = clip.FilledFrames - voice.PushedFrames;
+            int frames = clip.FrameCount - voice.PushedFrames;
             if (frames > 0)
             {
                 Push(voice.Stream, clip.Samples, firstFrame: voice.PushedFrames, frameCount: frames);
@@ -289,14 +281,13 @@ namespace YARG.Audio.BASS
             int remaining = LoopBufferFrames - queuedFrames;
             while (remaining > 0)
             {
-                var loop = clip.Loop;
-                int frames = loop.NextSegment(voice.PushedFrames, remaining, out bool fromTail, out int sourceFrame);
-                Push(voice.Stream, fromTail ? loop.Tail : clip.Samples, firstFrame: sourceFrame, frameCount: frames);
+                int frames = clip.NextLoopSegment(voice.PushedFrames, remaining, out bool fromTail, out int sourceFrame);
+                Push(voice.Stream, fromTail ? clip.LoopTail : clip.Samples, firstFrame: sourceFrame, frameCount: frames);
                 remaining -= frames;
                 voice.PushedFrames += frames;
-                if (voice.PushedFrames == loop.EndFrame)
+                if (voice.PushedFrames == clip.LoopEndFrame)
                 {
-                    voice.PushedFrames = loop.StartFrame;
+                    voice.PushedFrames = clip.LoopStartFrame;
                 }
             }
         }
