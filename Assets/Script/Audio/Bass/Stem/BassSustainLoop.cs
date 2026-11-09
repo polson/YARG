@@ -14,6 +14,10 @@ namespace YARG.Audio.BASS
         private const double MAX_POWER_RATIO = 2;
         private const double MAX_BRIGHTNESS_RATIO = 1.8;
         private const double MAX_MATCH_ERROR = 0.12;
+        private const double MIN_PERIOD_SECONDS = 1 / 1500.0;
+        private const double MAX_PERIOD_SECONDS = 1 / 40.0;
+        private const double MIN_PERIODICITY = 0.8;
+        private const double PERIOD_PEAK_RATIO = 0.9;
 
         internal static bool TryFind(float[] samples, BassStemFormat format, int firstFrame,
             int fadeFrames, out int startFrame, out int endFrame)
@@ -124,6 +128,96 @@ namespace YARG.Audio.BASS
             }
 
             return startFrame > 0;
+        }
+
+        internal static bool TryFindPeriodic(float[] samples, BassStemFormat format, int firstFrame,
+            out int startFrame, out int endFrame, out int fadeFrames)
+        {
+            int channels = format.Channels;
+            int frameCount = samples.Length / channels;
+            int minLag = Math.Max(1, format.FramesFor(MIN_PERIOD_SECONDS));
+            int maxLag = Math.Min(format.FramesFor(MAX_PERIOD_SECONDS), (frameCount - firstFrame) / 2);
+            startFrame = 0;
+            endFrame = 0;
+            fadeFrames = 0;
+            if (maxLag <= minLag)
+            {
+                return false;
+            }
+
+            var correlations = new double[maxLag + 1];
+            int firstPeakLag = 0;
+            double best = 0;
+            for (int lag = minLag; lag <= maxLag; lag++)
+            {
+                correlations[lag] = Correlation(samples, channels, firstFrame, frameCount - lag, lag);
+                if (firstPeakLag == 0 && correlations[lag] < 0)
+                {
+                    firstPeakLag = lag;
+                }
+
+                if (firstPeakLag != 0)
+                {
+                    best = Math.Max(best, correlations[lag]);
+                }
+            }
+
+            if (best < MIN_PERIODICITY)
+            {
+                return false;
+            }
+
+            int period = firstPeakLag;
+            while (correlations[period] < best * PERIOD_PEAK_RATIO ||
+                (period < maxLag && correlations[period + 1] > correlations[period]))
+            {
+                period++;
+            }
+
+            int periods = (int) ((frameCount - firstFrame) / (period * 1.25));
+            if (periods == 0)
+            {
+                return false;
+            }
+
+            fadeFrames = periods * period / 4;
+            int guess = frameCount - fadeFrames - periods * period;
+            double bestError = double.MaxValue;
+            int first = Math.Max(firstFrame, guess - periods);
+            int last = guess + periods;
+            for (int start = first; start <= last; start++)
+            {
+                double error = MatchError(samples, channels, headFrame: start, tailFrame: frameCount - fadeFrames,
+                    frames: fadeFrames, frameStep: 1);
+                if (error < bestError)
+                {
+                    bestError = error;
+                    startFrame = start;
+                }
+            }
+
+            endFrame = frameCount;
+            return bestError < MAX_MATCH_ERROR;
+        }
+
+        private static double Correlation(float[] samples, int channels, int firstFrame, int lastFrame, int lag)
+        {
+            double product = 0;
+            double left = 0;
+            double right = 0;
+            for (int frame = firstFrame; frame < lastFrame; frame++)
+            {
+                for (int channel = 0; channel < channels; channel++)
+                {
+                    double head = samples[frame * channels + channel];
+                    double tail = samples[(frame + lag) * channels + channel];
+                    product += head * tail;
+                    left += head * head;
+                    right += tail * tail;
+                }
+            }
+
+            return left > 0 && right > 0 ? product / Math.Sqrt(left * right) : 0;
         }
 
         private static double MatchError(float[] samples, int channels, int headFrame, int tailFrame, int frames,

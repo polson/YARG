@@ -11,6 +11,9 @@ namespace YARG.Audio.BASS
         private const double LOOP_FADE_SECONDS     = 0.02;
         private const double SUSTAIN_LOOP_SECONDS  = 0.4;
         private const double FALLBACK_LOOP_SECONDS = 0.15;
+        private const double BLEED_GUARD_SECONDS   = 0.03;
+        private const double MIN_CLEAN_SECONDS     = 0.025;
+        private const double SHORT_BODY_SECONDS    = 0.1;
 
         public double  SongSeconds;
         public long    StartFrame;
@@ -34,6 +37,21 @@ namespace YARG.Audio.BASS
             return (int) Math.Min(Math.Round(seconds * format.Frequency), MaxFrames(format));
         }
 
+        public void TrimToCleanEnd(BassStemFormat format)
+        {
+            int attackFrames = BassSustainStretch.FindAttackEnd(Samples, format);
+            int onsetFrame = BassSustainStretch.FindNextOnset(Samples, format, attackFrames);
+            int cleanEnd = Math.Min(onsetFrame, FrameCount - format.FramesFor(BLEED_GUARD_SECONDS));
+            cleanEnd = Math.Max(cleanEnd, Math.Min(format.FramesFor(MIN_CLEAN_SECONDS), FrameCount));
+            if (cleanEnd >= FrameCount)
+            {
+                return;
+            }
+
+            Array.Resize(ref Samples, cleanEnd * format.Channels);
+            FrameCount = cleanEnd;
+        }
+
         public void ApplyStartFade(BassStemFormat format)
         {
             int fadeFrames = Math.Min(format.FramesFor(START_FADE_SECONDS), FrameCount);
@@ -54,6 +72,17 @@ namespace YARG.Audio.BASS
                 fadeFrames: fadeFrames, out int bodyStart, out int loopEnd);
             if (!cleanLoop)
             {
+                int attackFrames = BassSustainStretch.FindAttackEnd(Samples, format);
+                bool shortBody = FrameCount - attackFrames < format.FramesFor(SHORT_BODY_SECONDS);
+                if (shortBody && BassSustainLoop.TryFindPeriodic(Samples, format, attackFrames,
+                    out bodyStart, out loopEnd, out int periodicFadeFrames))
+                {
+                    YargLogger.LogFormatInfo("[LoopDebug] periodic: loop {0} ms",
+                        (loopEnd - bodyStart - periodicFadeFrames) * 1000.0 / format.Frequency);
+                    SetLoop(bodyStart: bodyStart, loopEnd: loopEnd, fadeFrames: periodicFadeFrames, format: format);
+                    return true;
+                }
+
                 YargLogger.LogFormatInfo("[LoopDebug] fallback: clip {0} ms", FrameCount * 1000.0 / format.Frequency);
                 int tailFrames = format.FramesFor(FALLBACK_LOOP_SECONDS);
                 bodyStart = Math.Max(FrameCount / 2, FrameCount - tailFrames);

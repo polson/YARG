@@ -17,7 +17,7 @@ namespace YARG.Gameplay.Player
         private const double TAP_WINDOW_SECONDS = 0.25;
 
         private readonly BassStemSoundboard _soundboard;
-        private readonly GuitarEngine _engine;
+        private readonly Func<GuitarEngine> _currentEngine;
         private readonly Action<bool> _setStemMuted;
         private readonly int _fretRowMask;
         private readonly int _maxFretIndex;
@@ -30,11 +30,11 @@ namespace YARG.Gameplay.Player
         private int _lastHeldMask;
         private double _lastHeldTime;
 
-        public FreestyleSolo(BassStemSoundboard soundboard, GuitarEngine engine, Action<bool> setStemMuted,
+        public FreestyleSolo(BassStemSoundboard soundboard, Func<GuitarEngine> currentEngine, Action<bool> setStemMuted,
             int fretRowMask, int maxFretIndex, double hopoLeniency)
         {
             _soundboard = soundboard;
-            _engine = engine;
+            _currentEngine = currentEngine;
             _setStemMuted = setStemMuted;
             _fretRowMask = fretRowMask;
             _maxFretIndex = maxFretIndex;
@@ -53,7 +53,7 @@ namespace YARG.Gameplay.Player
 
         public void RequestSeeds(List<GuitarNote> notes, Func<double, double> playbackTime)
         {
-            _soundboard.RequestSeeds(_engine.SoloPhrases, notes, playbackTime);
+            _soundboard.RequestSeeds(_currentEngine().SoloPhrases, notes, playbackTime);
         }
 
         public void ReleaseFrets(int fretMask)
@@ -95,7 +95,8 @@ namespace YARG.Gameplay.Player
             int tappedMask = _tapMask;
             _tapMask = 0;
 
-            double songSpeed = _engine.BaseParameters.SongSpeed;
+            var engine = _currentEngine();
+            double songSpeed = engine.BaseParameters.SongSpeed;
             _hopoLeniency.SetSpeed(songSpeed);
             if (_hopoLeniency.IsExpired(currentTime))
             {
@@ -103,13 +104,13 @@ namespace YARG.Gameplay.Player
             }
 
             double soloTime;
-            if (!TryGetSoloTime(currentTime, isSeekingReplay, out soloTime))
+            if (!TryGetSoloTime(engine, currentTime, isSeekingReplay, out soloTime))
             {
                 Stop();
                 return;
             }
 
-            int heldMask = _engine.PlayerButtonMask & _fretRowMask;
+            int heldMask = engine.PlayerButtonMask & _fretRowMask;
             bool fretsChanged = heldMask != _lastHeldMask;
             EndPhraseIfLifted(wasHeld: _lastHeldMask != 0, currentTime: currentTime, songSpeed: songSpeed);
             _lastHeldMask = heldMask;
@@ -140,9 +141,10 @@ namespace YARG.Gameplay.Player
             }
         }
 
-        private bool TryGetSoloTime(double currentTime, bool isSeekingReplay, out double soloTime)
+        private static bool TryGetSoloTime(GuitarEngine engine, double currentTime, bool isSeekingReplay,
+            out double soloTime)
         {
-            double? freestyleTime = _engine.FreestyleSoloTime;
+            double? freestyleTime = engine.FreestyleSoloTime;
             if (freestyleTime == null || isSeekingReplay)
             {
                 soloTime = 0;

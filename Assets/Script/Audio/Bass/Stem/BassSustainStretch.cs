@@ -15,6 +15,10 @@ namespace YARG.Audio.BASS
         private const double SHORT_BODY_SECONDS = 0.075;
         private const float SHORT_BODY_SPEED = 0.15f;
         private const float BODY_SPEED = 0.25f;
+        private const double ONSET_BLOCK_SECONDS = 0.003;
+        private const double ONSET_RATIO = 3;
+        private const double ONSET_FLOOR_RATIO = 0.01;
+        private const double ONSET_SMOOTHING = 0.2;
 
         internal static bool TryRender(float[] samples, BassStemFormat format,
             out float[] rendered, out int bodyStartFrame)
@@ -157,6 +161,35 @@ namespace YARG.Audio.BASS
                 energy += source * source + previous * previous;
             }
             return energy > 0 ? error / energy : 0;
+        }
+
+        internal static int FindNextOnset(float[] samples, BassStemFormat format, int firstFrame)
+        {
+            int channels = format.Channels;
+            int frameCount = samples.Length / channels;
+            int blockFrames = format.FramesFor(ONSET_BLOCK_SECONDS);
+            double reference = 0;
+            double peak = 0;
+            for (int start = 1; start + blockFrames <= frameCount; start += blockFrames)
+            {
+                double flux = 0;
+                for (int sample = start * channels; sample < (start + blockFrames) * channels; sample++)
+                {
+                    double difference = samples[sample] - samples[sample - channels];
+                    flux += difference * difference;
+                }
+
+                bool rose = flux > reference * ONSET_RATIO && flux > peak * ONSET_FLOOR_RATIO;
+                if (start >= firstFrame && reference > 0 && rose)
+                {
+                    return Math.Max(firstFrame, start - blockFrames);
+                }
+
+                reference = reference == 0 ? flux : reference + (flux - reference) * ONSET_SMOOTHING;
+                peak = Math.Max(peak, flux);
+            }
+
+            return frameCount;
         }
 
         internal static int FindAttackEnd(float[] samples, BassStemFormat format)

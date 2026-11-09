@@ -16,7 +16,6 @@ namespace YARG.Audio.BASS
     internal sealed class BassStemSeedLibrary
     {
         private const double STRETCH_REGION_PREROLL_SECONDS = 0.1;
-        private const double STRETCH_BLEED_GUARD_SECONDS    = 0.03;
         private const double STRETCH_MIN_BODY_SECONDS       = 0.02;
         private const double STRETCH_FADE_SECONDS           = 0.01;
 
@@ -274,6 +273,7 @@ namespace YARG.Audio.BASS
 
         private void PrepareSeed(BassStemSoloSeeds job, BassStemClip clip)
         {
+            clip.TrimToCleanEnd(_format);
             var raw = clip.Samples;
             bool cleanLoop = clip.PrepareLoop(_format);
             if (!cleanLoop && BassSustainStretch.TryRender(clip.Samples, _format, out var samples, out int bodyStartFrame))
@@ -297,14 +297,13 @@ namespace YARG.Audio.BASS
                 return true;
             }
 
-            int guardFrames = _format.FramesFor(STRETCH_BLEED_GUARD_SECONDS);
             int minBodyFrames = _format.FramesFor(STRETCH_MIN_BODY_SECONDS);
             var bodies = new List<(long BodyStartFrame, int BodyFrames)>();
             var bodyIndexes = new int[job.Candidates.Count];
             for (int index = 0; index < job.Candidates.Count; index++)
             {
                 var (clip, raw, attackFrames) = job.Candidates[index];
-                int bodyFrames = raw.Length / _format.Channels - guardFrames - attackFrames;
+                int bodyFrames = raw.Length / _format.Channels - attackFrames;
                 bodyIndexes[index] = -1;
                 if (bodyFrames < minBodyFrames)
                 {
