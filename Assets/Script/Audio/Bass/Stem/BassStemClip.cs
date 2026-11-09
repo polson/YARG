@@ -12,6 +12,8 @@ namespace YARG.Audio.BASS
         private const double SUSTAIN_LOOP_SECONDS  = 0.4;
         private const double FALLBACK_LOOP_SECONDS = 0.15;
 
+        public double  SongSeconds;
+        public long    StartFrame;
         public float[] Samples = Array.Empty<float>();
         public int     FrameCount;
         public bool    IsSustain;

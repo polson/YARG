@@ -137,7 +137,6 @@ namespace YARG.Gameplay.Player
 
         protected SongStem _stem;
         private double _practiceSectionStartTime;
-        private BassStemSoundboard _soundboard;
         private FreestyleSolo _freestyle;
         private float _whammyAxis;
 
@@ -247,32 +246,22 @@ namespace YARG.Gameplay.Player
 
             GameManager.BeatEventHandler.Visual.Subscribe(_fretArray.PulseFretColors, BeatEventType.StrongBeat);
 
-            _soundboard = GameManager.CreateStemSoundboard(_stem);
             if (!EngineParams.FreestyleSolos)
             {
                 return;
             }
 
-            if (_soundboard == null)
+            var soundboard = GameManager.CreateStemSoundboard(_stem);
+            if (soundboard == null)
             {
                 YargLogger.LogWarning("Freestyle solos are enabled for this chart but stem replay is unavailable.");
                 return;
             }
 
-            _freestyle = new FreestyleSolo(_soundboard, Engine, SetStemMuteState,
+            _freestyle = new FreestyleSolo(soundboard, Engine, SetStemMuteState,
                 fretRowMask: AllFretRows, maxFretIndex: FretRowCount - 1,
                 hopoLeniency: EngineParams.HopoLeniency);
-            RequestFreestyleSeeds();
-        }
-
-        private void RequestFreestyleSeeds()
-        {
-            if (_freestyle == null)
-            {
-                return;
-            }
-
-            _soundboard.RequestSeeds(Engine.SoloPhrases, NoteTrack.Notes, GameManager.GetAudioPlaybackTime);
+            _freestyle.RequestSeeds(NoteTrack.Notes, GameManager.GetAudioPlaybackTime);
         }
 
         protected virtual void InitializeIndicatorStripes()
@@ -295,8 +284,8 @@ namespace YARG.Gameplay.Player
         protected override void ResetDifficulty(double time)
         {
             Engine.ReplaceChart(NoteTrack);
-            RequestFreestyleSeeds();
-            ResetFreestyleState();
+            _freestyle?.RequestSeeds(NoteTrack.Notes, GameManager.GetAudioPlaybackTime);
+            _freestyle?.Reset();
 
             if (Player.Profile.RangeEnabled)
             {
@@ -513,7 +502,7 @@ namespace YARG.Gameplay.Player
         protected override void ResetVisuals()
         {
             base.ResetVisuals();
-            ResetFreestyleState();
+            _freestyle?.Reset();
 
             StrikelineAnimator.SetSustaining(false);
             _fretArray.ResetAll();
@@ -638,7 +627,7 @@ namespace YARG.Gameplay.Player
                 return;
             }
 
-            _soundboard?.StopAll();
+            _freestyle?.StopVoices();
 
             if (GameManager.Paused) return;
 
@@ -665,13 +654,7 @@ namespace YARG.Gameplay.Player
         protected override void OnDropOut()
         {
             base.OnDropOut();
-            ResetFreestyleState();
-        }
-
-        private void ResetFreestyleState()
-        {
             _freestyle?.Reset();
-            _soundboard?.StopAll();
         }
 
         protected override void OnNoteMissed(int index, GuitarNote chordParent)
@@ -898,9 +881,9 @@ namespace YARG.Gameplay.Player
                     _freestyle?.QueueTap(fretMask);
                 }
             }
-            else if (_soundboard != null && fretMask != 0)
+            else if (fretMask != 0)
             {
-                _soundboard.Release(fretMask);
+                _freestyle?.ReleaseFrets(fretMask);
             }
 
             // Update the whammy factor

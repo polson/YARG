@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using YARG.Audio.BASS;
+using YARG.Core.Chart;
 using YARG.Core.Engine;
 using YARG.Core.Engine.Guitar;
 
@@ -49,10 +51,36 @@ namespace YARG.Gameplay.Player
             _tapMask = fretMask;
         }
 
+        public void RequestSeeds(List<GuitarNote> notes, Func<double, double> playbackTime)
+        {
+            _soundboard.RequestSeeds(_engine.SoloPhrases, notes, playbackTime);
+        }
+
+        public void ReleaseFrets(int fretMask)
+        {
+            _soundboard.Release(fretMask);
+        }
+
+        public void StopVoices()
+        {
+            _soundboard.StopAll();
+        }
+
         public void Reset()
         {
+            ClearInput();
+            _soundboard.StopAll();
+        }
+
+        private void ClearInput()
+        {
             _hopoLeniency.Reset();
-            RestoreMute();
+            if (_muted)
+            {
+                _muted = false;
+                _setStemMuted(false);
+            }
+
             _strumPending = false;
             _tapMask = 0;
             _phraseMask = 0;
@@ -102,7 +130,8 @@ namespace YARG.Gameplay.Player
             }
 
             bool soloAudio = _soundboard.HasSeedSet(soloTime);
-            SetMuted(soloAudio);
+            _muted = soloAudio;
+            _setStemMuted(soloAudio);
             _soundboard.SetHeldFrets(sustainMask);
             _soundboard.SetWhammyPitch(whammyAxis);
             if ((strummed || hammerOn) && soloAudio)
@@ -126,7 +155,7 @@ namespace YARG.Gameplay.Player
 
         private void Stop()
         {
-            Reset();
+            ClearInput();
             _soundboard.SetHeldFrets(0);
             _soundboard.SetWhammyPitch(0);
         }
@@ -154,12 +183,12 @@ namespace YARG.Gameplay.Player
             _soundboard.SelectSeedSet(soloTime, currentTime);
             if (strummed && playMask != 0)
             {
-                _soundboard.PlayStrum(playMask, semitones: 0, gain: 1);
+                _soundboard.PlayStrum(playMask);
             }
             else
             {
                 int fretMask = HighestFret(playMask, _maxFretIndex);
-                _soundboard.Play(fretMask == 0 ? GuitarEngine.OPEN_MASK : fretMask, semitones: 0, gain: 1);
+                _soundboard.Play(fretMask == 0 ? GuitarEngine.OPEN_MASK : fretMask);
             }
 
             _phraseMask = playMask == 0 ? GuitarEngine.OPEN_MASK : playMask;
@@ -186,20 +215,6 @@ namespace YARG.Gameplay.Player
             }
 
             return 0;
-        }
-
-        private void SetMuted(bool muted)
-        {
-            _muted = muted;
-            _setStemMuted(muted);
-        }
-
-        private void RestoreMute()
-        {
-            if (_muted)
-            {
-                SetMuted(false);
-            }
         }
     }
 }

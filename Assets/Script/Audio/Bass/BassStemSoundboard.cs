@@ -1,28 +1,94 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
+using ManagedBass;
+using ManagedBass.Fx;
 using YARG.Core.Audio;
 using YARG.Core.Chart;
 using YARG.Core.Engine;
 using YARG.Core.Engine.Guitar;
+using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
 {
     internal sealed class BassStemSoundboard : IDisposable
     {
-        private readonly object              _lock;
-        private readonly BassStemSeedLibrary _seeds;
-        private readonly BassStemVoicePool   _voices;
-        private          bool                _disposed;
+        private const int    VOICE_COUNT                         = 12;
+        private const int    FLOAT_BYTES                         = sizeof(float);
+        private const double VOICE_FADE_SECONDS                  = 0.08;
+        private const double FREESTYLE_RELEASE_SECONDS           = 0.12;
+        private const double FREESTYLE_MIN_TRANSITION_SECONDS    = 0.015;
+        private const double FREESTYLE_MAX_TRANSITION_SECONDS    = 0.03;
+        private const double FREESTYLE_TRANSITION_INTERVAL_RATIO = 0.25;
+        private const double LOOP_BUFFER_SECONDS                 = 0.25;
 
-        internal BassStemSoundboard(BassStemReplay replay, AudioManager manager,
+        private sealed class Voice
+        {
+            public readonly PushStream Stream;
+            public readonly int        PitchFx;
+            public BassStemClip? Clip;
+            public int        PushedFrames;
+            public int        Key;
+            public bool       IsSustain;
+            public bool       IsLooping;
+            public long       StartOrder;
+
+            public Voice(PushStream stream, int pitchFx)
+            {
+                Stream = stream;
+                PitchFx = pitchFx;
+            }
+
+            public bool IsAttached => Key != 0;
+
+            public bool IsPlainSustainFor(int fretMask)
+            {
+                return IsSustain && !IsLooping && (Key & fretMask) != 0;
+            }
+
+            public bool IsFullyHeld(int heldMask)
+            {
+                return (Key & heldMask) == Key;
+            }
+
+            public bool IsReleasedBy(int heldMask)
+            {
+                return Key == GuitarEngine.OPEN_MASK ? heldMask == 0 : (Key & heldMask) != Key;
+            }
+        }
+
+        private readonly object                       _lock;
+        private readonly BassStemFormat               _format;
+        private readonly PitchShiftParametersStruct   _pitchParams;
+        private readonly Func<double>                 _volume;
+        private readonly BassStemSeedLibrary          _seeds;
+        private readonly Voice[]                      _voices = new Voice[VOICE_COUNT];
+        private          int                          _heldFrets;
+        private          float                        _whammyPitch = 1f;
+        private          long                         _playCount;
+        private          long                         _lastVoiceStart = Stopwatch.GetTimestamp();
+        private          bool                         _disposed;
+
+        internal BassStemSoundboard(object stemLock, AudioManager manager, BassStemFormat format,
             PitchShiftParametersStruct pitchParams, Func<double> volume)
         {
-            _lock = replay.Lock;
-            _seeds = new BassStemSeedLibrary(replay.Format);
-            _voices = new BassStemVoicePool(manager, replay.Format, pitchParams, volume);
+            _lock = stemLock;
+            _format = format;
+            _pitchParams = pitchParams;
+            _volume = volume;
+            _seeds = new BassStemSeedLibrary(format);
+
+            for (int index = 0; index < VOICE_COUNT; index++)
+            {
+                var stream = manager.CreatePushStream(sampleRate: format.Frequency, channelCount: format.Channels);
+                var pitchFx = BassHelpers.FXAddParameters(stream.Handle, EffectType.PitchShift, pitchParams);
+                _voices[index] = new Voice(stream: stream, pitchFx: pitchFx);
+            }
         }
+
+        private int LoopBufferFrames => _format.FramesFor(LOOP_BUFFER_SECONDS);
 
         public void RequestSeeds(IReadOnlyList<SoloSection> phrases, List<GuitarNote> notes,
             Func<double, double> playbackTime)
@@ -40,7 +106,7 @@ namespace YARG.Audio.BASS
             return _seeds.HasSeeds(soloTime);
         }
 
-        public void Play(int key, int semitones, double gain)
+        public void Play(int key)
         {
             lock (_lock)
             {
@@ -49,12 +115,12 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                _voices.FadePreviousVoices();
-                _voices.Start(clip, key: key, semitones: semitones, gain: gain);
+                FadePreviousVoices();
+                Start(clip, key: key, gain: 1);
             }
         }
 
-        public void PlayStrum(int fretMask, int semitones, double gain)
+        public void PlayStrum(int fretMask)
         {
             lock (_lock)
             {
@@ -63,8 +129,8 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                _voices.FadePreviousVoices();
-                double fretGain = gain / Math.Sqrt(FretCount(fretMask));
+                FadePreviousVoices();
+                double fretGain = 1 / Math.Sqrt(FretCount(fretMask));
                 for (int fret = 1; fret < GuitarEngine.OPEN_MASK; fret <<= 1)
                 {
                     if ((fretMask & fret) == 0)
@@ -77,7 +143,7 @@ namespace YARG.Audio.BASS
                         continue;
                     }
 
-                    _voices.Start(clip, key: fret, semitones: semitones, gain: fretGain);
+                    Start(clip, key: fret, gain: fretGain);
                 }
             }
         }
@@ -91,7 +157,13 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                _voices.Release(fretMask);
+                foreach (var voice in _voices)
+                {
+                    if (voice.IsPlainSustainFor(fretMask))
+                    {
+                        FadeOut(voice);
+                    }
+                }
             }
         }
 
@@ -104,7 +176,14 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                _voices.SetHeldFrets(fretMask);
+                _heldFrets = fretMask;
+                foreach (var voice in _voices)
+                {
+                    if (voice.IsLooping && voice.IsReleasedBy(fretMask))
+                    {
+                        FadeOut(voice);
+                    }
+                }
             }
         }
 
@@ -115,12 +194,19 @@ namespace YARG.Audio.BASS
                 : 1f;
             lock (_lock)
             {
-                if (_disposed)
+                if (_disposed || _whammyPitch == shift)
                 {
                     return;
                 }
 
-                _voices.SetWhammyPitch(shift);
+                _whammyPitch = shift;
+                foreach (var voice in _voices)
+                {
+                    if (voice.IsLooping)
+                    {
+                        SetPitch(voice);
+                    }
+                }
             }
         }
 
@@ -133,7 +219,13 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                _voices.StopAll();
+                foreach (var voice in _voices)
+                {
+                    if (voice.IsAttached)
+                    {
+                        FadeOut(voice);
+                    }
+                }
             }
         }
 
@@ -156,7 +248,18 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                _voices.Clear();
+                foreach (var voice in _voices)
+                {
+                    voice.Stream.Clear();
+                    voice.Clip = null;
+                    voice.Key = 0;
+                    voice.IsSustain = false;
+                    voice.IsLooping = false;
+                }
+
+                _heldFrets = 0;
+                _whammyPitch = 1f;
+                _lastVoiceStart = Stopwatch.GetTimestamp();
             }
         }
 
@@ -169,7 +272,10 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                _voices.Pump();
+                foreach (var voice in _voices)
+                {
+                    Feed(voice);
+                }
             }
         }
 
@@ -184,7 +290,10 @@ namespace YARG.Audio.BASS
 
                 _disposed = true;
                 _seeds.Forget();
-                _voices.Dispose();
+                foreach (var voice in _voices)
+                {
+                    voice.Stream.Dispose();
+                }
             }
         }
 
@@ -200,6 +309,169 @@ namespace YARG.Audio.BASS
             }
 
             return count;
+        }
+
+        private void Start(BassStemClip clip, int key, double gain)
+        {
+            var voice = PickVoice(key);
+            voice.Stream.Clear();
+            voice.Stream.SetVolume(_volume() * gain);
+            voice.Clip = clip;
+            voice.PushedFrames = 0;
+            voice.Key = key;
+            voice.IsLooping = clip.HasLoop && voice.IsFullyHeld(_heldFrets);
+            voice.IsSustain = clip.IsSustain || voice.IsLooping;
+            SetPitch(voice);
+            voice.StartOrder = ++_playCount;
+            Feed(voice);
+        }
+
+        private void FadePreviousVoices()
+        {
+            long now = Stopwatch.GetTimestamp();
+            double interval = (now - _lastVoiceStart) / (double) Stopwatch.Frequency;
+            double transition = Math.Clamp(interval * FREESTYLE_TRANSITION_INTERVAL_RATIO,
+                FREESTYLE_MIN_TRANSITION_SECONDS, FREESTYLE_MAX_TRANSITION_SECONDS);
+            _lastVoiceStart = now;
+            foreach (var previous in _voices)
+            {
+                if (previous.IsAttached || Bass.ChannelIsSliding(previous.Stream.Handle, ChannelAttribute.Volume))
+                {
+                    FadeOut(previous, fadeSeconds: transition);
+                }
+            }
+        }
+
+        private Voice PickVoice(int key)
+        {
+            Voice? oldestIdle = null;
+            Voice? quietestTail = null;
+            float quietestVolume = float.MaxValue;
+            Voice oldest = _voices[0];
+            foreach (var voice in _voices)
+            {
+                if (voice.Key == key)
+                {
+                    return voice;
+                }
+
+                if (voice.StartOrder < oldest.StartOrder)
+                {
+                    oldest = voice;
+                }
+
+                if (voice.IsAttached)
+                {
+                    continue;
+                }
+
+                if (!Bass.ChannelIsSliding(voice.Stream.Handle, ChannelAttribute.Volume))
+                {
+                    if (oldestIdle == null || voice.StartOrder < oldestIdle.StartOrder)
+                    {
+                        oldestIdle = voice;
+                    }
+
+                    continue;
+                }
+
+                bool hasVolume = Bass.ChannelGetAttribute(voice.Stream.Handle, ChannelAttribute.Volume, out float volume);
+                if (hasVolume && volume < quietestVolume)
+                {
+                    quietestTail = voice;
+                    quietestVolume = volume;
+                }
+            }
+
+            return oldestIdle ?? quietestTail ?? oldest;
+        }
+
+        private void Feed(Voice voice)
+        {
+            var clip = voice.Clip;
+            if (clip == null)
+            {
+                return;
+            }
+
+            if (voice.IsLooping)
+            {
+                FeedLoop(voice, clip);
+                return;
+            }
+
+            int frames = clip.FrameCount - voice.PushedFrames;
+            if (frames > 0)
+            {
+                Push(voice.Stream, clip.Samples, firstFrame: voice.PushedFrames, frameCount: frames);
+                voice.PushedFrames += frames;
+            }
+
+            if (voice.PushedFrames >= clip.FrameCount)
+            {
+                voice.Clip = null;
+            }
+        }
+
+        private void FeedLoop(Voice voice, BassStemClip clip)
+        {
+            int queuedBytes = Bass.StreamPutData(voice.Stream.Handle, IntPtr.Zero, 0);
+            if (queuedBytes < 0)
+            {
+                YargLogger.LogFormatError("Failed to query replay queue: {0}!", Bass.LastError);
+                return;
+            }
+
+            int queuedFrames = queuedBytes / (_format.Channels * FLOAT_BYTES);
+            int remaining = LoopBufferFrames - queuedFrames;
+            while (remaining > 0)
+            {
+                int frames = clip.NextLoopSegment(voice.PushedFrames, remaining, out bool fromTail, out int sourceFrame);
+                Push(voice.Stream, fromTail ? clip.LoopTail : clip.Samples, firstFrame: sourceFrame, frameCount: frames);
+                remaining -= frames;
+                voice.PushedFrames += frames;
+                if (voice.PushedFrames == clip.LoopEndFrame)
+                {
+                    voice.PushedFrames = clip.LoopStartFrame;
+                }
+            }
+        }
+
+        private unsafe void Push(PushStream stream, float[] samples, int firstFrame, int frameCount)
+        {
+            int channels = _format.Channels;
+            fixed (float* pointer = &samples[firstFrame * channels])
+            {
+                stream.Push((IntPtr) pointer, frameCount * channels * FLOAT_BYTES);
+            }
+        }
+
+        private void SetPitch(Voice voice)
+        {
+            var pitch = _pitchParams;
+            pitch.fPitchShift = voice.IsLooping ? _whammyPitch : 1f;
+
+            if (!BassHelpers.FXSetParameters(voice.PitchFx, pitch))
+            {
+                YargLogger.LogFormatError("Failed to set replay pitch: {0}!", Bass.LastError);
+            }
+        }
+
+        private void FadeOut(Voice voice)
+        {
+            FadeOut(voice, fadeSeconds: voice.IsLooping ? FREESTYLE_RELEASE_SECONDS : VOICE_FADE_SECONDS);
+        }
+
+        private void FadeOut(Voice voice, double fadeSeconds)
+        {
+            voice.Clip = null;
+            voice.Key = 0;
+            voice.IsSustain = false;
+            voice.IsLooping = false;
+            if (!Bass.ChannelSlideAttribute(voice.Stream.Handle, ChannelAttribute.Volume, 0f, (int) (fadeSeconds * 1000)))
+            {
+                YargLogger.LogFormatError("Failed to fade replay voice: {0}!", Bass.LastError);
+            }
         }
     }
 }

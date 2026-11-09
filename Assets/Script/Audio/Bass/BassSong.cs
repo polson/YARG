@@ -362,7 +362,7 @@ namespace YARG.Audio.BASS
             byte[]? prerenderBytes = null;
             if (stemInfos.Any(info => BassStemReplay.IsFreestyleStem(info.Stem)))
             {
-                prerenderBytes = BassStemPrerender.CopyStream(stream);
+                prerenderBytes = BassStemReplay.CopyStream(stream);
             }
 
             if (!_stemPipeline.AddStems(stream, stemInfos, out var createdStems, out double delay))

@@ -4,27 +4,13 @@ using System.Collections.Generic;
 
 namespace YARG.Audio.BASS
 {
-    internal sealed class BassStemSeed
-    {
-        public readonly double       SongSeconds;
-        public readonly long         StartFrame;
-        public          BassStemClip Clip;
-
-        public BassStemSeed(double songSeconds, BassStemClip clip, long startFrame)
-        {
-            SongSeconds = songSeconds;
-            Clip = clip;
-            StartFrame = startFrame;
-        }
-    }
-
     internal sealed class BassStemSoloSeeds
     {
         public readonly double                                StartTime;
         public readonly double                                EndTime;
-        public readonly Dictionary<int, List<BassStemSeed>>   ByKey = new();
+        public readonly Dictionary<int, List<BassStemClip>>   ByKey = new();
         public readonly List<(int Key, double SongSeconds, double PlaybackSeconds, double DurationSeconds, bool IsSustain)> Notes;
-        public readonly List<(BassStemSeed Seed, float[] Raw, int AttackFrames)> Candidates = new();
+        public readonly List<(BassStemClip Clip, float[] Raw, int AttackFrames)> Candidates = new();
         public          float[]                                                  Region = Array.Empty<float>();
         public          long                                                     RegionStartFrame;
 
@@ -54,9 +40,9 @@ namespace YARG.Audio.BASS
 
         public bool TryGetClip(int key, out BassStemClip clip)
         {
-            if (ByKey.TryGetValue(key, out var seeds))
+            if (ByKey.TryGetValue(key, out var clips))
             {
-                clip = ClipAt(seeds);
+                clip = ClipAt(clips);
                 return true;
             }
 
@@ -66,9 +52,9 @@ namespace YARG.Audio.BASS
 
         public bool TryGetAnyClip(out BassStemClip clip)
         {
-            foreach (var seeds in ByKey.Values)
+            foreach (var clips in ByKey.Values)
             {
-                clip = ClipAt(seeds);
+                clip = ClipAt(clips);
                 return true;
             }
 
@@ -76,17 +62,17 @@ namespace YARG.Audio.BASS
             return false;
         }
 
-        private BassStemClip ClipAt(List<BassStemSeed> seeds)
+        private BassStemClip ClipAt(List<BassStemClip> clips)
         {
-            foreach (var seed in seeds)
+            foreach (var clip in clips)
             {
-                if (seed.SongSeconds >= _songSeconds)
+                if (clip.SongSeconds >= _songSeconds)
                 {
-                    return seed.Clip;
+                    return clip;
                 }
             }
 
-            return seeds[seeds.Count - 1].Clip;
+            return clips[clips.Count - 1];
         }
     }
 }

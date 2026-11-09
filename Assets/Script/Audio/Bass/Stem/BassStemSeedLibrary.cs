@@ -214,17 +214,19 @@ namespace YARG.Audio.BASS
 
             var clip = new BassStemClip
             {
+                SongSeconds = note.SongSeconds,
+                StartFrame = startFrame,
                 Samples = new float[frameCount * _format.Channels],
                 FrameCount = frameCount,
                 IsSustain = note.IsSustain,
             };
             if (!job.ByKey.TryGetValue(note.Key, out var keyed))
             {
-                keyed = new List<BassStemSeed>();
+                keyed = new List<BassStemClip>();
                 job.ByKey.Add(note.Key, keyed);
             }
 
-            keyed.Add(new BassStemSeed(songSeconds: note.SongSeconds, clip: clip, startFrame: startFrame));
+            keyed.Add(clip);
             jobs.Add((startFrame, frameCount, clip.Samples));
         }
 
@@ -234,10 +236,10 @@ namespace YARG.Audio.BASS
             long endFrame = 0;
             foreach (var keyed in job.ByKey.Values)
             {
-                foreach (var seed in keyed)
+                foreach (var clip in keyed)
                 {
-                    firstFrame = Math.Min(firstFrame, seed.StartFrame);
-                    endFrame = Math.Max(endFrame, seed.StartFrame + seed.Clip.FrameCount);
+                    firstFrame = Math.Min(firstFrame, clip.StartFrame);
+                    endFrame = Math.Max(endFrame, clip.StartFrame + clip.FrameCount);
                 }
             }
 
@@ -256,23 +258,22 @@ namespace YARG.Audio.BASS
         {
             foreach (var pair in job.ByKey)
             {
-                foreach (var seed in pair.Value)
+                foreach (var clip in pair.Value)
                 {
                     if (token.IsCancellationRequested)
                     {
                         return false;
                     }
 
-                    PrepareSeed(job, seed);
+                    PrepareSeed(job, clip);
                 }
             }
 
             return true;
         }
 
-        private void PrepareSeed(BassStemSoloSeeds job, BassStemSeed seed)
+        private void PrepareSeed(BassStemSoloSeeds job, BassStemClip clip)
         {
-            var clip = seed.Clip;
             var raw = clip.Samples;
             bool cleanLoop = clip.PrepareLoop(_format);
             if (!cleanLoop && BassSustainStretch.TryRender(clip.Samples, _format, out var samples, out int bodyStartFrame))
@@ -282,7 +283,7 @@ namespace YARG.Audio.BASS
                 clip.LoopStretchedBody(bodyStartFrame, _format);
                 if (job.HasRegion)
                 {
-                    job.Candidates.Add((seed, raw, BassSustainStretch.FindAttackEnd(raw, _format)));
+                    job.Candidates.Add((clip, raw, BassSustainStretch.FindAttackEnd(raw, _format)));
                 }
             }
 
@@ -302,7 +303,7 @@ namespace YARG.Audio.BASS
             var bodyIndexes = new int[job.Candidates.Count];
             for (int index = 0; index < job.Candidates.Count; index++)
             {
-                var (seed, raw, attackFrames) = job.Candidates[index];
+                var (clip, raw, attackFrames) = job.Candidates[index];
                 int bodyFrames = raw.Length / _format.Channels - guardFrames - attackFrames;
                 bodyIndexes[index] = -1;
                 if (bodyFrames < minBodyFrames)
@@ -311,7 +312,7 @@ namespace YARG.Audio.BASS
                 }
 
                 bodyIndexes[index] = bodies.Count;
-                bodies.Add((seed.StartFrame + attackFrames - job.RegionStartFrame, bodyFrames));
+                bodies.Add((clip.StartFrame + attackFrames - job.RegionStartFrame, bodyFrames));
             }
 
             float[]?[] outputs = Array.Empty<float[]?>();
@@ -330,11 +331,11 @@ namespace YARG.Audio.BASS
                     return false;
                 }
 
-                var (seed, raw, attackFrames) = job.Candidates[index];
+                var (clip, raw, attackFrames) = job.Candidates[index];
                 int body = bodyIndexes[index];
                 if (body >= 0 && outputs[body] is float[] output)
                 {
-                    seed.Clip = BuildStretchedClip(seed, raw, attackFrames, output);
+                    ApplyStretchedBody(clip, raw, attackFrames, output);
                 }
             }
 
@@ -343,7 +344,7 @@ namespace YARG.Audio.BASS
             return true;
         }
 
-        private BassStemClip BuildStretchedClip(BassStemSeed seed, float[] raw, int attackFrames, float[] body)
+        private void ApplyStretchedBody(BassStemClip clip, float[] raw, int attackFrames, float[] body)
         {
             int channels = _format.Channels;
             int bodyFrames = body.Length / channels;
@@ -363,15 +364,10 @@ namespace YARG.Audio.BASS
                 }
             }
 
-            var clip = new BassStemClip
-            {
-                Samples = samples,
-                FrameCount = attackFrames + bodyFrames,
-                IsSustain = seed.Clip.IsSustain,
-            };
+            clip.Samples = samples;
+            clip.FrameCount = attackFrames + bodyFrames;
             clip.LoopStretchedBody(attackFrames + fadeFrames, _format);
             clip.ApplyStartFade(_format);
-            return clip;
         }
 
         private BassStemSoloSeeds? Find(double soloTime)
