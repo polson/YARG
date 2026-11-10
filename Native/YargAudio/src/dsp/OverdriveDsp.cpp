@@ -14,21 +14,25 @@ constexpr std::uint32_t BassSampleFloat = 0x100;
 constexpr std::uint32_t BassConfigFloatDsp = 9;
 
 constexpr double PI = 3.14159265358979323846;
-constexpr float HIGH_PASS_HZ = 150.0f;
-constexpr float MID_BOOST_HZ = 900.0f;
-constexpr float MID_BOOST_DB = 6.0f;
-constexpr float MID_BOOST_Q = 0.8f;
-constexpr float COUPLING_HZ = 300.0f;
-constexpr float LOW_PASS_HZ = 6500.0f;
+constexpr float HIGH_PASS_HZ = 90.0f;
+constexpr float MID_BOOST_HZ = 600.0f;
+constexpr float MID_BOOST_DB = 5.0f;
+constexpr float MID_BOOST_Q = 0.7f;
+constexpr float COUPLING_HZ = 200.0f;
+constexpr float LOW_PASS_HZ = 4500.0f;
+constexpr float BODY_HZ = 120.0f;
+constexpr float BODY_DB = 4.0f;
+constexpr float BODY_Q = 1.0f;
 constexpr float FILTER_Q = 0.7071f;
 constexpr float DC_BLOCK_HZ = 10.0f;
 constexpr float FIRST_BIAS = 0.3f;
 constexpr float SECOND_BIAS = -0.1f;
-constexpr float SECOND_STAGE_GAIN = 3.0f;
+constexpr float SECOND_STAGE_GAIN = 10.0f;
 constexpr float MIX_SMOOTHING_MS = 10.0f;
 constexpr float LEVEL_SMOOTHING_MS = 20.0f;
 constexpr float LOUDNESS_SMOOTHING_MS = 10.0f;
-constexpr float CEILING_ATTACK_MS = 0.5f;
+constexpr float CEILING_ATTACK_MS = 3.0f;
+constexpr float SOFT_KNEE = 0.75f;
 constexpr float CEILING_RELEASE_MS = 40.0f;
 constexpr float PEAK_RELEASE_MS = 150.0f;
 constexpr float MAX_MAKEUP = 2.0f;
@@ -38,6 +42,15 @@ constexpr float ADAA_MIN_STEP = 1e-4f;
 
 float smoothingCoefficient(float milliseconds, float sampleRate) noexcept {
     return static_cast<float>(1.0 - std::exp(-1.0 / (milliseconds * 0.001 * sampleRate)));
+}
+
+float softLimit(float value, float limit) noexcept {
+    if (limit <= 0.0f) return 0.0f;
+    const float magnitude = std::abs(value) / limit;
+    if (magnitude <= SOFT_KNEE) return value;
+    const float knee = 1.0f - SOFT_KNEE;
+    const float limited = SOFT_KNEE + knee * std::tanh((magnitude - SOFT_KNEE) / knee);
+    return std::copysign(limited * limit, value);
 }
 
 float logCosh(float value) noexcept {
@@ -96,6 +109,7 @@ Overdrive::Overdrive(int channels, float sampleRate) noexcept
     mid_ = peak(MID_BOOST_HZ, MID_BOOST_DB, MID_BOOST_Q);
     coupling_ = pass(COUPLING_HZ, true);
     lowPass_ = pass(LOW_PASS_HZ, false);
+    body_ = peak(BODY_HZ, BODY_DB, BODY_Q);
 }
 
 void Overdrive::reset() noexcept {
@@ -146,7 +160,8 @@ void Overdrive::process(float* samples, std::size_t frames, float mix, float dri
             const float first = shape(state.first, voiced * drive, FIRST_BIAS, firstOffset_);
             const float coupled = filter(coupling_, state.coupling1, state.coupling2, first);
             const float second = shape(state.second, coupled * SECOND_STAGE_GAIN, SECOND_BIAS, secondOffset_);
-            const float toned = filter(lowPass_, state.lowPass1, state.lowPass2, second);
+            const float filtered = filter(lowPass_, state.lowPass1, state.lowPass2, second);
+            const float toned = filter(body_, state.body1, state.body2, filtered);
             const float wet = toned - state.dcInput + dcCoefficient_ * state.dcOutput;
             state.dcInput = toned;
             state.dcOutput = wet;
@@ -165,7 +180,7 @@ void Overdrive::process(float* samples, std::size_t frames, float mix, float dri
             state.ceilingGain += (ceiling - state.ceilingGain)
                 * (ceiling < state.ceilingGain ? ceilingAttack_ : ceilingRelease_);
 
-            sample = std::clamp(mixed * state.ceilingGain, -state.peak, state.peak);
+            sample = softLimit(mixed * state.ceilingGain, state.peak);
         }
     }
 }

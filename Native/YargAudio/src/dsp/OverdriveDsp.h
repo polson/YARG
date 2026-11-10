@@ -34,10 +34,11 @@ private:
         float mid1 = 0, mid2 = 0;
         float coupling1 = 0, coupling2 = 0;
         float lowPass1 = 0, lowPass2 = 0;
+        float body1 = 0, body2 = 0;
         Shaper first, second;
         float dcInput = 0, dcOutput = 0;
         float dryPower = 0, wetPower = 0;
-        float makeup = 1;
+        float makeup = 0;
         float dryLoudness = 0, outputLoudness = 0;
         float ceilingGain = 1;
         float peak = 0;
@@ -52,6 +53,7 @@ private:
     Biquad mid_;
     Biquad coupling_;
     Biquad lowPass_;
+    Biquad body_;
     float dcCoefficient_;
     float mixCoefficient_;
     float levelCoefficient_;
