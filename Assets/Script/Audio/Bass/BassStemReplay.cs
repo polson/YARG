@@ -116,22 +116,26 @@ namespace YARG.Audio.BASS
             {
                 try
                 {
+                    var stopwatch = System.Diagnostics.Stopwatch.StartNew();
                     if (!Decode(bytes, indices, _format, jobs, token))
                     {
                         return;
                     }
 
+                    YargLogger.LogFormatInfo("[SoloPrep] decoded in {0} ms", stopwatch.ElapsedMilliseconds);
                     foreach (var chords in chordTracks)
                     {
-                        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+                        var chordStopwatch = System.Diagnostics.Stopwatch.StartNew();
                         chords.Analyze(token);
-                        YargLogger.LogFormatInfo("[SoloChords] bass roots tracked in {0} ms", stopwatch.ElapsedMilliseconds);
+                        YargLogger.LogFormatInfo("[SoloChords] bass roots tracked in {0} ms", chordStopwatch.ElapsedMilliseconds);
                     }
 
                     foreach (var soundboard in soundboards)
                     {
                         soundboard.PublishSeeds(token);
                     }
+
+                    YargLogger.LogFormatInfo("[SoloPrep] ready in {0} ms", stopwatch.ElapsedMilliseconds);
                 }
                 catch (Exception ex)
                 {
@@ -269,7 +273,7 @@ namespace YARG.Audio.BASS
                 }
 
                 var buffer = new float[CHUNK_FRAMES * sourceChannels];
-                long position = 0;
+                long position = SeekTo(handle, jobs.Count > 0 ? jobs[0].StartFrame : 0, format);
                 int firstJob = 0;
                 while (position < endFrame)
                 {
@@ -310,6 +314,23 @@ namespace YARG.Audio.BASS
                     YargLogger.LogFormatError("Failed to free pre-render stream: {0}!", Bass.LastError);
                 }
             }
+        }
+
+        private static long SeekTo(int handle, long frame, BassStemFormat format)
+        {
+            if (frame <= 0)
+            {
+                return 0;
+            }
+
+            long bytes = Bass.ChannelSeconds2Bytes(handle, (double) frame / format.Frequency);
+            if (!Bass.ChannelSetPosition(handle, bytes))
+            {
+                YargLogger.LogFormatWarning("Failed to seek stem pre-render, decoding from the start: {0}!", Bass.LastError);
+                return 0;
+            }
+
+            return (long) Math.Round(Bass.ChannelBytes2Seconds(handle, Bass.ChannelGetPosition(handle)) * format.Frequency);
         }
 
         private static void CopyChunk((long StartFrame, int FrameCount, float[] Samples) job, float[] buffer,

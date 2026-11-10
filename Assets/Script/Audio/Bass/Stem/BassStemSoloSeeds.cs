@@ -136,14 +136,15 @@ namespace YARG.Audio.BASS
             if (_lastFret >= 0 && fret != _lastFret && _songSeconds - _lastSeconds <= CONTINUITY_SECONDS)
             {
                 bool up = fret > _lastFret;
-                if (up ? clip.Note <= _lastNote : clip.Note >= _lastNote)
+                int sounding = Sounding(clip);
+                if (up ? sounding <= _lastNote : sounding >= _lastNote)
                 {
-                    clip = NearestBeyond(_lastNote, up) ?? clip;
+                    clip = NearestBeyond(_lastNote, up);
                 }
             }
 
             _lastFret = fret;
-            _lastNote = clip.Note;
+            _lastNote = Sounding(clip);
             _lastSeconds = _songSeconds;
             return true;
         }
@@ -182,31 +183,36 @@ namespace YARG.Audio.BASS
             return start;
         }
 
-        private BassStemClip? NearestBeyond(int note, bool up)
+        private int Sounding(BassStemClip clip)
+        {
+            return clip.Note + ResolveSemitones(clip);
+        }
+
+        private BassStemClip NearestBeyond(int note, bool up)
         {
             var rungs = AllowedRungs();
             if (up)
             {
                 foreach (int rung in rungs)
                 {
-                    if (Ladder[rung].Note > note)
+                    if (Sounding(Ladder[rung]) > note)
                     {
                         return Ladder[rung];
                     }
                 }
 
-                return null;
+                return Ladder[rungs[^1]];
             }
 
             for (int index = rungs.Count - 1; index >= 0; index--)
             {
-                if (Ladder[rungs[index]].Note < note)
+                if (Sounding(Ladder[rungs[index]]) < note)
                 {
                     return Ladder[rungs[index]];
                 }
             }
 
-            return null;
+            return Ladder[rungs[0]];
         }
 
         private int NextFretNote(BassStemClip clip)
