@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
-using YARG.Audio.PitchDetection;
 using YARG.Core.Chart;
 using YARG.Core.Engine;
 using YARG.Core.Engine.Guitar;
@@ -286,7 +285,7 @@ namespace YARG.Audio.BASS
             var pitches = new (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)?[clips.Count];
             var levels = new double[clips.Count];
             Parallel.For(0, clips.Count, options,
-                () => (Tracker: new PitchTracker(_format.Frequency), Readings: new List<float>()),
+                () => (Pitch: new BassSoloPitch(_format.Frequency), Readings: new List<float>()),
                 (index, state, local) =>
                 {
                     if (token.IsCancellationRequested)
@@ -301,7 +300,7 @@ namespace YARG.Audio.BASS
                     levels[index] = Level(clip);
                     if (singleNote)
                     {
-                        pitches[index] = Measure(clip, local.Tracker, local.Readings);
+                        pitches[index] = Measure(clip, local.Pitch, local.Readings);
                     }
 
                     return local;
@@ -391,7 +390,7 @@ namespace YARG.Audio.BASS
             return true;
         }
 
-        private (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)? Measure(BassStemClip clip, PitchTracker tracker,
+        private (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)? Measure(BassStemClip clip, BassSoloPitch detector,
             List<float> readings)
         {
             int channels = _format.Channels;
@@ -409,9 +408,7 @@ namespace YARG.Audio.BASS
                 mono[frame] = sum / channels;
             }
 
-            tracker.Reset();
-            readings.Clear();
-            tracker.ProcessBuffer(mono, readings);
+            detector.Detect(mono, readings);
 
             var voiced = readings.FindAll(pitch => pitch > 0f);
             if (voiced.Count == 0)
@@ -425,7 +422,7 @@ namespace YARG.Audio.BASS
             double spread = 0;
             foreach (float pitch in voiced)
             {
-                double cents = Math.Abs(1200 * Math.Log(pitch / median, 2));
+                double cents = Math.Abs(OctaveFolded(1200 * Math.Log(pitch / median, 2)));
                 if (cents <= PITCH_AGREE_CENTS)
                 {
                     agreeing++;
@@ -436,6 +433,11 @@ namespace YARG.Audio.BASS
             int note = (int) Math.Round(69 + 12 * Math.Log(median / 440.0, 2));
             return (note, median, (float) agreeing / readings.Count, spread / agreeing, (double) bodyFrames / _format.Frequency,
                 StartsWithBend(readings, median, (double) mono.Length / _format.Frequency));
+        }
+
+        private static double OctaveFolded(double cents)
+        {
+            return cents - 1200 * Math.Round(cents / 1200);
         }
 
         private static bool StartsWithBend(List<float> readings, float settledHz, double measuredSeconds)

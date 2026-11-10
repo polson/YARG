@@ -17,6 +17,7 @@ namespace YARG.Audio.BASS
     {
         private const int    VOICE_COUNT                         = 12;
         private const int    FLOAT_BYTES                         = sizeof(float);
+        private const int    PITCH_FFT_SIZE                      = 1024;
         private const double VOICE_FADE_SECONDS                  = 0.08;
         private const double FREESTYLE_RELEASE_SECONDS           = 0.12;
         private const double FREESTYLE_MIN_TRANSITION_SECONDS    = 0.015;
@@ -26,10 +27,13 @@ namespace YARG.Audio.BASS
         private const double LEGATO_FADE_IN_SECONDS              = 0.01;
         private const double LOOP_BUFFER_SECONDS                 = 0.25;
         private const float  WHAMMY_IDLE_PERCENT                 = 0.05f;
-        private const double VIBRATO_DELAY_SECONDS               = 0.6;
-        private const double VIBRATO_RAMP_SECONDS                = 0.3;
+        private const double VIBRATO_DELAY_SECONDS               = 0.2;
+        private const double VIBRATO_RAMP_SECONDS                = 0.2;
         private const double VIBRATO_RATE_HZ                     = 4.5;
-        private const double VIBRATO_DEPTH_CENTS                 = 20;
+        private const double VIBRATO_DEPTH_CENTS                 = 100;
+        private const double DRIFT_DEPTH_CENTS                   = 6;
+
+        private static readonly double[] DRIFT_RATES_HZ = { 0.37, 0.71, 1.13 };
 
         private sealed class Voice
         {
@@ -42,6 +46,7 @@ namespace YARG.Audio.BASS
             public bool       IsLooping;
             public long       StartOrder;
             public long       StartTimestamp;
+            public readonly double[] DriftPhases = new double[DRIFT_RATES_HZ.Length];
 
             public Voice(PushStream stream, int pitchFx)
             {
@@ -75,6 +80,7 @@ namespace YARG.Audio.BASS
         private readonly Voice[]                      _voices = new Voice[VOICE_COUNT];
         private          int                          _heldFrets;
         private          float                        _whammyPercent;
+        private readonly Random                       _random = new();
         private          long                         _playCount;
         private          long                         _lastVoiceStart = Stopwatch.GetTimestamp();
         private          bool                         _disposed;
@@ -84,14 +90,14 @@ namespace YARG.Audio.BASS
         {
             _lock = stemLock;
             _format = format;
-            _pitchParams = pitchParams;
+            _pitchParams = new PitchShiftParametersStruct(1, 0, PITCH_FFT_SIZE, pitchParams.OversampleFactor);
             _volume = volume;
             _seeds = new BassStemSeedLibrary(format);
 
             for (int index = 0; index < VOICE_COUNT; index++)
             {
                 var stream = manager.CreatePushStream(sampleRate: format.Frequency, channelCount: format.Channels);
-                var pitchFx = BassHelpers.FXAddParameters(stream.Handle, EffectType.PitchShift, pitchParams);
+                var pitchFx = BassHelpers.FXAddParameters(stream.Handle, EffectType.PitchShift, _pitchParams);
                 _voices[index] = new Voice(stream: stream, pitchFx: pitchFx);
             }
         }
@@ -349,6 +355,11 @@ namespace YARG.Audio.BASS
             SetPitch(voice);
             voice.StartOrder = ++_playCount;
             voice.StartTimestamp = Stopwatch.GetTimestamp();
+            for (int index = 0; index < voice.DriftPhases.Length; index++)
+            {
+                voice.DriftPhases[index] = _random.NextDouble() * 2 * Math.PI;
+            }
+
             Feed(voice);
             return voice;
         }
@@ -488,6 +499,7 @@ namespace YARG.Audio.BASS
                         : -GlobalAudioHandler.WhammyPitchShiftAmount * _whammyPercent;
                 }
 
+                semitones += DriftCents(voice) / 100;
                 if (_whammyPercent <= WHAMMY_IDLE_PERCENT)
                 {
                     semitones += VibratoCents(voice) / 100;
@@ -500,6 +512,18 @@ namespace YARG.Audio.BASS
             {
                 YargLogger.LogFormatError("Failed to set replay pitch: {0}!", Bass.LastError);
             }
+        }
+
+        private static double DriftCents(Voice voice)
+        {
+            double held = (Stopwatch.GetTimestamp() - voice.StartTimestamp) / (double) Stopwatch.Frequency;
+            double cents = 0;
+            for (int index = 0; index < DRIFT_RATES_HZ.Length; index++)
+            {
+                cents += Math.Sin(2 * Math.PI * DRIFT_RATES_HZ[index] * held + voice.DriftPhases[index]);
+            }
+
+            return cents * DRIFT_DEPTH_CENTS / DRIFT_RATES_HZ.Length;
         }
 
         private static double VibratoCents(Voice voice)
