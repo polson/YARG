@@ -3,7 +3,7 @@ using System;
 
 namespace YARG.Audio.BASS
 {
-    internal static class BassSustainVibrato
+    internal static class BassSustainBodies
     {
         private const double ONSET_SECONDS         = 0.3;
         private const double RATE_HZ               = 4.5;
@@ -75,18 +75,46 @@ namespace YARG.Audio.BASS
             }
         }
 
-        internal static BassStemClip? Render(BassStemClip clip, BassStretchRender render, BassStemFormat format, int seed)
+        internal static BassStemClip? RenderVibrato(BassStemClip clip, BassStretchRender render, BassStemFormat format,
+            int seed)
         {
             if (!clip.HasLoop)
             {
                 return null;
             }
 
-            var random = new Random(seed);
+            var curve = BuildCurve(clip, format, new Random(seed));
+            var body = RenderBody(clip, render, format, curve.BodyStartFrame, curve.PeriodFrames, curve.CentsAt);
+            if (body == null)
+            {
+                return null;
+            }
+
+            KeepDryOnset(body.Value.Source, body.Value.Samples, curve.OnsetFrame, format);
+            return clip.WithLoopedSamples(body.Value.Samples, curve.BodyStartFrame, format.FramesFor(SEAM_FADE_SECONDS),
+                format);
+        }
+
+        internal static BassStemClip? RenderBent(BassStemClip clip, BassStretchRender render, BassStemFormat format,
+            int semitones)
+        {
+            if (!clip.HasLoop)
+            {
+                return null;
+            }
+
+            int bodyStartFrame = clip.LoopStartFrame;
+            var body = RenderBody(clip, render, format, bodyStartFrame, LoopPeriod(clip, format), _ => semitones * 100.0);
+            return body == null
+                ? null
+                : clip.WithLoopedSamples(body.Value.Samples, bodyStartFrame, format.FramesFor(SEAM_FADE_SECONDS), format);
+        }
+
+        private static (float[] Source, float[] Samples)? RenderBody(BassStemClip clip, BassStretchRender render,
+            BassStemFormat format, int bodyStartFrame, int periodFrames, Func<double, double> centsAt)
+        {
             int channels = format.Channels;
-            int seamFrames = format.FramesFor(SEAM_FADE_SECONDS);
-            var curve = BuildCurve(clip, format, random);
-            int frameCount = curve.BodyStartFrame + curve.PeriodFrames + seamFrames;
+            int frameCount = bodyStartFrame + periodFrames + format.FramesFor(SEAM_FADE_SECONDS);
             var source = clip.Unrolled(frameCount + format.FramesFor(RENDER_MARGIN_SECONDS), channels);
             var samples = new float[frameCount * channels];
             var block = new float[BLOCK_FRAMES * channels];
@@ -99,7 +127,7 @@ namespace YARG.Audio.BASS
                     block = new float[frames * channels];
                 }
 
-                float factor = (float) Math.Pow(2, curve.CentsAt(frame + frames / 2.0) / 1200);
+                float factor = (float) Math.Pow(2, centsAt(frame + frames / 2.0) / 1200);
                 if (!render.SetPitch(factor, baseHz))
                 {
                     return null;
@@ -118,8 +146,13 @@ namespace YARG.Audio.BASS
                 Array.Copy(block, 0, samples, frame * channels, frames * channels);
             }
 
-            KeepDryOnset(source, samples, curve.OnsetFrame, format);
-            return clip.WithLoopedSamples(samples, curve.BodyStartFrame, seamFrames, format);
+            return (source, samples);
+        }
+
+        private static int LoopPeriod(BassStemClip clip, BassStemFormat format)
+        {
+            int loopFrames = clip.LoopEndFrame - clip.LoopStartFrame;
+            return loopFrames * Math.Max(1, (int) Math.Round(format.FramesFor(LOOP_SECONDS) / (double) loopFrames));
         }
 
         private static Curve BuildCurve(BassStemClip clip, BassStemFormat format, Random random)
@@ -127,8 +160,7 @@ namespace YARG.Audio.BASS
             double cycleFrames = format.Frequency / (RATE_HZ * (1 + CLIP_RATE_SPREAD * Spread(random)));
             int onsetFrame = format.FramesFor(ONSET_SECONDS);
             int bodyStartFrame = Math.Max(clip.LoopStartFrame, onsetFrame + (int) cycleFrames);
-            int loopFrames = clip.LoopEndFrame - clip.LoopStartFrame;
-            int periodFrames = loopFrames * Math.Max(1, (int) Math.Round(format.FramesFor(LOOP_SECONDS) / (double) loopFrames));
+            int periodFrames = LoopPeriod(clip, format);
 
             int cycles = Math.Max(1, (int) Math.Round(periodFrames / cycleFrames));
             var weights = new double[cycles];

@@ -5,6 +5,7 @@
 #include "dsp/FreeverbDsp.h"
 #include "dsp/GainDsp.h"
 #include "dsp/NoiseGateDsp.h"
+#include "dsp/OverdriveDsp.h"
 #include "dsp/SineSynthDsp.h"
 #include "one_shot/NativeOneShotStream.h"
 #include "stretch/StretchRender.h"
@@ -327,6 +328,19 @@ int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_set_params(yarg_noise_gate_dsp* dsp,
 
 void YARG_AUDIO_CALL yarg_noise_gate_dsp_destroy(yarg_noise_gate_dsp* dsp) {
     (void) yarg::audio::noiseGateDspDestroy(dsp);
+}
+
+int32_t YARG_AUDIO_CALL yarg_overdrive_dsp_attach(uint32_t channel, float mix, float drive,
+    int32_t priority, yarg_overdrive_dsp** dsp, int32_t* bass_error) {
+    return yarg::audio::overdriveDspAttach(coreBassBindings(), channel, mix, drive, priority, dsp, bass_error);
+}
+
+int32_t YARG_AUDIO_CALL yarg_overdrive_dsp_set(yarg_overdrive_dsp* dsp, float mix, float drive) {
+    return yarg::audio::overdriveDspSet(dsp, mix, drive);
+}
+
+void YARG_AUDIO_CALL yarg_overdrive_dsp_destroy(yarg_overdrive_dsp* dsp) {
+    (void) yarg::audio::overdriveDspDestroy(dsp);
 }
 
 int32_t YARG_AUDIO_CALL yarg_one_shot_stream_create(

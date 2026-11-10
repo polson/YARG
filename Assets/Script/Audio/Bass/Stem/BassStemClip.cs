@@ -28,6 +28,8 @@ namespace YARG.Audio.BASS
         public int     LoopFadeFrames;
         public float[] LoopTail = Array.Empty<float>();
         public BassStemClip? Vibrato;
+        public BassStemClip? Bent;
+        public int     BendSemitones;
 
         public bool HasLoop => LoopEndFrame > LoopStartFrame;
 

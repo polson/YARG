@@ -29,6 +29,8 @@ namespace YARG.Audio.BASS
         private const float  PITCH_AGREE_CENTS              = 35f;
         private const float  PITCH_MAX_SPREAD_CENTS         = 20f;
         private const int    MAX_SHIFT_SEMITONES            = 3;
+        private const int    MAX_STRETCH_SHIFT_SEMITONES    = 12;
+        private const int    HIGHEST_LADDER_NOTE            = 88;
         private const int    MAX_LADDER_STEP_SEMITONES      = 3;
         private const int    MIN_LADDER_SEMITONES           = 10;
         private const double DEPARTURE_CENTS                = 80;
@@ -397,7 +399,8 @@ namespace YARG.Audio.BASS
                 }
             }
 
-            var rungs = PlanLadder(clean);
+            int maxShift = job.CanStretch ? MAX_STRETCH_SHIFT_SEMITONES : MAX_SHIFT_SEMITONES;
+            var rungs = PlanLadder(clean, maxShift, job.LowestNote);
             int low = rungs != null ? rungs[0].Note : int.MinValue;
             int high = rungs != null ? rungs[^1].Note : int.MaxValue;
             anchors.RemoveAll(anchor => anchor.Note < low || anchor.Note > high);
@@ -563,7 +566,7 @@ namespace YARG.Audio.BASS
         }
 
         private static List<(int Note, BassStemClip Clip, int Shift)>? PlanLadder(
-            List<(BassStemClip Clip, int Note, float Score, bool Bent)> clean)
+            List<(BassStemClip Clip, int Note, float Score, bool Bent)> clean, int maxShift, int lowestNote)
         {
             if (clean.Count == 0)
             {
@@ -581,7 +584,9 @@ namespace YARG.Audio.BASS
 
             var rungs = new List<(int Note, BassStemClip Clip, int Shift)>();
             var bentRungs = new List<bool>();
-            for (int note = lowest - MAX_SHIFT_SEMITONES; note <= highest + MAX_SHIFT_SEMITONES; note++)
+            int first = Math.Max(lowest - maxShift, Math.Min(lowestNote, lowest));
+            int last = Math.Min(highest + maxShift, Math.Max(HIGHEST_LADDER_NOTE, highest));
+            for (int note = first; note <= last; note++)
             {
                 BassStemClip? nearest = null;
                 int nearestShift = 0;
@@ -591,7 +596,7 @@ namespace YARG.Audio.BASS
                 {
                     int shift = note - candidate.Note;
                     int distance = Math.Abs(shift);
-                    if (distance > MAX_SHIFT_SEMITONES)
+                    if (distance > maxShift)
                     {
                         continue;
                     }
@@ -825,10 +830,6 @@ namespace YARG.Audio.BASS
                 (int) Math.Round(tuningCents), cut, rungs.Count);
 
             MatchLevels(job.Ladder, soloLevel);
-            if (job.CanStretch)
-            {
-                BakeVibrato(job.Ladder, options);
-            }
 
             anchors.Sort((left, right) => left.SongSeconds.CompareTo(right.SongSeconds));
             foreach (var anchor in anchors)
@@ -870,15 +871,25 @@ namespace YARG.Audio.BASS
 
             YargLogger.LogFormatInfo("[SoloPitch] ladder MIDI notes {0}, {1} pitch-locked loops, {2} window moves",
                 string.Join(", ", rungs.ConvertAll(rung => rung.Note)), locked, job.Windows.Count - 1);
+
+            if (job.CanStretch)
+            {
+                BakeSustainBodies(job, options);
+            }
         }
 
-        private void BakeVibrato(List<BassStemClip> ladder, ParallelOptions options)
+        private void BakeSustainBodies(BassStemSoloSeeds job, ParallelOptions options)
         {
+            var ladder = job.Ladder;
             var random = new Random();
             var seeds = new int[ladder.Count];
+            var bends = new int[ladder.Count];
+            var playable = new bool[ladder.Count];
             for (int index = 0; index < seeds.Length; index++)
             {
                 seeds[index] = random.Next();
+                bends[index] = job.WhammyBend(ladder[index]);
+                playable[index] = job.IsPlayableRung(index);
             }
 
             var stopwatch = Stopwatch.StartNew();
@@ -886,17 +897,21 @@ namespace YARG.Audio.BASS
                 () => BassStretchRender.Create(_format.Channels, _format.Frequency, speed: 1),
                 (index, _, render) =>
                 {
-                    if (render != null)
+                    if (render != null && playable[index])
                     {
-                        ladder[index].Vibrato = BassSustainVibrato.Render(ladder[index], render, _format, seeds[index]);
+                        var clip = ladder[index];
+                        clip.Vibrato = BassSustainBodies.RenderVibrato(clip, render, _format, seeds[index]);
+                        clip.Bent = BassSustainBodies.RenderBent(clip, render, _format, bends[index]);
+                        clip.BendSemitones = bends[index];
                     }
 
                     return render;
                 },
                 render => render?.Dispose());
-            int baked = ladder.FindAll(clip => clip.Vibrato != null).Count;
-            YargLogger.LogFormatInfo<int, int, long>("[SoloVibrato] {0} of {1} ladder clips baked in {2} ms",
-                baked, ladder.Count, stopwatch.ElapsedMilliseconds);
+            int baked = ladder.FindAll(clip => clip.Vibrato != null && clip.Bent != null).Count;
+            int playableCount = Array.FindAll(playable, value => value).Length;
+            YargLogger.LogFormatInfo<int, int, long>("[SoloSustain] {0} of {1} playable ladder clips baked in {2} ms",
+                baked, playableCount, stopwatch.ElapsedMilliseconds);
         }
 
         private void MatchLevels(List<BassStemClip> ladder, double soloLevel)

@@ -12,13 +12,12 @@ namespace YARG.Audio.BASS
         private static readonly int[] FRET_KEYS = { 1, 2, 4, 8, 16 };
         private static readonly int[] ROOT_OFFSETS = { 0, -1, 1 };
 
-        private const int    PITCH_CLASSES             = BassSoloHarmony.PITCH_CLASSES;
-        private const int    MAX_WHAMMY_BEND           = 4;
-        private const int    DEFAULT_WHAMMY            = 2;
-        private const double WHAMMY_VOCABULARY_SECONDS = 1.0;
-        private const int    BOX_SHIFT_RUNGS           = 2;
-        private const double LOW_FRET_AVERAGE          = 1.25;
-        private const double HIGH_FRET_AVERAGE         = 2.75;
+        private const int    MAX_WHAMMY_BEND   = 4;
+        private const int    DEFAULT_WHAMMY    = 2;
+        private const int    BOX_SHIFT_RUNGS   = 3;
+        private const int    EDGE_SHIFT_RUNGS  = 3;
+        private const double LOW_FRET_AVERAGE  = 1.5;
+        private const double HIGH_FRET_AVERAGE = 2.5;
 
         public readonly double                                          StartTime;
         public readonly double                                          EndTime;
@@ -33,7 +32,7 @@ namespace YARG.Audio.BASS
         public          long                                                     RegionStartFrame;
         public          bool                                                     CanStretch;
 
-        private const double PHRASE_RESET_SECONDS = 1.0;
+        private const double PHRASE_RESET_SECONDS = 0.6;
 
         private readonly int[]        _fretRungs = new int[FRET_COUNT];
         private          bool         _fretRungsValid;
@@ -44,6 +43,9 @@ namespace YARG.Audio.BASS
         private          int          _boxStart = -1;
         private          int          _phraseFretTotal;
         private          int          _phraseFretCount;
+        private          int          _lastFret = -1;
+        private          int          _fretBeforeLast = -1;
+        private          int          _lastShift;
         private          double       _lastPlaySeconds;
 
         public BassStemSoloSeeds(double startTime, double endTime,
@@ -78,10 +80,10 @@ namespace YARG.Audio.BASS
                 return DEFAULT_WHAMMY;
             }
 
-            var good = GoodPitchClasses(WHAMMY_VOCABULARY_SECONDS);
+            var scale = PentatonicScale();
             for (int semitones = 1; semitones <= MAX_WHAMMY_BEND; semitones++)
             {
-                if (good[BassSoloHarmony.PitchClass(clip.Note + semitones)])
+                if (scale[BassSoloHarmony.PitchClass(clip.Note + semitones)])
                 {
                     return semitones;
                 }
@@ -127,6 +129,7 @@ namespace YARG.Audio.BASS
             {
                 _phraseFretTotal += fret;
                 _phraseFretCount++;
+                FollowRun(fret);
                 var (windowNote, _) = CurrentWindow();
                 YargLogger.LogFormatDebug("[SoloFret] {0:0.00}s fret {1} note {2} window {3} root {4}",
                     _songSeconds, fret, clip.Note, windowNote, _root);
@@ -183,12 +186,57 @@ namespace YARG.Audio.BASS
             _boxStart = RootAlignedStart(rungs, Math.Clamp(target, 0, lastStart), lastStart);
             _phraseFretTotal = 0;
             _phraseFretCount = 0;
+            _lastFret = -1;
+            _fretBeforeLast = -1;
+            _lastShift = 0;
+            FillBox(rungs);
+            _fretRungsValid = true;
+        }
+
+        private void FillBox(List<int> rungs)
+        {
             for (int f = 0; f < FRET_COUNT; f++)
             {
                 _fretRungs[f] = rungs[_boxStart + f];
             }
+        }
 
-            _fretRungsValid = true;
+        private void FollowRun(int fret)
+        {
+            int previous = _lastFret;
+            int beforePrevious = _fretBeforeLast;
+            int lastShift = _lastShift;
+            _fretBeforeLast = previous;
+            _lastFret = fret;
+            _lastShift = 0;
+            if (previous < 0 || beforePrevious == fret)
+            {
+                return;
+            }
+
+            if (fret == FRET_COUNT - 1 && previous < fret && lastShift >= 0)
+            {
+                ShiftBox(EDGE_SHIFT_RUNGS);
+                _lastShift = 1;
+            }
+            else if (fret == 0 && previous > fret && lastShift <= 0)
+            {
+                ShiftBox(-EDGE_SHIFT_RUNGS);
+                _lastShift = -1;
+            }
+        }
+
+        private void ShiftBox(int rungCount)
+        {
+            var rungs = ScaleRungs();
+            int start = Math.Clamp(_boxStart + rungCount, 0, rungs.Count - FRET_COUNT);
+            if (start == _boxStart)
+            {
+                return;
+            }
+
+            _boxStart = start;
+            FillBox(rungs);
         }
 
         private int WindowStart(List<int> rungs)
@@ -262,6 +310,11 @@ namespace YARG.Audio.BASS
             return (note, fret);
         }
 
+        public bool IsPlayableRung(int index)
+        {
+            return ScaleRungs().Contains(index);
+        }
+
         private List<int> ScaleRungs()
         {
             if (_scaleRungs != null)
@@ -317,43 +370,6 @@ namespace YARG.Audio.BASS
                     rungs.Add(index);
                 }
             }
-        }
-
-        private bool[] GoodPitchClasses(double seconds)
-        {
-            var good = new bool[PITCH_CLASSES];
-            foreach (var (songSeconds, note) in Anchors)
-            {
-                if (Math.Abs(songSeconds - _songSeconds) <= seconds)
-                {
-                    good[BassSoloHarmony.PitchClass(note)] = true;
-                }
-            }
-
-            if (_root >= 0 && HasAnchorPitchClass(_root))
-            {
-                good[_root] = true;
-                int fifth = (_root + BassSoloHarmony.FIFTH) % PITCH_CLASSES;
-                if (HasAnchorPitchClass(fifth))
-                {
-                    good[fifth] = true;
-                }
-            }
-
-            return good;
-        }
-
-        private bool HasAnchorPitchClass(int pitchClass)
-        {
-            foreach (var (_, note) in Anchors)
-            {
-                if (BassSoloHarmony.PitchClass(note) == pitchClass)
-                {
-                    return true;
-                }
-            }
-
-            return false;
         }
 
         private BassStemClip ClipAt(List<BassStemClip> clips)
