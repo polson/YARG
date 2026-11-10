@@ -405,7 +405,9 @@ namespace YARG.Audio.BASS
             int low = register != null ? register[0].Note - MAX_SHIFT_SEMITONES : int.MinValue;
             int high = register != null ? register[^1].Note + MAX_SHIFT_SEMITONES : int.MaxValue;
             anchors.RemoveAll(anchor => anchor.Note < low || anchor.Note > high);
-            var scale = SoloScale(PitchClassSeconds(measured, low, high));
+            var registerSeconds = PitchClassSeconds(measured, low, high);
+            var scale = SoloScale(registerSeconds);
+            job.Pentatonic = PentatonicScale(PentatonicRoot(registerSeconds));
             var heard = Array.FindAll(levels, level => level > 0);
             Array.Sort(heard);
             double soloLevel = heard.Length > 0 ? heard[heard.Length / 2] : 0;

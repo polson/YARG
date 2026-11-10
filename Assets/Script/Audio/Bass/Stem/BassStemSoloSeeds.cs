@@ -14,6 +14,9 @@ namespace YARG.Audio.BASS
         private const int    FIFTH             = 7;
         private const int    MINOR_THIRD       = 3;
         private const int    MAJOR_THIRD       = 4;
+        private const int    FOURTH            = 5;
+        private const int    TRITONE           = 6;
+        private const int    MINOR_SIXTH       = 8;
         private const int    MAX_RESOLVE       = 2;
         private const double MIN_EVIDENCE      = 2;
         private const double PREFERENCE_RATIO  = 2;
@@ -26,6 +29,7 @@ namespace YARG.Audio.BASS
         public readonly List<BassStemClip>                    Ladder = new();
         public readonly List<(double SongSeconds, int Start)> Windows = new();
         public readonly List<(double SongSeconds, int Note)>  Anchors = new();
+        public          bool[]                                Pentatonic = new bool[PITCH_CLASSES];
         public readonly List<(int Key, double SongSeconds, double PlaybackSeconds, double DurationSeconds, bool IsSustain)> Notes;
         public readonly List<(BassStemClip Clip, float[] Raw, int AttackFrames)> Candidates = new();
         public          float[]                                                  Region = Array.Empty<float>();
@@ -37,6 +41,7 @@ namespace YARG.Audio.BASS
         private readonly List<int>?[] _allowedRungs = new List<int>?[PITCH_CLASSES + 1];
         private int             _lastFret = -1;
         private int             _lastNote;
+        private BassStemClip?   _lastClip;
         private double          _lastSeconds;
 
         public BassStemSoloSeeds(double startTime, double endTime,
@@ -139,12 +144,13 @@ namespace YARG.Audio.BASS
                 int sounding = Sounding(clip);
                 if (up ? sounding <= _lastNote : sounding >= _lastNote)
                 {
-                    clip = NearestBeyond(_lastNote, up);
+                    clip = NearestBeyond(_lastNote, up) ?? _lastClip ?? clip;
                 }
             }
 
             _lastFret = fret;
             _lastNote = Sounding(clip);
+            _lastClip = clip;
             _lastSeconds = _songSeconds;
             return true;
         }
@@ -188,7 +194,7 @@ namespace YARG.Audio.BASS
             return clip.Note + ResolveSemitones(clip);
         }
 
-        private BassStemClip NearestBeyond(int note, bool up)
+        private BassStemClip? NearestBeyond(int note, bool up)
         {
             var rungs = AllowedRungs();
             if (up)
@@ -201,7 +207,7 @@ namespace YARG.Audio.BASS
                     }
                 }
 
-                return Ladder[rungs[^1]];
+                return null;
             }
 
             for (int index = rungs.Count - 1; index >= 0; index--)
@@ -212,7 +218,7 @@ namespace YARG.Audio.BASS
                 }
             }
 
-            return Ladder[rungs[0]];
+            return null;
         }
 
         private int NextFretNote(BassStemClip clip)
@@ -290,6 +296,21 @@ namespace YARG.Audio.BASS
             }
 
             allowed[(_root + 1) % PITCH_CLASSES] = false;
+            allowed[(_root + TRITONE) % PITCH_CLASSES] = false;
+            allowed[(_root + MINOR_SIXTH) % PITCH_CLASSES] = false;
+            int minor = (_root + MINOR_THIRD) % PITCH_CLASSES;
+            int major = (_root + MAJOR_THIRD) % PITCH_CLASSES;
+            int third = Third();
+            if (third == minor)
+            {
+                allowed[major] = false;
+            }
+            else if (third == major)
+            {
+                allowed[minor] = false;
+                allowed[(_root + FOURTH) % PITCH_CLASSES] = false;
+            }
+
             for (int pitchClass = 0; pitchClass < PITCH_CLASSES; pitchClass++)
             {
                 int upper = (pitchClass + 1) % PITCH_CLASSES;
@@ -334,20 +355,32 @@ namespace YARG.Audio.BASS
 
         private int Third()
         {
-            var scale = ScalePitchClasses();
             int minor = (_root + MINOR_THIRD) % PITCH_CLASSES;
             int major = (_root + MAJOR_THIRD) % PITCH_CLASSES;
+            double minorWeight = Weight(minor);
+            double majorWeight = Weight(major);
+            if (minorWeight >= MIN_EVIDENCE && minorWeight > majorWeight * PREFERENCE_RATIO)
+            {
+                return minor;
+            }
+
+            if (majorWeight >= MIN_EVIDENCE && majorWeight > minorWeight * PREFERENCE_RATIO)
+            {
+                return major;
+            }
+
+            if (Pentatonic[minor] != Pentatonic[major])
+            {
+                return Pentatonic[minor] ? minor : major;
+            }
+
+            var scale = ScalePitchClasses();
             if (scale[minor] != scale[major])
             {
                 return scale[minor] ? minor : major;
             }
 
-            if (!scale[minor] || Weight(minor) == Weight(major))
-            {
-                return -1;
-            }
-
-            return Weight(minor) > Weight(major) ? minor : major;
+            return -1;
         }
 
         private double Weight(int pitchClass)

@@ -260,7 +260,7 @@ namespace YARG.Gameplay.Player
             }
 
             soundboard.SetChordTrack(_stem == SongStem.Bass ? null : GameManager.CreateChordTrack());
-            _freestyle = new FreestyleSolo(soundboard, () => Engine, SetStemMuteState,
+            _freestyle = new FreestyleSolo(soundboard, () => Engine, SetStemMuteState, PlayFreestyleHit,
                 fretRowMask: AllFretRows, maxFretIndex: FretRowCount - 1,
                 hopoLeniency: EngineParams.HopoLeniency,
                 lowestSeedNote: _stem == SongStem.Bass ? 0 : LOWEST_LEAD_NOTE);
@@ -541,6 +541,28 @@ namespace YARG.Gameplay.Player
         protected override bool ShowsBRELanes(Phrase phrase)
         {
             return base.ShowsBRELanes(phrase) || ShowsFreestyleLanes && phrase.Type == PhraseType.Solo;
+        }
+
+        protected virtual void PlayFreestyleHit(int fretMask)
+        {
+            if (GameManager.Paused)
+            {
+                return;
+            }
+
+            if (fretMask == GuitarEngine.OPEN_MASK)
+            {
+                _fretArray.PlayFullWidthHitAnimation();
+                return;
+            }
+
+            for (int bit = 0; bit < 5; bit++)
+            {
+                if ((fretMask & (1 << bit)) != 0)
+                {
+                    _fretArray.PlayHitAnimation(bit + (int) FiveFretGuitarFret.Green);
+                }
+            }
         }
 
         private void LightFreestyleLanes(int fretMask)

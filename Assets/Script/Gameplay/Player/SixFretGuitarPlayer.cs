@@ -294,10 +294,6 @@ namespace YARG.Gameplay.Player
             // black particles for black frets, white for white frets, a mix of
             // the two for barres (both halves of a pad), and the open particles
             // for open/wild notes. One burst per fret pad, not per note.
-            var colors = Player.ColorProfile.SixFretGuitar;
-            var blackParticles = colors.BlackParticles.ToUnityColor();
-            var whiteParticles = colors.WhiteParticles.ToUnityColor();
-
             bool openHit = false;
             int blackLanes = 0;
             int whiteLanes = 0;
@@ -330,6 +326,31 @@ namespace YARG.Gameplay.Player
                 _fretArray.PlayFullWidthHitAnimation();
             }
 
+            PlayPadHits(blackLanes, whiteLanes);
+        }
+
+        protected override void PlayFreestyleHit(int fretMask)
+        {
+            if (GameManager.Paused)
+            {
+                return;
+            }
+
+            if (fretMask == GuitarEngine.OPEN_MASK)
+            {
+                _fretArray.PlayFullWidthHitAnimation();
+                return;
+            }
+
+            int pairMask = (1 << LaneCount) - 1;
+            PlayPadHits(fretMask & pairMask, (fretMask >> LaneCount) & pairMask);
+        }
+
+        private void PlayPadHits(int blackLanes, int whiteLanes)
+        {
+            var colors = Player.ColorProfile.SixFretGuitar;
+            var blackParticles = colors.BlackParticles.ToUnityColor();
+            var whiteParticles = colors.WhiteParticles.ToUnityColor();
             for (int pair = 0; pair < LaneCount; pair++)
             {
                 bool black = (blackLanes & (1 << pair)) != 0;

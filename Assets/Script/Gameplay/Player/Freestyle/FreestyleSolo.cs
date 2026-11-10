@@ -20,6 +20,7 @@ namespace YARG.Gameplay.Player
         private readonly BassStemSoundboard _soundboard;
         private readonly Func<GuitarEngine> _currentEngine;
         private readonly Action<bool> _setStemMuted;
+        private readonly Action<int> _onPlayed;
         private readonly int _fretRowMask;
         private readonly int _maxFretIndex;
         private readonly int _lowestSeedNote;
@@ -36,11 +37,12 @@ namespace YARG.Gameplay.Player
         private double _lastHeldTime;
 
         public FreestyleSolo(BassStemSoundboard soundboard, Func<GuitarEngine> currentEngine, Action<bool> setStemMuted,
-            int fretRowMask, int maxFretIndex, double hopoLeniency, int lowestSeedNote)
+            Action<int> onPlayed, int fretRowMask, int maxFretIndex, double hopoLeniency, int lowestSeedNote)
         {
             _soundboard = soundboard;
             _currentEngine = currentEngine;
             _setStemMuted = setStemMuted;
+            _onPlayed = onPlayed;
             _fretRowMask = fretRowMask;
             _maxFretIndex = maxFretIndex;
             _lowestSeedNote = lowestSeedNote;
@@ -231,6 +233,7 @@ namespace YARG.Gameplay.Player
             if (strummed && playMask != 0)
             {
                 _soundboard.PlayStrum(playMask);
+                _onPlayed(playMask);
             }
             else
             {
@@ -244,6 +247,8 @@ namespace YARG.Gameplay.Player
                 {
                     _soundboard.PlayLegato(key);
                 }
+
+                _onPlayed(key);
             }
 
             _phraseMask = playMask == 0 ? GuitarEngine.OPEN_MASK : playMask;
