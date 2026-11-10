@@ -22,6 +22,8 @@ namespace YARG.Audio.BASS
         private const double FREESTYLE_MIN_TRANSITION_SECONDS    = 0.015;
         private const double FREESTYLE_MAX_TRANSITION_SECONDS    = 0.03;
         private const double FREESTYLE_TRANSITION_INTERVAL_RATIO = 0.25;
+        private const double LEGATO_TRANSITION_SECONDS           = 0.035;
+        private const double LEGATO_FADE_IN_SECONDS              = 0.01;
         private const double LOOP_BUFFER_SECONDS                 = 0.25;
 
         private sealed class Voice
@@ -115,8 +117,28 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                FadePreviousVoices();
-                Start(clip, key: key, gain: 1);
+                FadePreviousVoices(FREESTYLE_MIN_TRANSITION_SECONDS);
+                Start(clip, key: key, gain: 1, firstFrame: 0);
+            }
+        }
+
+        public void PlayLegato(int key)
+        {
+            lock (_lock)
+            {
+                if (_disposed || !_seeds.TryGetClip(key, out var clip))
+                {
+                    return;
+                }
+
+                FadePreviousVoices(LEGATO_TRANSITION_SECONDS);
+                int lastFrame = (clip.HasLoop ? clip.LoopEndFrame : clip.FrameCount) - 1;
+                var voice = Start(clip, key: key, gain: 0, firstFrame: Math.Min(clip.AttackEndFrame, lastFrame));
+                if (!Bass.ChannelSlideAttribute(voice.Stream.Handle, ChannelAttribute.Volume, (float) _volume(),
+                    (int) (LEGATO_FADE_IN_SECONDS * 1000)))
+                {
+                    YargLogger.LogFormatError("Failed to fade in replay voice: {0}!", Bass.LastError);
+                }
             }
         }
 
@@ -129,7 +151,7 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                FadePreviousVoices();
+                FadePreviousVoices(FREESTYLE_MIN_TRANSITION_SECONDS);
                 double fretGain = 1 / Math.Sqrt(FretCount(fretMask));
                 for (int fret = 1; fret < GuitarEngine.OPEN_MASK; fret <<= 1)
                 {
@@ -143,7 +165,7 @@ namespace YARG.Audio.BASS
                         continue;
                     }
 
-                    Start(clip, key: fret, gain: fretGain);
+                    Start(clip, key: fret, gain: fretGain, firstFrame: 0);
                 }
             }
         }
@@ -311,27 +333,28 @@ namespace YARG.Audio.BASS
             return count;
         }
 
-        private void Start(BassStemClip clip, int key, double gain)
+        private Voice Start(BassStemClip clip, int key, double gain, int firstFrame)
         {
             var voice = PickVoice(key);
             voice.Stream.Clear();
             voice.Stream.SetVolume(_volume() * gain);
             voice.Clip = clip;
-            voice.PushedFrames = 0;
+            voice.PushedFrames = firstFrame;
             voice.Key = key;
             voice.IsLooping = clip.HasLoop && voice.IsFullyHeld(_heldFrets);
             voice.IsSustain = clip.IsSustain || voice.IsLooping;
             SetPitch(voice);
             voice.StartOrder = ++_playCount;
             Feed(voice);
+            return voice;
         }
 
-        private void FadePreviousVoices()
+        private void FadePreviousVoices(double minSeconds)
         {
             long now = Stopwatch.GetTimestamp();
             double interval = (now - _lastVoiceStart) / (double) Stopwatch.Frequency;
             double transition = Math.Clamp(interval * FREESTYLE_TRANSITION_INTERVAL_RATIO,
-                FREESTYLE_MIN_TRANSITION_SECONDS, FREESTYLE_MAX_TRANSITION_SECONDS);
+                minSeconds, Math.Max(minSeconds, FREESTYLE_MAX_TRANSITION_SECONDS));
             _lastVoiceStart = now;
             foreach (var previous in _voices)
             {

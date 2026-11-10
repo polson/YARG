@@ -190,7 +190,15 @@ namespace YARG.Gameplay.Player
             else
             {
                 int fretMask = HighestFret(playMask, _maxFretIndex);
-                _soundboard.Play(fretMask == 0 ? GuitarEngine.OPEN_MASK : fretMask);
+                int key = fretMask == 0 ? GuitarEngine.OPEN_MASK : fretMask;
+                if (strummed)
+                {
+                    _soundboard.Play(key);
+                }
+                else
+                {
+                    _soundboard.PlayLegato(key);
+                }
             }
 
             _phraseMask = playMask == 0 ? GuitarEngine.OPEN_MASK : playMask;

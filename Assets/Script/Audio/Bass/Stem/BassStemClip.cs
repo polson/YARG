@@ -20,6 +20,7 @@ namespace YARG.Audio.BASS
         public float[] Samples = Array.Empty<float>();
         public int     FrameCount;
         public bool    IsSustain;
+        public int     AttackEndFrame;
         public int     LoopStartFrame;
         public int     LoopEndFrame;
         public int     LoopFadeFrames;
@@ -101,6 +102,57 @@ namespace YARG.Audio.BASS
             int loopStart = BassSustainStretch.FindLoopStart(Samples, format, firstFrame: firstFrame,
                 tailFrame: FrameCount - fadeFrames, fadeFrames: fadeFrames);
             SetLoop(bodyStart: loopStart, loopEnd: FrameCount, fadeFrames: fadeFrames, format: format);
+        }
+
+        public BassStemClip Shifted(int semitones, BassStemFormat format)
+        {
+            if (semitones == 0)
+            {
+                return this;
+            }
+
+            double ratio = Math.Pow(2, semitones / 12.0);
+            int channels = format.Channels;
+            int frameCount = (int) ((FrameCount - 1) / ratio);
+            var samples = new float[frameCount * channels];
+            for (int frame = 0; frame < frameCount; frame++)
+            {
+                double position = frame * ratio;
+                int index = (int) position;
+                float fraction = (float) (position - index);
+                int before = Math.Max(index - 1, 0);
+                int after = Math.Min(index + 2, FrameCount - 1);
+                for (int channel = 0; channel < channels; channel++)
+                {
+                    float y0 = Samples[before * channels + channel];
+                    float y1 = Samples[index * channels + channel];
+                    float y2 = Samples[(index + 1) * channels + channel];
+                    float y3 = Samples[after * channels + channel];
+                    float c1 = 0.5f * (y2 - y0);
+                    float c2 = y0 - 2.5f * y1 + 2 * y2 - 0.5f * y3;
+                    float c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+                    samples[frame * channels + channel] = ((c3 * fraction + c2) * fraction + c1) * fraction + y1;
+                }
+            }
+
+            var shifted = new BassStemClip
+            {
+                SongSeconds = SongSeconds,
+                StartFrame = StartFrame,
+                Samples = samples,
+                FrameCount = frameCount,
+                IsSustain = IsSustain,
+                AttackEndFrame = (int) Math.Round(AttackEndFrame / ratio),
+            };
+            if (HasLoop)
+            {
+                int loopEnd = Math.Min((int) Math.Round(LoopEndFrame / ratio), frameCount);
+                int fadeFrames = (int) Math.Round(LoopFadeFrames / ratio);
+                int bodyStart = (int) Math.Round((LoopStartFrame - LoopFadeFrames) / ratio);
+                shifted.SetLoop(bodyStart: bodyStart, loopEnd: loopEnd, fadeFrames: fadeFrames, format: format);
+            }
+
+            return shifted;
         }
 
         public int NextLoopSegment(int pushedFrames, int remaining, out bool fromTail, out int sourceFrame)
