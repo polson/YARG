@@ -26,17 +26,16 @@ namespace YARG.Audio.BASS
         private const double LEGATO_FADE_IN_SECONDS              = 0.01;
         private const double LOOP_BUFFER_SECONDS                 = 0.25;
         private const float  WHAMMY_IDLE_PERCENT                 = 0.05f;
+        private const float  WHAMMY_BEND_ENGAGE_PERCENT          = 0.5f;
         private const double VIBRATO_DELAY_SECONDS               = 0.1;
         private const double VIBRATO_RAMP_SECONDS                = 0.15;
         private const double VIBRATO_RATE_HZ                     = 4.5;
-        private const double VIBRATO_DEPTH_CENTS                 = 120;
+        private const double VIBRATO_DEPTH_CENTS                 = 90;
         private const double VIBRATO_RATE_SPREAD                 = 0.1;
         private const double VIBRATO_RATE_WANDER                 = 0.08;
         private const double VIBRATO_WANDER_HZ                   = 0.3;
         private const double VIBRATO_DEPTH_SPREAD                = 0.15;
         private const double DRIFT_DEPTH_CENTS                   = 6;
-        private const double RESOLVE_DELAY_SECONDS               = 0.02;
-        private const double RESOLVE_RAMP_SECONDS                = 0.03;
 
         private static readonly double[] DRIFT_RATES_HZ = { 0.37, 0.71, 1.13 };
 
@@ -55,7 +54,7 @@ namespace YARG.Audio.BASS
             public double     VibratoRateHz;
             public double     VibratoWanderPhase;
             public int        VibratoSeed;
-            public int        ResolveSemitones;
+            public int        WhammySemitones;
 
             public Voice(PushStream stream, int pitchFx)
             {
@@ -377,7 +376,7 @@ namespace YARG.Audio.BASS
             voice.VibratoRateHz = VIBRATO_RATE_HZ * (1 + VIBRATO_RATE_SPREAD * (2 * _random.NextDouble() - 1));
             voice.VibratoWanderPhase = _random.NextDouble() * 2 * Math.PI;
             voice.VibratoSeed = _random.Next();
-            voice.ResolveSemitones = _seeds.ResolveSemitones(clip);
+            voice.WhammySemitones = clip.Note >= 0 ? _seeds.WhammyBend(clip) : 0;
 
             Feed(voice);
             return voice;
@@ -512,13 +511,13 @@ namespace YARG.Audio.BASS
                 double semitones = 0;
                 if (GlobalAudioHandler.UseWhammyFx)
                 {
-                    int bend = voice.Clip?.BendSemitones ?? 0;
+                    int bend = voice.WhammySemitones;
                     semitones = bend > 0
-                        ? bend * _whammyPercent
+                        ? (_whammyPercent >= WHAMMY_BEND_ENGAGE_PERCENT ? bend : 0)
                         : -GlobalAudioHandler.WhammyPitchShiftAmount * _whammyPercent;
                 }
 
-                semitones += DriftCents(voice) / 100 + ResolveBend(voice);
+                semitones += DriftCents(voice) / 100;
                 if (_whammyPercent <= WHAMMY_IDLE_PERCENT)
                 {
                     semitones += VibratoCents(voice) / 100;
@@ -545,18 +544,6 @@ namespace YARG.Audio.BASS
             return cents * DRIFT_DEPTH_CENTS / DRIFT_RATES_HZ.Length;
         }
 
-        private static double ResolveBend(Voice voice)
-        {
-            if (voice.ResolveSemitones == 0)
-            {
-                return 0;
-            }
-
-            double held = (Stopwatch.GetTimestamp() - voice.StartTimestamp) / (double) Stopwatch.Frequency;
-            double progress = Math.Clamp((held - RESOLVE_DELAY_SECONDS) / RESOLVE_RAMP_SECONDS, 0, 1);
-            return voice.ResolveSemitones * progress * progress * (3 - 2 * progress);
-        }
-
         private static double VibratoCents(Voice voice)
         {
             double held = (Stopwatch.GetTimestamp() - voice.StartTimestamp) / (double) Stopwatch.Frequency;
@@ -572,7 +559,7 @@ namespace YARG.Audio.BASS
             double cycles = voice.VibratoRateHz * (vibrating + wander);
             double depth = VIBRATO_DEPTH_CENTS * Math.Min(1, vibrating / VIBRATO_RAMP_SECONDS)
                 * (1 + VIBRATO_DEPTH_SPREAD * CycleRandom(voice.VibratoSeed, (int) cycles));
-            return depth * 0.5 * (1 - Math.Cos(2 * Math.PI * cycles));
+            return depth * 0.5 * Math.Sin(2 * Math.PI * cycles);
         }
 
         private static double CycleRandom(int seed, int cycle)

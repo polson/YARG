@@ -10,39 +10,29 @@ namespace YARG.Audio.BASS
 
         private static readonly int[] FRET_KEYS = { 1, 2, 4, 8, 16 };
 
-        private const int    PITCH_CLASSES     = 12;
-        private const int    FIFTH             = 7;
-        private const int    MINOR_THIRD       = 3;
-        private const int    MAJOR_THIRD       = 4;
-        private const int    FOURTH            = 5;
-        private const int    TRITONE           = 6;
-        private const int    MINOR_SIXTH       = 8;
-        private const int    MAX_RESOLVE       = 2;
-        private const double MIN_EVIDENCE      = 2;
-        private const double PREFERENCE_RATIO  = 2;
+        private const int    PITCH_CLASSES      = BassSoloHarmony.PITCH_CLASSES;
+        private const int    MAX_WHAMMY_BEND    = 4;
+        private const int    DEFAULT_WHAMMY     = 2;
         private const double CONTINUITY_SECONDS = 1.0;
 
-        public readonly double                                StartTime;
-        public readonly double                                EndTime;
-        public readonly int                                   LowestNote;
-        public readonly Dictionary<int, List<BassStemClip>>   ByKey = new();
-        public readonly List<BassStemClip>                    Ladder = new();
-        public readonly List<(double SongSeconds, int Start)> Windows = new();
-        public readonly List<(double SongSeconds, int Note)>  Anchors = new();
-        public          bool[]                                Pentatonic = new bool[PITCH_CLASSES];
+        public readonly double                                          StartTime;
+        public readonly double                                          EndTime;
+        public readonly int                                             LowestNote;
+        public readonly Dictionary<int, List<BassStemClip>>             ByKey = new();
+        public readonly List<BassStemClip>                              Ladder = new();
+        public readonly List<(double SongSeconds, int Note, int Fret)>  Windows = new();
         public readonly List<(int Key, double SongSeconds, double PlaybackSeconds, double DurationSeconds, bool IsSustain)> Notes;
+        public          bool[]                                                  Key = Array.Empty<bool>();
         public readonly List<(BassStemClip Clip, float[] Raw, int AttackFrames)> Candidates = new();
         public          float[]                                                  Region = Array.Empty<float>();
         public          long                                                     RegionStartFrame;
 
-        private double          _songSeconds;
-        private int             _root = -1;
-        private double[,]?      _rootWeights;
         private readonly List<int>?[] _allowedRungs = new List<int>?[PITCH_CLASSES + 1];
-        private int             _lastFret = -1;
-        private int             _lastNote;
-        private BassStemClip?   _lastClip;
-        private double          _lastSeconds;
+        private          double       _songSeconds;
+        private          int          _root = -1;
+        private          int          _lastFret = -1;
+        private          int          _lastNote;
+        private          double       _lastSeconds;
 
         public BassStemSoloSeeds(double startTime, double endTime,
             List<(int Key, double SongSeconds, double PlaybackSeconds, double DurationSeconds, bool IsSustain)> notes,
@@ -67,48 +57,36 @@ namespace YARG.Audio.BASS
         {
             _songSeconds = songSeconds;
             _root = chords?.RootAt(songSeconds) ?? -1;
-            if (_root >= 0 && _rootWeights == null)
-            {
-                Learn(chords!);
-            }
         }
 
-        public int ResolveSemitones(BassStemClip clip)
+        public int WhammyBend(BassStemClip clip)
         {
-            if (_root < 0 || clip.Note < 0)
+            if (clip.Note < 0)
             {
-                return 0;
+                return DEFAULT_WHAMMY;
             }
 
-            int pitchClass = PitchClass(clip.Note);
-            if (IsChordTone(pitchClass))
+            var good = GoodPitchClasses();
+            for (int semitones = 1; semitones <= MAX_WHAMMY_BEND; semitones++)
             {
-                return 0;
-            }
-
-            int ceiling = NextFretNote(clip);
-            for (int semitones = 1; semitones <= MAX_RESOLVE && clip.Note + semitones < ceiling; semitones++)
-            {
-                if (IsChordTone((pitchClass + semitones) % PITCH_CLASSES))
+                if (good[BassSoloHarmony.PitchClass(clip.Note + semitones)])
                 {
                     return semitones;
                 }
             }
 
-            return 0;
+            return DEFAULT_WHAMMY;
         }
 
         public bool TryGetClip(int key, out BassStemClip clip)
         {
             if (Ladder.Count > 0)
             {
-                for (int fret = 0; fret < FRET_COUNT; fret++)
+                int fret = Array.IndexOf(FRET_KEYS, key);
+                if (fret >= 0)
                 {
-                    if (key == 1 << fret)
-                    {
-                        clip = Ladder[RungFor(fret)];
-                        return true;
-                    }
+                    clip = RungClip(fret, followLast: false);
+                    return true;
                 }
 
                 clip = null!;
@@ -127,30 +105,21 @@ namespace YARG.Audio.BASS
 
         public bool TryTakeClip(int key, out BassStemClip clip)
         {
-            if (!TryGetClip(key, out clip))
+            if (Ladder.Count == 0)
             {
-                return false;
+                return TryGetClip(key, out clip);
             }
 
             int fret = Array.IndexOf(FRET_KEYS, key);
-            if (Ladder.Count == 0 || fret < 0 || clip.Note < 0)
+            if (fret < 0)
             {
-                return true;
+                return TryGetClip(key, out clip);
             }
 
-            if (_lastFret >= 0 && fret != _lastFret && _songSeconds - _lastSeconds <= CONTINUITY_SECONDS)
-            {
-                bool up = fret > _lastFret;
-                int sounding = Sounding(clip);
-                if (up ? sounding <= _lastNote : sounding >= _lastNote)
-                {
-                    clip = NearestBeyond(_lastNote, up) ?? _lastClip ?? clip;
-                }
-            }
-
+            int rung = RungFor(fret, followLast: true);
+            clip = Ladder[AllowedRungs()[rung]];
             _lastFret = fret;
-            _lastNote = Sounding(clip);
-            _lastClip = clip;
+            _lastNote = clip.Note;
             _lastSeconds = _songSeconds;
             return true;
         }
@@ -159,7 +128,7 @@ namespace YARG.Audio.BASS
         {
             if (Ladder.Count > 0)
             {
-                clip = Ladder[WindowStart()];
+                clip = RungClip(0, followLast: false);
                 return true;
             }
 
@@ -173,9 +142,58 @@ namespace YARG.Audio.BASS
             return false;
         }
 
-        private int WindowStart()
+        private BassStemClip RungClip(int fret, bool followLast)
         {
-            int start = Windows[0].Start;
+            return Ladder[AllowedRungs()[RungFor(fret, followLast)]];
+        }
+
+        private int RungFor(int fret, bool followLast)
+        {
+            var rungs = AllowedRungs();
+            var (note, windowFret) = CurrentWindow();
+            int nearest = 0;
+            for (int index = 1; index < rungs.Count; index++)
+            {
+                if (Math.Abs(Ladder[rungs[index]].Note - note) < Math.Abs(Ladder[rungs[nearest]].Note - note))
+                {
+                    nearest = index;
+                }
+            }
+
+            int first = Math.Max(0, Math.Min(nearest - windowFret, rungs.Count - FRET_COUNT));
+            int position = first + fret;
+            if (followLast && _lastFret >= 0 && fret != _lastFret
+                && _songSeconds - _lastSeconds <= CONTINUITY_SECONDS)
+            {
+                position = RungBeyond(rungs, position, fret > _lastFret);
+            }
+
+            return position;
+        }
+
+        private int RungBeyond(List<int> rungs, int position, bool up)
+        {
+            int step = up ? 1 : -1;
+            for (int index = position; index >= 0 && index < rungs.Count; index += step)
+            {
+                int note = Ladder[rungs[index]].Note;
+                if (up ? note > _lastNote : note < _lastNote)
+                {
+                    return index;
+                }
+            }
+
+            return position;
+        }
+
+        private (int Note, int Fret) CurrentWindow()
+        {
+            if (Windows.Count == 0)
+            {
+                return (Ladder[Ladder.Count / 2].Note, FRET_COUNT / 2);
+            }
+
+            var (_, note, fret) = Windows[0];
             foreach (var window in Windows)
             {
                 if (window.SongSeconds > _songSeconds)
@@ -183,73 +201,10 @@ namespace YARG.Audio.BASS
                     break;
                 }
 
-                start = window.Start;
+                (_, note, fret) = window;
             }
 
-            return start;
-        }
-
-        private int Sounding(BassStemClip clip)
-        {
-            return clip.Note + ResolveSemitones(clip);
-        }
-
-        private BassStemClip? NearestBeyond(int note, bool up)
-        {
-            var rungs = AllowedRungs();
-            if (up)
-            {
-                foreach (int rung in rungs)
-                {
-                    if (Sounding(Ladder[rung]) > note)
-                    {
-                        return Ladder[rung];
-                    }
-                }
-
-                return null;
-            }
-
-            for (int index = rungs.Count - 1; index >= 0; index--)
-            {
-                if (Sounding(Ladder[rungs[index]]) < note)
-                {
-                    return Ladder[rungs[index]];
-                }
-            }
-
-            return null;
-        }
-
-        private int NextFretNote(BassStemClip clip)
-        {
-            if (Ladder.Count < FRET_COUNT)
-            {
-                return int.MaxValue;
-            }
-
-            for (int fret = 0; fret < FRET_COUNT - 1; fret++)
-            {
-                if (Ladder[RungFor(fret)] == clip)
-                {
-                    return Ladder[RungFor(fret + 1)].Note;
-                }
-            }
-
-            return int.MaxValue;
-        }
-
-        private int RungFor(int fret)
-        {
-            var rungs = AllowedRungs();
-            int start = WindowStart();
-            int first = rungs.FindIndex(rung => rung >= start);
-            if (first < 0 || first > rungs.Count - FRET_COUNT)
-            {
-                first = rungs.Count - FRET_COUNT;
-            }
-
-            return rungs[first + fret];
+            return (note, fret);
         }
 
         private List<int> AllowedRungs()
@@ -260,11 +215,11 @@ namespace YARG.Audio.BASS
                 return cached;
             }
 
-            var allowed = AllowedPitchClasses();
+            var good = GoodPitchClasses();
             var rungs = new List<int>(Ladder.Count);
             for (int index = 0; index < Ladder.Count; index++)
             {
-                if (Ladder[index].Note < 0 || allowed[PitchClass(Ladder[index].Note)])
+                if (good[BassSoloHarmony.PitchClass(Ladder[index].Note)])
                 {
                     rungs.Add(index);
                 }
@@ -279,133 +234,32 @@ namespace YARG.Audio.BASS
                 }
             }
 
-            if (_root < 0 || _rootWeights != null)
-            {
-                _allowedRungs[slot] = rungs;
-            }
-
+            _allowedRungs[slot] = rungs;
             return rungs;
         }
 
-        private bool[] AllowedPitchClasses()
+        private bool[] GoodPitchClasses()
         {
-            var allowed = ScalePitchClasses();
+            var key = Key.Length == PITCH_CLASSES ? Key : AllPitchClasses();
             if (_root < 0)
             {
-                return allowed;
+                return key;
             }
 
-            allowed[(_root + 1) % PITCH_CLASSES] = false;
-            allowed[(_root + TRITONE) % PITCH_CLASSES] = false;
-            allowed[(_root + MINOR_SIXTH) % PITCH_CLASSES] = false;
-            int minor = (_root + MINOR_THIRD) % PITCH_CLASSES;
-            int major = (_root + MAJOR_THIRD) % PITCH_CLASSES;
-            int third = Third();
-            if (third == minor)
-            {
-                allowed[major] = false;
-            }
-            else if (third == major)
-            {
-                allowed[minor] = false;
-                allowed[(_root + FOURTH) % PITCH_CLASSES] = false;
-            }
+            int third = BassSoloHarmony.Third(key, _root);
+            int fifth = (_root + BassSoloHarmony.FIFTH) % PITCH_CLASSES;
+            return BassSoloHarmony.ChordNotes(key, _root, third, fifth);
+        }
 
+        private static bool[] AllPitchClasses()
+        {
+            var pitchClasses = new bool[PITCH_CLASSES];
             for (int pitchClass = 0; pitchClass < PITCH_CLASSES; pitchClass++)
             {
-                int upper = (pitchClass + 1) % PITCH_CLASSES;
-                if (!allowed[pitchClass] || !allowed[upper])
-                {
-                    continue;
-                }
-
-                double lowerWeight = Weight(pitchClass);
-                double upperWeight = Weight(upper);
-                if (lowerWeight >= MIN_EVIDENCE && lowerWeight > upperWeight * PREFERENCE_RATIO)
-                {
-                    allowed[upper] = false;
-                }
-                else if (upperWeight >= MIN_EVIDENCE && upperWeight > lowerWeight * PREFERENCE_RATIO)
-                {
-                    allowed[pitchClass] = false;
-                }
+                pitchClasses[pitchClass] = true;
             }
 
-            return allowed;
-        }
-
-        private bool[] ScalePitchClasses()
-        {
-            var scale = new bool[PITCH_CLASSES];
-            foreach (var clip in Ladder)
-            {
-                if (clip.Note >= 0)
-                {
-                    scale[PitchClass(clip.Note)] = true;
-                }
-            }
-
-            return scale;
-        }
-
-        private bool IsChordTone(int pitchClass)
-        {
-            return pitchClass == _root || pitchClass == (_root + FIFTH) % PITCH_CLASSES || pitchClass == Third();
-        }
-
-        private int Third()
-        {
-            int minor = (_root + MINOR_THIRD) % PITCH_CLASSES;
-            int major = (_root + MAJOR_THIRD) % PITCH_CLASSES;
-            double minorWeight = Weight(minor);
-            double majorWeight = Weight(major);
-            if (minorWeight >= MIN_EVIDENCE && minorWeight > majorWeight * PREFERENCE_RATIO)
-            {
-                return minor;
-            }
-
-            if (majorWeight >= MIN_EVIDENCE && majorWeight > minorWeight * PREFERENCE_RATIO)
-            {
-                return major;
-            }
-
-            if (Pentatonic[minor] != Pentatonic[major])
-            {
-                return Pentatonic[minor] ? minor : major;
-            }
-
-            var scale = ScalePitchClasses();
-            if (scale[minor] != scale[major])
-            {
-                return scale[minor] ? minor : major;
-            }
-
-            return -1;
-        }
-
-        private double Weight(int pitchClass)
-        {
-            return _rootWeights?[_root, pitchClass] ?? 0;
-        }
-
-        private void Learn(BassChordTrack chords)
-        {
-            var weights = new double[PITCH_CLASSES, PITCH_CLASSES];
-            foreach (var (songSeconds, note) in Anchors)
-            {
-                int root = chords.RootAt(songSeconds);
-                if (root >= 0)
-                {
-                    weights[root, PitchClass(note)]++;
-                }
-            }
-
-            _rootWeights = weights;
-        }
-
-        private static int PitchClass(int note)
-        {
-            return (note % PITCH_CLASSES + PITCH_CLASSES) % PITCH_CLASSES;
+            return pitchClasses;
         }
 
         private BassStemClip ClipAt(List<BassStemClip> clips)

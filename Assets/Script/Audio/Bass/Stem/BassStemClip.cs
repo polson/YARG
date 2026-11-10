@@ -23,7 +23,6 @@ namespace YARG.Audio.BASS
         public int     AttackEndFrame;
         public double  PitchHz;
         public int     Note = -1;
-        public int     BendSemitones;
         public int     LoopStartFrame;
         public int     LoopEndFrame;
         public int     LoopFadeFrames;
