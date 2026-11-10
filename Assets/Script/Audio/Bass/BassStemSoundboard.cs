@@ -27,7 +27,7 @@ namespace YARG.Audio.BASS
         private const double LOOP_BUFFER_SECONDS                 = 0.25;
         private const float  WHAMMY_IDLE_PERCENT                 = 0.05f;
         private const float  WHAMMY_BEND_ENGAGE_PERCENT          = 0.5f;
-        private const double VIBRATO_DELAY_SECONDS               = 0.1;
+        private const double VIBRATO_DELAY_SECONDS               = 0.3;
         private const double VIBRATO_RAMP_SECONDS                = 0.15;
         private const double VIBRATO_RATE_HZ                     = 4.5;
         private const double VIBRATO_DEPTH_CENTS                 = 90;

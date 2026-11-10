@@ -16,7 +16,6 @@ namespace YARG.Audio.BASS
         private const double HOLD_SECONDS   = 1.0;
         private const int    VOTE_RADIUS    = 6;
         private const int    MIN_VOTES      = 3;
-        private const int    FIFTH          = 7;
 
         private sealed class Region
         {
@@ -178,12 +177,6 @@ namespace YARG.Audio.BASS
                     {
                         best = pitchClass;
                     }
-                }
-
-                int fifthBelow = (best + 12 - FIFTH) % 12;
-                if (votes[fifthBelow] * 2 >= votes[best])
-                {
-                    best = fifthBelow;
                 }
 
                 if (votes[best] >= MIN_VOTES)

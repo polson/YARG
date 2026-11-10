@@ -8,7 +8,7 @@ namespace YARG.Audio.BASS
         private const double WINDOW_SECONDS  = 0.023;
         private const double HOP_SECONDS     = 0.01;
         private const double MIN_FREQUENCY   = 80;
-        private const double MAX_FREQUENCY   = 1600;
+        private const double MAX_FREQUENCY   = 2500;
         private const double THRESHOLD       = 0.2;
         private const double MIN_MEAN_SQUARE = 0.000001;
 

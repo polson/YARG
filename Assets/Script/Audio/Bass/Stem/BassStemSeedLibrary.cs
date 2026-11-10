@@ -19,21 +19,19 @@ namespace YARG.Audio.BASS
         private const double STRETCH_REGION_PREROLL_SECONDS = 0.1;
         private const double STRETCH_MIN_BODY_SECONDS       = 0.02;
         private const double STRETCH_FADE_SECONDS           = 0.01;
-        private const double PITCH_MIN_BODY_SECONDS         = 0.1;
+        private const double PITCH_MIN_BODY_SECONDS         = 0.12;
         private const double PITCH_MAX_MEASURE_SECONDS      = 0.4;
         private const double LEVEL_SECONDS                  = 0.3;
         private const double MIN_LEVEL_GAIN                 = 0.5;
         private const double MAX_LEVEL_GAIN                 = 3;
-        private const double ROOT_SAMPLE_SECONDS            = 0.1;
-        private const float  PITCH_MIN_VOICED               = 0.7f;
-        private const float  ANCHOR_MIN_VOICED              = 0.5f;
-        private const float  PITCH_AGREE_CENTS              = 50f;
-        private const float  PITCH_MAX_SPREAD_CENTS         = 25f;
+        private const float  PITCH_MIN_VOICED               = 0.8f;
+        private const float  ANCHOR_MIN_VOICED              = 0.6f;
+        private const float  PITCH_AGREE_CENTS              = 35f;
+        private const float  PITCH_MAX_SPREAD_CENTS         = 20f;
         private const int    MAX_SHIFT_SEMITONES            = 3;
         private const int    MAX_LADDER_STEP_SEMITONES      = 3;
         private const int    MIN_LADDER_SEMITONES           = 10;
-        private const double DEPARTURE_CENTS                = 250;
-        private const double MAX_OCTAVE_ERROR_CENTS         = 1800;
+        private const double DEPARTURE_CENTS                = 80;
         private const int    DEPARTURE_READINGS             = 3;
         private const int    CURVE_SMOOTHING_READINGS       = 5;
         private const int    ANCHOR_NEIGHBOURS              = 2;
@@ -217,14 +215,12 @@ namespace YARG.Audio.BASS
         public void Publish(CancellationToken token)
         {
             List<BassStemSoloSeeds> pending;
-            BassChordTrack? chords;
             lock (_lock)
             {
                 pending = _pending;
                 _pending = new List<BassStemSoloSeeds>();
                 _published.Clear();
                 _selected = null;
-                chords = _chords;
             }
 
             while (pending.Count > 0)
@@ -236,7 +232,7 @@ namespace YARG.Audio.BASS
                 }
 
                 var job = TakeNext(pending, requestedSoloTime);
-                if (!Prepare(job, chords, token))
+                if (!Prepare(job, token))
                 {
                     return;
                 }
@@ -329,7 +325,7 @@ namespace YARG.Audio.BASS
             jobs.Add((job.RegionStartFrame, frameCount, job.Region));
         }
 
-        private bool Prepare(BassStemSoloSeeds job, BassChordTrack? chords, CancellationToken token)
+        private bool Prepare(BassStemSoloSeeds job, CancellationToken token)
         {
             var clips = new List<(BassStemClip Clip, bool SingleNote, int Fret)>();
             foreach (var pair in job.ByKey)
@@ -377,7 +373,6 @@ namespace YARG.Audio.BASS
 
             var clean = new List<(BassStemClip Clip, int Note, float Score, bool Bent)>();
             var anchors = new List<(double SongSeconds, int Note, int Fret)>();
-            var keyWeights = new double[BassSoloHarmony.PITCH_CLASSES];
             for (int index = 0; index < clips.Count; index++)
             {
                 if (pitches[index] is not { } pitch || pitch.Note < job.LowestNote)
@@ -386,19 +381,18 @@ namespace YARG.Audio.BASS
                 }
 
                 var clip = clips[index].Clip;
-                keyWeights[BassSoloHarmony.PitchClass(pitch.Note)] += pitch.Voiced * pitch.Seconds;
-                if (pitch.Voiced >= ANCHOR_MIN_VOICED)
+                if (!pitch.Bent && pitch.Voiced >= ANCHOR_MIN_VOICED)
                 {
                     anchors.Add((clip.SongSeconds, pitch.Note, clips[index].Fret));
                 }
 
-                if (pitch.Seconds >= PITCH_MIN_BODY_SECONDS && pitch.Voiced >= PITCH_MIN_VOICED
+                if (!pitch.Bent && pitch.Seconds >= PITCH_MIN_BODY_SECONDS && pitch.Voiced >= PITCH_MIN_VOICED
                     && pitch.Spread <= PITCH_MAX_SPREAD_CENTS)
                 {
                     float score = (float) (pitch.Voiced * Math.Min(pitch.Seconds, 1.0)
                         / (1 + pitch.Spread / PITCH_MAX_SPREAD_CENTS));
                     clip.PitchHz = pitch.Hz;
-                    clean.Add((clip, pitch.Note, score, pitch.Bent));
+                    clean.Add((clip, pitch.Note, score, false));
                 }
             }
 
@@ -406,19 +400,6 @@ namespace YARG.Audio.BASS
             int low = rungs != null ? rungs[0].Note : int.MinValue;
             int high = rungs != null ? rungs[^1].Note : int.MaxValue;
             anchors.RemoveAll(anchor => anchor.Note < low || anchor.Note > high);
-            if (chords != null)
-            {
-                for (double seconds = job.StartTime; seconds <= job.EndTime; seconds += ROOT_SAMPLE_SECONDS)
-                {
-                    int root = chords.RootAt(seconds);
-                    if (root >= 0)
-                    {
-                        keyWeights[root] += ROOT_SAMPLE_SECONDS;
-                    }
-                }
-            }
-
-            job.Key = BassSoloHarmony.DiatonicSet(keyWeights);
             var heard = Array.FindAll(levels, level => level > 0);
             Array.Sort(heard);
             double soloLevel = heard.Length > 0 ? heard[heard.Length / 2] : 0;
@@ -509,8 +490,8 @@ namespace YARG.Audio.BASS
                 }
 
                 double rawCents = 1200 * Math.Log(pitch / median, 2);
-                double cents = Math.Abs(OctaveFolded(rawCents));
-                if (cents <= PITCH_AGREE_CENTS && Math.Abs(rawCents) <= MAX_OCTAVE_ERROR_CENTS)
+                double cents = Math.Abs(rawCents);
+                if (cents <= PITCH_AGREE_CENTS)
                 {
                     agreeing++;
                     spread += cents;
@@ -557,12 +538,7 @@ namespace YARG.Audio.BASS
             }
 
             double rawCents = 1200 * Math.Log(reading / hz, 2);
-            return Math.Abs(OctaveFolded(rawCents)) <= DEPARTURE_CENTS && Math.Abs(rawCents) <= MAX_OCTAVE_ERROR_CENTS;
-        }
-
-        private static double OctaveFolded(double cents)
-        {
-            return cents - 1200 * Math.Round(cents / 1200);
+            return Math.Abs(rawCents) <= DEPARTURE_CENTS;
         }
 
         private static bool StartsWithBend(List<float> readings, float settledHz, double measuredSeconds)
@@ -689,7 +665,7 @@ namespace YARG.Audio.BASS
                 if (Holds(readings[index], clip.PitchHz))
                 {
                     departureRun = 0;
-                    points.Add((center, OctaveFolded(1200 * Math.Log(readings[index] / clip.PitchHz, 2))));
+                    points.Add((center, 1200 * Math.Log(readings[index] / clip.PitchHz, 2)));
                     continue;
                 }
 
@@ -845,6 +821,11 @@ namespace YARG.Audio.BASS
             MatchLevels(job.Ladder, soloLevel);
 
             anchors.Sort((left, right) => left.SongSeconds.CompareTo(right.SongSeconds));
+            foreach (var anchor in anchors)
+            {
+                job.Anchors.Add((anchor.SongSeconds, anchor.Note));
+            }
+
             var neighbours = new List<int>(ANCHOR_NEIGHBOURS * 2 + 1);
             for (int anchorIndex = 0; anchorIndex < anchors.Count; anchorIndex++)
             {
