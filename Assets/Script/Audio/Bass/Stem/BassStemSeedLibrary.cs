@@ -563,6 +563,17 @@ namespace YARG.Audio.BASS
             return rungs;
         }
 
+        private static int NextScaleNote(int note, int root)
+        {
+            int next = note + 1;
+            while (Array.IndexOf(PENTATONIC, PitchClass(next - root)) < 0)
+            {
+                next++;
+            }
+
+            return next;
+        }
+
         private static (int Start, int Length) LongestUnbrokenRun(List<(int Note, BassStemClip Clip, int Shift)> rungs)
         {
             int bestStart = 0;
@@ -596,6 +607,7 @@ namespace YARG.Audio.BASS
             foreach (var rung in rungs)
             {
                 var clip = rung.Clip.Shifted(rung.Shift, _format);
+                clip.BendSemitones = NextScaleNote(rung.Note, root) - rung.Note;
                 if (clip.LockLoopToPeriod(_format.Frequency / clip.PitchHz, _format))
                 {
                     locked++;

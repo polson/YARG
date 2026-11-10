@@ -479,9 +479,15 @@ namespace YARG.Audio.BASS
             pitch.fPitchShift = 1f;
             if (voice.IsLooping)
             {
-                double semitones = GlobalAudioHandler.UseWhammyFx
-                    ? -GlobalAudioHandler.WhammyPitchShiftAmount * _whammyPercent
-                    : 0;
+                double semitones = 0;
+                if (GlobalAudioHandler.UseWhammyFx)
+                {
+                    int bend = voice.Clip?.BendSemitones ?? 0;
+                    semitones = bend > 0
+                        ? bend * _whammyPercent
+                        : -GlobalAudioHandler.WhammyPitchShiftAmount * _whammyPercent;
+                }
+
                 if (_whammyPercent <= WHAMMY_IDLE_PERCENT)
                 {
                     semitones += VibratoCents(voice) / 100;
