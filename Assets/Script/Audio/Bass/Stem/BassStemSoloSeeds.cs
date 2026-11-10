@@ -10,12 +10,15 @@ namespace YARG.Audio.BASS
         public const int FRET_COUNT = 5;
 
         private static readonly int[] FRET_KEYS = { 1, 2, 4, 8, 16 };
+        private static readonly int[] ROOT_OFFSETS = { 0, -1, 1 };
 
-        private const int    PITCH_CLASSES      = BassSoloHarmony.PITCH_CLASSES;
-        private const int    MAX_WHAMMY_BEND    = 4;
-        private const int    DEFAULT_WHAMMY     = 2;
-
-        private static readonly double[] VOCABULARY_SECONDS = { 1.0, 2.0, 4.0, double.MaxValue };
+        private const int    PITCH_CLASSES             = BassSoloHarmony.PITCH_CLASSES;
+        private const int    MAX_WHAMMY_BEND           = 4;
+        private const int    DEFAULT_WHAMMY            = 2;
+        private const double WHAMMY_VOCABULARY_SECONDS = 1.0;
+        private const int    BOX_SHIFT_RUNGS           = 2;
+        private const double LOW_FRET_AVERAGE          = 1.25;
+        private const double HIGH_FRET_AVERAGE         = 2.75;
 
         public readonly double                                          StartTime;
         public readonly double                                          EndTime;
@@ -28,6 +31,7 @@ namespace YARG.Audio.BASS
         public readonly List<(BassStemClip Clip, float[] Raw, int AttackFrames)> Candidates = new();
         public          float[]                                                  Region = Array.Empty<float>();
         public          long                                                     RegionStartFrame;
+        public          bool                                                     CanStretch;
 
         private const double PHRASE_RESET_SECONDS = 1.0;
 
@@ -36,6 +40,10 @@ namespace YARG.Audio.BASS
         private          double       _songSeconds;
         private          int          _root = -1;
         private          bool[]?      _pentatonicScale;
+        private          List<int>?   _scaleRungs;
+        private          int          _boxStart = -1;
+        private          int          _phraseFretTotal;
+        private          int          _phraseFretCount;
         private          double       _lastPlaySeconds;
 
         public BassStemSoloSeeds(double startTime, double endTime,
@@ -70,7 +78,7 @@ namespace YARG.Audio.BASS
                 return DEFAULT_WHAMMY;
             }
 
-            var good = GoodPitchClasses(VOCABULARY_SECONDS[0]);
+            var good = GoodPitchClasses(WHAMMY_VOCABULARY_SECONDS);
             for (int semitones = 1; semitones <= MAX_WHAMMY_BEND; semitones++)
             {
                 if (good[BassSoloHarmony.PitchClass(clip.Note + semitones)])
@@ -117,6 +125,8 @@ namespace YARG.Audio.BASS
             int fret = Array.IndexOf(FRET_KEYS, key);
             if (Ladder.Count > 0 && fret >= 0)
             {
+                _phraseFretTotal += fret;
+                _phraseFretCount++;
                 var (windowNote, _) = CurrentWindow();
                 YargLogger.LogFormatDebug("[SoloFret] {0:0.00}s fret {1} note {2} window {3} root {4}",
                     _songSeconds, fret, clip.Note, windowNote, _root);
@@ -167,7 +177,22 @@ namespace YARG.Audio.BASS
 
         private void UpdateFretRungs()
         {
-            var rungs = AllowedRungs();
+            var rungs = ScaleRungs();
+            int lastStart = rungs.Count - FRET_COUNT;
+            int target = _boxStart < 0 ? WindowStart(rungs) : _boxStart + PhraseShift();
+            _boxStart = RootAlignedStart(rungs, Math.Clamp(target, 0, lastStart), lastStart);
+            _phraseFretTotal = 0;
+            _phraseFretCount = 0;
+            for (int f = 0; f < FRET_COUNT; f++)
+            {
+                _fretRungs[f] = rungs[_boxStart + f];
+            }
+
+            _fretRungsValid = true;
+        }
+
+        private int WindowStart(List<int> rungs)
+        {
             var (note, windowFret) = CurrentWindow();
             int nearest = 0;
             for (int index = 1; index < rungs.Count; index++)
@@ -178,13 +203,42 @@ namespace YARG.Audio.BASS
                 }
             }
 
-            int first = Math.Max(0, Math.Min(nearest - windowFret, rungs.Count - FRET_COUNT));
-            for (int f = 0; f < FRET_COUNT; f++)
+            return nearest - windowFret;
+        }
+
+        private int PhraseShift()
+        {
+            if (_phraseFretCount == 0)
             {
-                _fretRungs[f] = rungs[first + f];
+                return 0;
             }
 
-            _fretRungsValid = true;
+            double average = (double) _phraseFretTotal / _phraseFretCount;
+            if (average >= HIGH_FRET_AVERAGE)
+            {
+                return BOX_SHIFT_RUNGS;
+            }
+
+            return average <= LOW_FRET_AVERAGE ? -BOX_SHIFT_RUNGS : 0;
+        }
+
+        private int RootAlignedStart(List<int> rungs, int target, int lastStart)
+        {
+            if (_root < 0)
+            {
+                return target;
+            }
+
+            foreach (int offset in ROOT_OFFSETS)
+            {
+                int start = target + offset;
+                if (start >= 0 && start <= lastStart && BassSoloHarmony.PitchClass(Ladder[rungs[start]].Note) == _root)
+                {
+                    return start;
+                }
+            }
+
+            return target;
         }
 
         private (int Note, int Fret) CurrentWindow()
@@ -208,32 +262,26 @@ namespace YARG.Audio.BASS
             return (note, fret);
         }
 
-        private List<int> AllowedRungs()
+        private List<int> ScaleRungs()
         {
-            var rungs = new List<int>(Ladder.Count);
-            foreach (double seconds in VOCABULARY_SECONDS)
+            if (_scaleRungs != null)
             {
-                CollectRungs(rungs, GoodPitchClasses(seconds));
-                FilterConsecutiveSemitones(rungs);
-                if (rungs.Count >= FRET_COUNT)
+                return _scaleRungs;
+            }
+
+            var rungs = new List<int>(Ladder.Count);
+            CollectRungs(rungs, PentatonicScale());
+            FilterConsecutiveSemitones(rungs);
+            if (rungs.Count < FRET_COUNT)
+            {
+                rungs.Clear();
+                for (int index = 0; index < Ladder.Count; index += 2)
                 {
-                    return rungs;
+                    rungs.Add(index);
                 }
             }
 
-            CollectRungs(rungs, PentatonicScale());
-            FilterConsecutiveSemitones(rungs);
-            if (rungs.Count >= FRET_COUNT)
-            {
-                return rungs;
-            }
-
-            rungs.Clear();
-            for (int index = 0; index < Ladder.Count; index += 2)
-            {
-                rungs.Add(index);
-            }
-
+            _scaleRungs = rungs;
             return rungs;
         }
 

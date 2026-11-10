@@ -18,7 +18,7 @@
 extern "C" {
 #endif
 
-#define YARG_AUDIO_ABI_VERSION 27u
+#define YARG_AUDIO_ABI_VERSION 28u
 
 typedef struct yarg_stretch_stream yarg_stretch_stream;
 typedef struct yarg_stretch_render yarg_stretch_render;
@@ -138,6 +138,8 @@ YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_stream_destroy(yarg_stretch_
    start_frame + n * speed. Reads move forward only; skipped output is rendered and discarded. */
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_render_create(
     uint32_t channels, uint32_t sample_rate, float speed, yarg_stretch_render** render);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_render_set_pitch(
+    yarg_stretch_render* render, float factor, float base_hz);
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_render_begin(
     yarg_stretch_render* render, const float* input, int64_t input_frames, int64_t start_frame);
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_render_read(

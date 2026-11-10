@@ -125,6 +125,45 @@ void outputStaysFinite() {
     }
 }
 
+double harmonicCentroid(const std::vector<float>& output, int centreFrame, double fundamental) {
+    double power = 0;
+    double weighted = 0;
+    for (int harmonic = 1; harmonic * fundamental < 8000; ++harmonic) {
+        const double energy = tonePower(output, centreFrame, 4096, fundamental * harmonic);
+        power += energy;
+        weighted += energy * fundamental * harmonic;
+    }
+    return weighted / power;
+}
+
+void transposeKeepsFormants() {
+    const double fundamental = 150;
+    const float factor = 1.5f;
+    std::vector<float> input(static_cast<std::size_t>(SAMPLE_RATE) * CHANNELS);
+    for (int frame = 0; frame < SAMPLE_RATE; ++frame) {
+        double value = 0;
+        for (int harmonic = 1; harmonic * fundamental < 8000; ++harmonic) {
+            const double frequency = fundamental * harmonic;
+            const double formant = 0.15 + std::exp(-std::pow((frequency - 900) / 400, 2));
+            value += 0.05 * formant / std::pow(harmonic, 0.65) * std::sin(2 * PI * frequency * frame / SAMPLE_RATE);
+        }
+        input[frame * CHANNELS] = static_cast<float>(value);
+        input[frame * CHANNELS + 1] = static_cast<float>(value);
+    }
+
+    const auto inputFrames = static_cast<std::int64_t>(input.size() / CHANNELS);
+    yarg::audio::StretchRender render(CHANNELS, SAMPLE_RATE, 1.0f);
+    render.setPitch(factor, static_cast<float>(fundamental));
+    render.begin(input.data(), inputFrames, 0);
+    std::vector<float> output(static_cast<std::size_t>(SAMPLE_RATE) * CHANNELS);
+    REQUIRE(render.read(input.data(), inputFrames, 0, output.data(), SAMPLE_RATE));
+
+    const int centre = SAMPLE_RATE / 2;
+    const double shifted = fundamental * factor;
+    REQUIRE(tonePower(output, centre, 4096, shifted) > 10 * tonePower(output, centre, 4096, fundamental));
+    REQUIRE(harmonicCentroid(output, centre, shifted) < 1.15 * harmonicCentroid(input, centre, fundamental));
+}
+
 void reportSoloRenderTime() {
     const int soloSeconds = 10;
     const auto input = createGuitarLike(SAMPLE_RATE * soloSeconds);
@@ -144,5 +183,6 @@ void runStretchRenderTests() {
     outputFramesMapToStartPlusSpeed(0.25f);
     skippedReadsMatchContinuousRender();
     outputStaysFinite();
+    transposeKeepsFormants();
     reportSoloRenderTime();
 }

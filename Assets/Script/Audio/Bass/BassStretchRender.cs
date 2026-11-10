@@ -54,6 +54,11 @@ namespace YARG.Audio.BASS
             }
         }
 
+        public bool SetPitch(float factor, float baseHz)
+        {
+            return YargAudioBindings.StretchRenderSetPitch(this, factor, baseHz) == 0;
+        }
+
         public unsafe bool Begin(float[] input, int channels, long startFrame)
         {
             fixed (float* source = input)

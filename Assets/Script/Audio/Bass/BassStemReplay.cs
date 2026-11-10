@@ -41,7 +41,7 @@ namespace YARG.Audio.BASS
 
         public BassStemSoundboard CreateSoundboard(Func<double> stemVolume)
         {
-            var soundboard = new BassStemSoundboard(_lock, _manager, _format, _pitchParams,
+            var soundboard = new BassStemSoundboard(_lock, _manager, _format,
                 () => stemVolume() * _normalizationGain());
             lock (_lock)
             {

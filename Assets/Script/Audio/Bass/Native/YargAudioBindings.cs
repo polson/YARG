@@ -26,6 +26,7 @@ namespace YARG.Audio.BASS.Native
         private static StretchStreamGetPositionDelegate? _stretchStreamGetPosition;
         private static StretchStreamDestroyDelegate? _stretchStreamDestroy;
         private static StretchRenderCreateDelegate? _stretchRenderCreate;
+        private static StretchRenderSetPitchDelegate? _stretchRenderSetPitch;
         private static StretchRenderBeginDelegate? _stretchRenderBegin;
         private static StretchRenderReadDelegate? _stretchRenderRead;
         private static StretchRenderDestroyDelegate? _stretchRenderDestroy;
@@ -137,6 +138,9 @@ namespace YARG.Audio.BASS.Native
 
         internal static int StretchRenderCreate(uint channels, uint sampleRate, float speed, out BassStretchRender render) =>
             EnsureBound(ref _stretchRenderCreate, "yarg_stretch_render_create")(channels, sampleRate, speed, out render);
+
+        internal static int StretchRenderSetPitch(BassStretchRender render, float factor, float baseHz) =>
+            EnsureBound(ref _stretchRenderSetPitch, "yarg_stretch_render_set_pitch")(render, factor, baseHz);
 
         internal static int StretchRenderBegin(BassStretchRender render, IntPtr input, long inputFrames, long startFrame) =>
             EnsureBound(ref _stretchRenderBegin, "yarg_stretch_render_begin")(render, input, inputFrames, startFrame);
@@ -294,6 +298,7 @@ namespace YARG.Audio.BASS.Native
             _stretchStreamGetPosition = GetFunction<StretchStreamGetPositionDelegate>(handle, "yarg_stretch_stream_get_position");
             _stretchStreamDestroy = GetFunction<StretchStreamDestroyDelegate>(handle, "yarg_stretch_stream_destroy");
             _stretchRenderCreate = GetFunction<StretchRenderCreateDelegate>(handle, "yarg_stretch_render_create");
+            _stretchRenderSetPitch = GetFunction<StretchRenderSetPitchDelegate>(handle, "yarg_stretch_render_set_pitch");
             _stretchRenderBegin = GetFunction<StretchRenderBeginDelegate>(handle, "yarg_stretch_render_begin");
             _stretchRenderRead = GetFunction<StretchRenderReadDelegate>(handle, "yarg_stretch_render_read");
             _stretchRenderDestroy = GetFunction<StretchRenderDestroyDelegate>(handle, "yarg_stretch_render_destroy");
@@ -443,6 +448,9 @@ namespace YARG.Audio.BASS.Native
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int StretchRenderCreateDelegate(uint channels, uint sampleRate, float speed, out BassStretchRender render);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int StretchRenderSetPitchDelegate(BassStretchRender render, float factor, float baseHz);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int StretchRenderBeginDelegate(BassStretchRender render, IntPtr input, long inputFrames, long startFrame);

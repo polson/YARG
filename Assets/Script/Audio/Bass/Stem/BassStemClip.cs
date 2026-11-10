@@ -27,6 +27,7 @@ namespace YARG.Audio.BASS
         public int     LoopEndFrame;
         public int     LoopFadeFrames;
         public float[] LoopTail = Array.Empty<float>();
+        public BassStemClip? Vibrato;
 
         public bool HasLoop => LoopEndFrame > LoopStartFrame;
 
@@ -106,16 +107,11 @@ namespace YARG.Audio.BASS
             SetLoop(bodyStart: loopStart, loopEnd: FrameCount, fadeFrames: fadeFrames, format: format);
         }
 
-        public BassStemClip Retuned(double[] sourceHz, int endFrame, double targetHz, BassStemFormat format)
+        public BassStemClip Retuned(int endFrame, double targetHz, BassStemFormat format)
         {
             int channels = format.Channels;
-            double minStep = double.MaxValue;
-            for (int frame = 0; frame < endFrame; frame++)
-            {
-                minStep = Math.Min(minStep, targetHz / sourceHz[frame]);
-            }
-
-            var samples = new float[((int) (endFrame / minStep) + 2) * channels];
+            double step = targetHz / PitchHz;
+            var samples = new float[((int) (endFrame / step) + 2) * channels];
             var mapped = new int[endFrame + 1];
             int nextSource = 0;
             int frameCount = 0;
@@ -144,7 +140,7 @@ namespace YARG.Audio.BASS
                 }
 
                 frameCount++;
-                position += targetHz / sourceHz[index];
+                position += step;
             }
 
             while (nextSource <= endFrame)
@@ -153,6 +149,38 @@ namespace YARG.Audio.BASS
             }
 
             Array.Resize(ref samples, frameCount * channels);
+            return WithRetunedSamples(samples, frameCount, mapped, endFrame, targetHz, format);
+        }
+
+        public BassStemClip? StretchRetuned(BassStretchRender render, int endFrame, double targetHz,
+            BassStemFormat format)
+        {
+            if (endFrame <= 0)
+            {
+                return null;
+            }
+
+            int channels = format.Channels;
+            var samples = new float[endFrame * channels];
+            if (!render.SetPitch((float) (targetHz / PitchHz), (float) PitchHz)
+                || !render.Begin(Samples, channels, 0)
+                || !render.Read(Samples, channels, 0, samples))
+            {
+                return null;
+            }
+
+            var mapped = new int[endFrame + 1];
+            for (int frame = 0; frame <= endFrame; frame++)
+            {
+                mapped[frame] = frame;
+            }
+
+            return WithRetunedSamples(samples, endFrame, mapped, endFrame, targetHz, format);
+        }
+
+        private BassStemClip WithRetunedSamples(float[] samples, int frameCount, int[] mapped, int endFrame,
+            double targetHz, BassStemFormat format)
+        {
             var retuned = new BassStemClip
             {
                 SongSeconds = SongSeconds,
@@ -194,6 +222,44 @@ namespace YARG.Audio.BASS
 
             SetLoop(bodyStart: bodyStart, loopEnd: loopEnd, fadeFrames: fadeFrames, format: format);
             return true;
+        }
+
+        public float[] Unrolled(int frameCount, int channels)
+        {
+            var samples = new float[frameCount * channels];
+            int pushedFrames = 0;
+            int written = 0;
+            while (written < frameCount)
+            {
+                int frames = NextLoopSegment(pushedFrames, frameCount - written, out bool fromTail, out int sourceFrame);
+                Array.Copy(fromTail ? LoopTail : Samples, sourceFrame * channels, samples, written * channels,
+                    frames * channels);
+                written += frames;
+                pushedFrames += frames;
+                if (pushedFrames == LoopEndFrame)
+                {
+                    pushedFrames = LoopStartFrame;
+                }
+            }
+
+            return samples;
+        }
+
+        public BassStemClip WithLoopedSamples(float[] samples, int bodyStart, int fadeFrames, BassStemFormat format)
+        {
+            var looped = new BassStemClip
+            {
+                SongSeconds = SongSeconds,
+                StartFrame = StartFrame,
+                Samples = samples,
+                FrameCount = samples.Length / format.Channels,
+                IsSustain = IsSustain,
+                AttackEndFrame = AttackEndFrame,
+                PitchHz = PitchHz,
+                Note = Note,
+            };
+            looped.SetLoop(bodyStart: bodyStart, loopEnd: looped.FrameCount, fadeFrames: fadeFrames, format: format);
+            return looped;
         }
 
         public int NextLoopSegment(int pushedFrames, int remaining, out bool fromTail, out int sourceFrame)

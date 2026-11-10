@@ -13,7 +13,7 @@ constexpr float TRANSIENT_MIN_HZ = 1500.0f;
 }
 
 StretchRender::StretchRender(int channels, int sampleRate, float speed)
-    : channels_(channels), speed_(speed) {
+    : channels_(channels), sampleRate_(sampleRate), speed_(speed) {
     const int windowSteps = static_cast<int>(std::ceil(sampleRate * WINDOW_SECONDS /
         (2 * BLOCK_FRAMES)));
     const int window = std::max(4 * BLOCK_FRAMES, windowSteps * 2 * BLOCK_FRAMES);
@@ -27,6 +27,12 @@ StretchRender::StretchRender(int channels, int sampleRate, float speed)
         inputChannels_.push_back(inputBuffer_.data() + channel * capacity_);
         outputChannels_.push_back(outputBuffer_.data() + channel * BLOCK_FRAMES);
     }
+}
+
+void StretchRender::setPitch(float factor, float baseHz) {
+    stretch_.setTransposeFactor(factor);
+    stretch_.setFormantFactor(1, true);
+    stretch_.setFormantBase(baseHz / sampleRate_);
 }
 
 void StretchRender::begin(const float* input, std::int64_t inputFrames, std::int64_t startFrame) {

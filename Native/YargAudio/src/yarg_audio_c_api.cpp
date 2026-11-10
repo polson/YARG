@@ -180,6 +180,17 @@ int32_t YARG_AUDIO_CALL yarg_stretch_render_create(uint32_t channels, uint32_t s
     }
 }
 
+int32_t YARG_AUDIO_CALL yarg_stretch_render_set_pitch(yarg_stretch_render* render, float factor,
+    float base_hz) {
+    using yarg::audio::StretchRender;
+    if (!render || !std::isfinite(factor) || factor < StretchRender::MIN_PITCH ||
+        factor > StretchRender::MAX_PITCH || !std::isfinite(base_hz) || base_hz < 0) {
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    }
+    render->value.setPitch(factor, base_hz);
+    return YARG_AUDIO_OK;
+}
+
 int32_t YARG_AUDIO_CALL yarg_stretch_render_begin(yarg_stretch_render* render, const float* input,
     int64_t input_frames, int64_t start_frame) {
     if (!render || !input || input_frames <= 0 || start_frame < 0 || start_frame >= input_frames) {

@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 using ManagedBass;
-using ManagedBass.Fx;
 using YARG.Core.Audio;
 using YARG.Core.Chart;
 using YARG.Core.Engine;
@@ -24,9 +23,11 @@ namespace YARG.Audio.BASS
         private const double FREESTYLE_TRANSITION_INTERVAL_RATIO = 0.25;
         private const double LEGATO_TRANSITION_SECONDS           = 0.035;
         private const double LEGATO_FADE_IN_SECONDS              = 0.01;
+        private const double VIBRATO_CROSSFADE_SECONDS           = 0.05;
         private const double LOOP_BUFFER_SECONDS                 = 0.25;
         private const float  WHAMMY_IDLE_PERCENT                 = 0.05f;
-        private const float  WHAMMY_BEND_ENGAGE_PERCENT          = 0.5f;
+        private const float  WHAMMY_FULL_BEND_PERCENT            = 0.9f;
+        private const double PITCH_GLIDE_SECONDS                 = 0.02;
         private const double VIBRATO_DELAY_SECONDS               = 0.3;
         private const double VIBRATO_RAMP_SECONDS                = 0.15;
         private const double VIBRATO_RATE_HZ                     = 4.5;
@@ -42,9 +43,13 @@ namespace YARG.Audio.BASS
         private sealed class Voice
         {
             public readonly PushStream Stream;
-            public readonly int        PitchFx;
+            public readonly PushStream VibratoStream;
             public BassStemClip? Clip;
+            public BassStemClip? VibratoClip;
             public int        PushedFrames;
+            public int        VibratoPushedFrames;
+            public double     Gain;
+            public float      Frequency;
             public int        Key;
             public bool       IsSustain;
             public bool       IsLooping;
@@ -56,10 +61,10 @@ namespace YARG.Audio.BASS
             public int        VibratoSeed;
             public int        WhammySemitones;
 
-            public Voice(PushStream stream, int pitchFx)
+            public Voice(PushStream stream, PushStream vibratoStream)
             {
                 Stream = stream;
-                PitchFx = pitchFx;
+                VibratoStream = vibratoStream;
             }
 
             public bool IsAttached => Key != 0;
@@ -82,7 +87,6 @@ namespace YARG.Audio.BASS
 
         private readonly object                       _lock;
         private readonly BassStemFormat               _format;
-        private readonly PitchShiftParametersStruct   _pitchParams;
         private readonly Func<double>                 _volume;
         private readonly BassStemSeedLibrary          _seeds;
         private readonly Voice[]                      _voices = new Voice[VOICE_COUNT];
@@ -94,19 +98,18 @@ namespace YARG.Audio.BASS
         private          bool                         _disposed;
 
         internal BassStemSoundboard(object stemLock, AudioManager manager, BassStemFormat format,
-            PitchShiftParametersStruct pitchParams, Func<double> volume)
+            Func<double> volume)
         {
             _lock = stemLock;
             _format = format;
-            _pitchParams = pitchParams;
             _volume = volume;
             _seeds = new BassStemSeedLibrary(format);
 
             for (int index = 0; index < VOICE_COUNT; index++)
             {
                 var stream = manager.CreatePushStream(sampleRate: format.Frequency, channelCount: format.Channels);
-                var pitchFx = BassHelpers.FXAddParameters(stream.Handle, EffectType.PitchShift, _pitchParams);
-                _voices[index] = new Voice(stream: stream, pitchFx: pitchFx);
+                var vibratoStream = manager.CreatePushStream(sampleRate: format.Frequency, channelCount: format.Channels);
+                _voices[index] = new Voice(stream: stream, vibratoStream: vibratoStream);
             }
         }
 
@@ -158,12 +161,8 @@ namespace YARG.Audio.BASS
 
                 FadePreviousVoices(LEGATO_TRANSITION_SECONDS);
                 int lastFrame = (clip.HasLoop ? clip.LoopEndFrame : clip.FrameCount) - 1;
-                var voice = Start(clip, key: key, gain: 0, firstFrame: Math.Min(clip.AttackEndFrame, lastFrame));
-                if (!Bass.ChannelSlideAttribute(voice.Stream.Handle, ChannelAttribute.Volume, (float) _volume(),
-                    (int) (LEGATO_FADE_IN_SECONDS * 1000)))
-                {
-                    YargLogger.LogFormatError("Failed to fade in replay voice: {0}!", Bass.LastError);
-                }
+                Start(clip, key: key, gain: 1, firstFrame: Math.Min(clip.AttackEndFrame, lastFrame),
+                    fadeInSeconds: LEGATO_FADE_IN_SECONDS);
             }
         }
 
@@ -243,12 +242,19 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
+                bool wasIdle = IsWhammyIdle;
                 _whammyPercent = percent;
                 foreach (var voice in _voices)
                 {
-                    if (voice.IsLooping)
+                    if (!voice.IsLooping)
                     {
-                        SetPitch(voice);
+                        continue;
+                    }
+
+                    SetPitch(voice, glide: true);
+                    if (voice.VibratoClip != null && IsWhammyIdle != wasIdle)
+                    {
+                        SlideVoiceVolume(voice, _volume() * voice.Gain, VIBRATO_CROSSFADE_SECONDS);
                     }
                 }
             }
@@ -295,7 +301,9 @@ namespace YARG.Audio.BASS
                 foreach (var voice in _voices)
                 {
                     voice.Stream.Clear();
+                    voice.VibratoStream.Clear();
                     voice.Clip = null;
+                    voice.VibratoClip = null;
                     voice.Key = 0;
                     voice.IsSustain = false;
                     voice.IsLooping = false;
@@ -337,6 +345,7 @@ namespace YARG.Audio.BASS
                 foreach (var voice in _voices)
                 {
                     voice.Stream.Dispose();
+                    voice.VibratoStream.Dispose();
                 }
             }
         }
@@ -355,17 +364,30 @@ namespace YARG.Audio.BASS
             return count;
         }
 
-        private Voice Start(BassStemClip clip, int key, double gain, int firstFrame)
+        private Voice Start(BassStemClip clip, int key, double gain, int firstFrame, double fadeInSeconds = 0)
         {
             var voice = PickVoice(key);
             voice.Stream.Clear();
-            voice.Stream.SetVolume(_volume() * gain);
+            voice.VibratoStream.Clear();
             voice.Clip = clip;
             voice.PushedFrames = firstFrame;
             voice.Key = key;
             voice.IsLooping = clip.HasLoop && voice.IsFullyHeld(_heldFrets);
             voice.IsSustain = clip.IsSustain || voice.IsLooping;
-            SetPitch(voice);
+            voice.VibratoClip = voice.IsLooping ? clip.Vibrato : null;
+            voice.VibratoPushedFrames = firstFrame;
+            voice.Gain = gain;
+            if (fadeInSeconds > 0)
+            {
+                SetVoiceVolume(voice, 0);
+                SlideVoiceVolume(voice, _volume() * gain, fadeInSeconds);
+            }
+            else
+            {
+                SetVoiceVolume(voice, _volume() * gain);
+            }
+
+            SetPitch(voice, glide: false);
             voice.StartOrder = ++_playCount;
             voice.StartTimestamp = Stopwatch.GetTimestamp();
             for (int index = 0; index < voice.DriftPhases.Length; index++)
@@ -391,7 +413,7 @@ namespace YARG.Audio.BASS
             _lastVoiceStart = now;
             foreach (var previous in _voices)
             {
-                if (previous.IsAttached || Bass.ChannelIsSliding(previous.Stream.Handle, ChannelAttribute.Volume))
+                if (previous.IsAttached || IsFading(previous))
                 {
                     FadeOut(previous, fadeSeconds: transition);
                 }
@@ -421,7 +443,7 @@ namespace YARG.Audio.BASS
                     continue;
                 }
 
-                if (!Bass.ChannelIsSliding(voice.Stream.Handle, ChannelAttribute.Volume))
+                if (!IsFading(voice))
                 {
                     if (oldestIdle == null || voice.StartOrder < oldestIdle.StartOrder)
                     {
@@ -431,8 +453,8 @@ namespace YARG.Audio.BASS
                     continue;
                 }
 
-                bool hasVolume = Bass.ChannelGetAttribute(voice.Stream.Handle, ChannelAttribute.Volume, out float volume);
-                if (hasVolume && volume < quietestVolume)
+                float volume = Loudness(voice);
+                if (volume < quietestVolume)
                 {
                     quietestTail = voice;
                     quietestVolume = volume;
@@ -452,7 +474,13 @@ namespace YARG.Audio.BASS
 
             if (voice.IsLooping)
             {
-                FeedLoop(voice, clip);
+                SetPitch(voice, glide: true);
+                FeedLoop(voice.Stream, clip, ref voice.PushedFrames);
+                if (voice.VibratoClip != null)
+                {
+                    FeedLoop(voice.VibratoStream, voice.VibratoClip, ref voice.VibratoPushedFrames);
+                }
+
                 return;
             }
 
@@ -469,9 +497,9 @@ namespace YARG.Audio.BASS
             }
         }
 
-        private void FeedLoop(Voice voice, BassStemClip clip)
+        private void FeedLoop(PushStream stream, BassStemClip clip, ref int pushedFrames)
         {
-            int queuedBytes = Bass.StreamPutData(voice.Stream.Handle, IntPtr.Zero, 0);
+            int queuedBytes = Bass.StreamPutData(stream.Handle, IntPtr.Zero, 0);
             if (queuedBytes < 0)
             {
                 YargLogger.LogFormatError("Failed to query replay queue: {0}!", Bass.LastError);
@@ -482,13 +510,13 @@ namespace YARG.Audio.BASS
             int remaining = LoopBufferFrames - queuedFrames;
             while (remaining > 0)
             {
-                int frames = clip.NextLoopSegment(voice.PushedFrames, remaining, out bool fromTail, out int sourceFrame);
-                Push(voice.Stream, fromTail ? clip.LoopTail : clip.Samples, firstFrame: sourceFrame, frameCount: frames);
+                int frames = clip.NextLoopSegment(pushedFrames, remaining, out bool fromTail, out int sourceFrame);
+                Push(stream, fromTail ? clip.LoopTail : clip.Samples, firstFrame: sourceFrame, frameCount: frames);
                 remaining -= frames;
-                voice.PushedFrames += frames;
-                if (voice.PushedFrames == clip.LoopEndFrame)
+                pushedFrames += frames;
+                if (pushedFrames == clip.LoopEndFrame)
                 {
-                    voice.PushedFrames = clip.LoopStartFrame;
+                    pushedFrames = clip.LoopStartFrame;
                 }
             }
         }
@@ -502,10 +530,9 @@ namespace YARG.Audio.BASS
             }
         }
 
-        private void SetPitch(Voice voice)
+        private void SetPitch(Voice voice, bool glide)
         {
-            var pitch = _pitchParams;
-            pitch.fPitchShift = 1f;
+            float freq = _format.Frequency;
             if (voice.IsLooping)
             {
                 double semitones = 0;
@@ -513,23 +540,83 @@ namespace YARG.Audio.BASS
                 {
                     int bend = voice.WhammySemitones;
                     semitones = bend > 0
-                        ? (_whammyPercent >= WHAMMY_BEND_ENGAGE_PERCENT ? bend : 0)
+                        ? bend * Math.Min(1, _whammyPercent / WHAMMY_FULL_BEND_PERCENT)
                         : -GlobalAudioHandler.WhammyPitchShiftAmount * _whammyPercent;
                 }
 
-                semitones += DriftCents(voice) / 100;
-                if (_whammyPercent <= WHAMMY_IDLE_PERCENT)
+                if (voice.VibratoClip == null)
                 {
-                    semitones += VibratoCents(voice) / 100;
+                    semitones += DriftCents(voice) / 100;
+                    if (IsWhammyIdle)
+                    {
+                        semitones += VibratoCents(voice) / 100;
+                    }
                 }
 
-                pitch.fPitchShift = (float) Math.Pow(2, semitones / 12);
+                freq = (float) (_format.Frequency * Math.Pow(2, semitones / 12));
             }
 
-            if (!BassHelpers.FXSetParameters(voice.PitchFx, pitch))
+            if (glide && freq == voice.Frequency)
             {
-                YargLogger.LogFormatError("Failed to set replay pitch: {0}!", Bass.LastError);
+                return;
             }
+
+            voice.Frequency = freq;
+            SetFrequency(voice.Stream, freq, glide);
+            SetFrequency(voice.VibratoStream, freq, glide);
+        }
+
+        private static void SetFrequency(PushStream stream, float freq, bool glide)
+        {
+            bool set = glide
+                ? Bass.ChannelSlideAttribute(stream.Handle, ChannelAttribute.Frequency, freq, (int) (PITCH_GLIDE_SECONDS * 1000))
+                : Bass.ChannelSetAttribute(stream.Handle, ChannelAttribute.Frequency, freq);
+            if (!set)
+            {
+                YargLogger.LogFormatError("Failed to set replay frequency: {0}!", Bass.LastError);
+            }
+        }
+
+        private bool IsWhammyIdle => _whammyPercent <= WHAMMY_IDLE_PERCENT;
+
+        private double VibratoShare(Voice voice)
+        {
+            return voice.VibratoClip != null && IsWhammyIdle ? 1 : 0;
+        }
+
+        private void SetVoiceVolume(Voice voice, double volume)
+        {
+            double share = VibratoShare(voice);
+            voice.Stream.SetVolume(volume * (1 - share));
+            voice.VibratoStream.SetVolume(volume * share);
+        }
+
+        private void SlideVoiceVolume(Voice voice, double volume, double seconds)
+        {
+            double share = VibratoShare(voice);
+            SlideVolume(voice.Stream, volume * (1 - share), seconds);
+            SlideVolume(voice.VibratoStream, volume * share, seconds);
+        }
+
+        private static void SlideVolume(PushStream stream, double volume, double seconds)
+        {
+            if (!Bass.ChannelSlideAttribute(stream.Handle, ChannelAttribute.Volume, (float) volume, (int) (seconds * 1000)))
+            {
+                YargLogger.LogFormatError("Failed to fade replay voice: {0}!", Bass.LastError);
+            }
+        }
+
+        private static bool IsFading(Voice voice)
+        {
+            return Bass.ChannelIsSliding(voice.Stream.Handle, ChannelAttribute.Volume)
+                || Bass.ChannelIsSliding(voice.VibratoStream.Handle, ChannelAttribute.Volume);
+        }
+
+        private static float Loudness(Voice voice)
+        {
+            Bass.ChannelGetAttribute(voice.Stream.Handle, ChannelAttribute.Volume, out float volume);
+            Bass.ChannelGetAttribute(voice.VibratoStream.Handle, ChannelAttribute.Volume, out float vibratoVolume);
+            return volume + vibratoVolume;
         }
 
         private static double DriftCents(Voice voice)
@@ -581,13 +668,12 @@ namespace YARG.Audio.BASS
         private void FadeOut(Voice voice, double fadeSeconds)
         {
             voice.Clip = null;
+            voice.VibratoClip = null;
             voice.Key = 0;
             voice.IsSustain = false;
             voice.IsLooping = false;
-            if (!Bass.ChannelSlideAttribute(voice.Stream.Handle, ChannelAttribute.Volume, 0f, (int) (fadeSeconds * 1000)))
-            {
-                YargLogger.LogFormatError("Failed to fade replay voice: {0}!", Bass.LastError);
-            }
+            SlideVolume(voice.Stream, 0, fadeSeconds);
+            SlideVolume(voice.VibratoStream, 0, fadeSeconds);
         }
     }
 }

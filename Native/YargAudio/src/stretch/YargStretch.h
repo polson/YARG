@@ -256,6 +256,16 @@ struct YargStretch {
 		}
 		customFreqMap = nullptr;
 	}
+
+	void setFormantFactor(Sample multiplier, bool compensatePitch=false) {
+		formantMultiplier = multiplier;
+		invFormantMultiplier = 1/multiplier;
+		formantCompensation = compensatePitch;
+	}
+
+	void setFormantBase(Sample baseFreq=0) {
+		formantBaseFreq = baseFreq;
+	}
 	
 	// Reposition without interrupting output; hands over already-read input.
 	// Provide previous input ("pre-roll") to smoothly change the input location without interrupting the output.  This doesn't do any calculation, just copies intput to a buffer.

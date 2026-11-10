@@ -15,11 +15,14 @@ public:
     static constexpr int BLOCK_FRAMES = 256;
     static constexpr float MIN_SPEED = 0.05f;
     static constexpr float MAX_SPEED = 4.0f;
+    static constexpr float MIN_PITCH = 0.25f;
+    static constexpr float MAX_PITCH = 4.0f;
 
     StretchRender(int channels, int sampleRate, float speed);
     StretchRender(const StretchRender&) = delete;
     StretchRender& operator=(const StretchRender&) = delete;
 
+    void setPitch(float factor, float baseHz);
     void begin(const float* input, std::int64_t inputFrames, std::int64_t startFrame);
     bool read(const float* input, std::int64_t inputFrames, std::int64_t outputFrame,
         float* output, int outputFrames);
@@ -30,6 +33,7 @@ private:
     void render(const float* input, std::int64_t inputFrames, int outputFrames, float* output);
 
     const int channels_;
+    const int sampleRate_;
     const double speed_;
     YargStretch<float> stretch_{0};
     std::int64_t startFrame_ = 0;

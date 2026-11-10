@@ -251,6 +251,7 @@ namespace YARG.Audio.BASS
             var renderJobs = new List<BassStemSoloSeeds>();
             foreach (var job in requests)
             {
+                job.CanStretch = stretchAvailable;
                 foreach (var note in job.Notes)
                 {
                     AddNoteSeed(job, note, jobs);
@@ -796,12 +797,15 @@ namespace YARG.Audio.BASS
                 },
                 _ => { });
             Parallel.For(0, rungs.Count, options,
-                index =>
+                () => job.CanStretch ? BassStretchRender.Create(_format.Channels, _format.Frequency, speed: 1) : null,
+                (index, _, render) =>
                 {
                     var rung = rungs[index];
-                    var (curve, endFrame) = curves[sources.IndexOf(rung.Clip)];
+                    int endFrame = curves[sources.IndexOf(rung.Clip)].EndFrame;
                     wasCut[index] = endFrame < rung.Clip.FrameCount;
-                    var clip = rung.Clip.Retuned(curve, endFrame, NoteHz(rung.Note) * Math.Pow(2, tuningCents / 1200), _format);
+                    double targetHz = NoteHz(rung.Note) * Math.Pow(2, tuningCents / 1200);
+                    var clip = (render != null ? rung.Clip.StretchRetuned(render, endFrame, targetHz, _format) : null)
+                        ?? rung.Clip.Retuned(endFrame, targetHz, _format);
                     clip.Note = rung.Note;
                     wasLocked[index] = clip.LockLoopToPeriod(_format.Frequency / clip.PitchHz, _format);
                     if (!clip.HasLoop)
@@ -810,7 +814,9 @@ namespace YARG.Audio.BASS
                     }
 
                     ladder[index] = clip;
-                });
+                    return render;
+                },
+                render => render?.Dispose());
             job.Ladder.AddRange(ladder);
             int locked = Array.FindAll(wasLocked, value => value).Length;
             int cut = Array.FindAll(wasCut, value => value).Length;
@@ -819,6 +825,10 @@ namespace YARG.Audio.BASS
                 (int) Math.Round(tuningCents), cut, rungs.Count);
 
             MatchLevels(job.Ladder, soloLevel);
+            if (job.CanStretch)
+            {
+                BakeVibrato(job.Ladder, options);
+            }
 
             anchors.Sort((left, right) => left.SongSeconds.CompareTo(right.SongSeconds));
             foreach (var anchor in anchors)
@@ -860,6 +870,33 @@ namespace YARG.Audio.BASS
 
             YargLogger.LogFormatInfo("[SoloPitch] ladder MIDI notes {0}, {1} pitch-locked loops, {2} window moves",
                 string.Join(", ", rungs.ConvertAll(rung => rung.Note)), locked, job.Windows.Count - 1);
+        }
+
+        private void BakeVibrato(List<BassStemClip> ladder, ParallelOptions options)
+        {
+            var random = new Random();
+            var seeds = new int[ladder.Count];
+            for (int index = 0; index < seeds.Length; index++)
+            {
+                seeds[index] = random.Next();
+            }
+
+            var stopwatch = Stopwatch.StartNew();
+            Parallel.For(0, ladder.Count, options,
+                () => BassStretchRender.Create(_format.Channels, _format.Frequency, speed: 1),
+                (index, _, render) =>
+                {
+                    if (render != null)
+                    {
+                        ladder[index].Vibrato = BassSustainVibrato.Render(ladder[index], render, _format, seeds[index]);
+                    }
+
+                    return render;
+                },
+                render => render?.Dispose());
+            int baked = ladder.FindAll(clip => clip.Vibrato != null).Count;
+            YargLogger.LogFormatInfo<int, int, long>("[SoloVibrato] {0} of {1} ladder clips baked in {2} ms",
+                baked, ladder.Count, stopwatch.ElapsedMilliseconds);
         }
 
         private void MatchLevels(List<BassStemClip> ladder, double soloLevel)
