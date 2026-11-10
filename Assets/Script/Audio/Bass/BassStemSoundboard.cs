@@ -28,7 +28,7 @@ namespace YARG.Audio.BASS
         private const float  WHAMMY_IDLE_PERCENT                 = 0.05f;
         private const double VIBRATO_DELAY_SECONDS               = 0.6;
         private const double VIBRATO_RAMP_SECONDS                = 0.3;
-        private const double VIBRATO_RATE_HZ                     = 5.5;
+        private const double VIBRATO_RATE_HZ                     = 4.5;
         private const double VIBRATO_DEPTH_CENTS                 = 20;
 
         private sealed class Voice

@@ -21,6 +21,7 @@ namespace YARG.Audio.BASS
         public int     FrameCount;
         public bool    IsSustain;
         public int     AttackEndFrame;
+        public double  PitchHz;
         public int     LoopStartFrame;
         public int     LoopEndFrame;
         public int     LoopFadeFrames;
@@ -143,6 +144,7 @@ namespace YARG.Audio.BASS
                 FrameCount = frameCount,
                 IsSustain = IsSustain,
                 AttackEndFrame = (int) Math.Round(AttackEndFrame / ratio),
+                PitchHz = PitchHz * ratio,
             };
             if (HasLoop)
             {
@@ -153,6 +155,25 @@ namespace YARG.Audio.BASS
             }
 
             return shifted;
+        }
+
+        public bool LockLoopToPeriod(double periodFrames, BassStemFormat format)
+        {
+            double currentError = HasLoop
+                ? BassSustainLoop.MatchError(Samples, format.Channels, headFrame: LoopStartFrame - LoopFadeFrames,
+                    tailFrame: LoopEndFrame - LoopFadeFrames, frames: LoopFadeFrames, frameStep: 1)
+                : double.MaxValue;
+            bool found = BassSustainLoop.TryFindPitched(Samples, format, AttackEndFrame, periodFrames,
+                out int bodyStart, out int loopEnd, out int fadeFrames, out double error);
+            YargLogger.LogFormatInfo("[LoopDebug] pitch lock: current seam {0}, pitched seam {1}, clip {2} ms",
+                Math.Round(currentError, 4), Math.Round(error, 4), Math.Round(FrameCount * 1000.0 / format.Frequency));
+            if (!found || error >= currentError)
+            {
+                return false;
+            }
+
+            SetLoop(bodyStart: bodyStart, loopEnd: loopEnd, fadeFrames: fadeFrames, format: format);
+            return true;
         }
 
         public int NextLoopSegment(int pushedFrames, int remaining, out bool fromTail, out int sourceFrame)

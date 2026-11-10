@@ -18,6 +18,15 @@ namespace YARG.Audio.BASS
         private const double MAX_PERIOD_SECONDS = 1 / 40.0;
         private const double MIN_PERIODICITY = 0.8;
         private const double PERIOD_PEAK_RATIO = 0.9;
+        private const double PITCHED_SEARCH_SECONDS = 1.0;
+        private const double PITCHED_MIN_LOOP_SECONDS = 0.08;
+        private const double PITCHED_MAX_LOOP_SECONDS = 0.35;
+        private const double PITCHED_LOOP_STEP_SECONDS = 0.01;
+        private const double PITCHED_FADE_PERIODS = 4;
+        private const double PITCHED_MIN_FADE_SECONDS = 0.02;
+        private const double PITCHED_MAX_FADE_SECONDS = 0.04;
+        private const double PERIOD_ANALYSIS_SECONDS = 0.25;
+        private const double PERIOD_TOLERANCE = 0.03;
 
         internal static bool TryFind(float[] samples, BassStemFormat format, int firstFrame,
             int fadeFrames, out int startFrame, out int endFrame)
@@ -200,6 +209,98 @@ namespace YARG.Audio.BASS
             return bestError < MAX_MATCH_ERROR;
         }
 
+        internal static bool TryFindPitched(float[] samples, BassStemFormat format, int firstFrame,
+            double periodFrames, out int startFrame, out int endFrame, out int fadeFrames, out double error)
+        {
+            int channels = format.Channels;
+            int frameCount = samples.Length / channels;
+            startFrame = 0;
+            endFrame = 0;
+            error = double.MaxValue;
+            double period = RefinePeriod(samples, format, firstFrame, periodFrames);
+            fadeFrames = (int) Math.Round(Math.Clamp(PITCHED_FADE_PERIODS * period,
+                format.FramesFor(PITCHED_MIN_FADE_SECONDS), format.FramesFor(PITCHED_MAX_FADE_SECONDS)));
+            int lastTail = frameCount - fadeFrames;
+            int firstTail = Math.Max(firstFrame, lastTail - format.FramesFor(PITCHED_SEARCH_SECONDS));
+            int tailStep = Math.Max(1, (int) Math.Round(period));
+            int minCycles = (int) Math.Ceiling(format.FramesFor(PITCHED_MIN_LOOP_SECONDS) / period);
+            int maxCycles = (int) (format.FramesFor(PITCHED_MAX_LOOP_SECONDS) / period);
+            int cycleStep = Math.Max(1, (int) Math.Round(format.FramesFor(PITCHED_LOOP_STEP_SECONDS) / period));
+            int sampleStep = Math.Max(1, format.Frequency / 8000);
+            double bestScore = double.MaxValue;
+            for (int tail = lastTail; tail >= firstTail; tail -= tailStep)
+            {
+                for (int cycles = minCycles; cycles <= maxCycles; cycles += cycleStep)
+                {
+                    int head = (int) Math.Round(tail - cycles * period);
+                    if (head < firstFrame)
+                    {
+                        break;
+                    }
+
+                    double score = MatchError(samples, channels, headFrame: head, tailFrame: tail,
+                        frames: fadeFrames, frameStep: sampleStep) + 0.02 * (maxCycles - cycles) / maxCycles;
+                    if (score < bestScore)
+                    {
+                        bestScore = score;
+                        startFrame = head;
+                        endFrame = tail + fadeFrames;
+                    }
+                }
+            }
+
+            if (endFrame == 0)
+            {
+                return false;
+            }
+
+            int tailFrame = endFrame - fadeFrames;
+            int coarseStart = startFrame;
+            for (int head = Math.Max(firstFrame, coarseStart - 2); head <= coarseStart + 2; head++)
+            {
+                double headError = MatchError(samples, channels, headFrame: head, tailFrame: tailFrame,
+                    frames: fadeFrames, frameStep: 1);
+                if (headError < error)
+                {
+                    error = headError;
+                    startFrame = head;
+                }
+            }
+
+            return true;
+        }
+
+        private static double RefinePeriod(float[] samples, BassStemFormat format, int firstFrame, double periodFrames)
+        {
+            int channels = format.Channels;
+            int frameCount = samples.Length / channels;
+            int analysisStart = Math.Max(firstFrame, frameCount - format.FramesFor(PERIOD_ANALYSIS_SECONDS));
+            int minLag = Math.Max(2, (int) Math.Floor(periodFrames * (1 - PERIOD_TOLERANCE)));
+            int maxLag = Math.Min((int) Math.Ceiling(periodFrames * (1 + PERIOD_TOLERANCE)),
+                (frameCount - analysisStart) / 2);
+            if (maxLag <= minLag)
+            {
+                return periodFrames;
+            }
+
+            var correlations = new double[maxLag + 2];
+            int bestLag = minLag;
+            for (int lag = minLag - 1; lag <= maxLag + 1; lag++)
+            {
+                correlations[lag] = Correlation(samples, channels, analysisStart, frameCount - lag, lag);
+                if (lag >= minLag && lag <= maxLag && correlations[lag] > correlations[bestLag])
+                {
+                    bestLag = lag;
+                }
+            }
+
+            double left = correlations[bestLag - 1];
+            double center = correlations[bestLag];
+            double right = correlations[bestLag + 1];
+            double curvature = left - 2 * center + right;
+            return curvature < 0 ? bestLag + 0.5 * (left - right) / curvature : bestLag;
+        }
+
         private static double Correlation(float[] samples, int channels, int firstFrame, int lastFrame, int lag)
         {
             double product = 0;
@@ -220,7 +321,7 @@ namespace YARG.Audio.BASS
             return left > 0 && right > 0 ? product / Math.Sqrt(left * right) : 0;
         }
 
-        private static double MatchError(float[] samples, int channels, int headFrame, int tailFrame, int frames,
+        internal static double MatchError(float[] samples, int channels, int headFrame, int tailFrame, int frames,
             int frameStep)
         {
             double differenceEnergy = 0;
