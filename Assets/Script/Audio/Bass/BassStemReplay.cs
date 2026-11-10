@@ -22,6 +22,7 @@ namespace YARG.Audio.BASS
         private readonly PitchShiftParametersStruct _pitchParams;
         private readonly Func<double>               _normalizationGain;
         private readonly List<BassStemSoundboard>   _soundboards = new();
+        private readonly List<BassChordTrack>       _chordTracks = new();
         private readonly object                     _lock = new();
         private readonly BassStemFormat             _format;
         private          byte[]?                    _prerenderBytes;
@@ -50,6 +51,17 @@ namespace YARG.Audio.BASS
             return soundboard;
         }
 
+        public BassChordTrack CreateChordTrack()
+        {
+            var chords = new BassChordTrack(_format);
+            lock (_lock)
+            {
+                _chordTracks.Add(chords);
+            }
+
+            return chords;
+        }
+
         public void SetPrerenderSource(byte[] bytes, int[] indices)
         {
             _prerenderBytes = bytes;
@@ -66,8 +78,19 @@ namespace YARG.Audio.BASS
 
             var jobs = new List<(long StartFrame, int FrameCount, float[] Samples)>();
             var soundboards = new List<BassStemSoundboard>();
+            var chordTracks = new List<BassChordTrack>();
             lock (_lock)
             {
+                foreach (var chords in _chordTracks)
+                {
+                    int jobCount = jobs.Count;
+                    chords.PrepareJobs(jobs);
+                    if (jobs.Count > jobCount)
+                    {
+                        chordTracks.Add(chords);
+                    }
+                }
+
                 foreach (var soundboard in _soundboards)
                 {
                     int jobCount = jobs.Count;
@@ -96,6 +119,13 @@ namespace YARG.Audio.BASS
                     if (!Decode(bytes, indices, _format, jobs, token))
                     {
                         return;
+                    }
+
+                    foreach (var chords in chordTracks)
+                    {
+                        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+                        chords.Analyze(token);
+                        YargLogger.LogFormatInfo("[SoloChords] bass roots tracked in {0} ms", stopwatch.ElapsedMilliseconds);
                     }
 
                     foreach (var soundboard in soundboards)

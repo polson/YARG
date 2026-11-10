@@ -21,14 +21,24 @@ namespace YARG.Audio.BASS
         private          double[] _energy = Array.Empty<double>();
 
         public BassSoloPitch(int sampleRate)
+            : this(sampleRate, MIN_FREQUENCY, MAX_FREQUENCY, WINDOW_SECONDS, HOP_SECONDS)
+        {
+        }
+
+        public BassSoloPitch(int sampleRate, double minFrequency, double maxFrequency, double windowSeconds,
+            double hopSeconds)
         {
             _sampleRate = sampleRate;
-            _window = (int) Math.Round(WINDOW_SECONDS * sampleRate);
-            _hop = (int) Math.Round(HOP_SECONDS * sampleRate);
-            _minLag = (int) (sampleRate / MAX_FREQUENCY);
-            _maxLag = (int) Math.Ceiling(sampleRate / MIN_FREQUENCY);
+            _window = (int) Math.Round(windowSeconds * sampleRate);
+            _hop = (int) Math.Round(hopSeconds * sampleRate);
+            _minLag = (int) (sampleRate / maxFrequency);
+            _maxLag = (int) Math.Ceiling(sampleRate / minFrequency);
             _difference = new double[_maxLag + 2];
         }
+
+        public int HopFrames => _hop;
+
+        public int WindowFrames => _window;
 
         public void Detect(float[] mono, List<float> readings)
         {

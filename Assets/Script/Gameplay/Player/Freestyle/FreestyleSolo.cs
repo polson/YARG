@@ -15,29 +15,35 @@ namespace YARG.Gameplay.Player
     {
         private const double MUTE_LEAD_SECONDS = 0.1;
         private const double TAP_WINDOW_SECONDS = 0.25;
+        private const double STRUM_CLAIM_SECONDS = 0.25;
 
         private readonly BassStemSoundboard _soundboard;
         private readonly Func<GuitarEngine> _currentEngine;
         private readonly Action<bool> _setStemMuted;
         private readonly int _fretRowMask;
         private readonly int _maxFretIndex;
+        private readonly int _lowestSeedNote;
         private EngineTimer _hopoLeniency;
 
         private bool _strumPending;
         private bool _muted;
         private int _tapMask;
         private int _phraseMask;
+        private bool _phraseFretless;
+        private int _unpickedMask;
+        private double _unpickedTime;
         private int _lastHeldMask;
         private double _lastHeldTime;
 
         public FreestyleSolo(BassStemSoundboard soundboard, Func<GuitarEngine> currentEngine, Action<bool> setStemMuted,
-            int fretRowMask, int maxFretIndex, double hopoLeniency)
+            int fretRowMask, int maxFretIndex, double hopoLeniency, int lowestSeedNote)
         {
             _soundboard = soundboard;
             _currentEngine = currentEngine;
             _setStemMuted = setStemMuted;
             _fretRowMask = fretRowMask;
             _maxFretIndex = maxFretIndex;
+            _lowestSeedNote = lowestSeedNote;
             _hopoLeniency = new EngineTimer("Freestyle HOPO Leniency", hopoLeniency);
         }
 
@@ -53,7 +59,36 @@ namespace YARG.Gameplay.Player
 
         public void RequestSeeds(List<GuitarNote> notes, Func<double, double> playbackTime)
         {
-            _soundboard.RequestSeeds(_currentEngine().SoloPhrases, notes, playbackTime);
+            _soundboard.RequestSeeds(SoloPhrases(notes), notes, playbackTime, _lowestSeedNote);
+        }
+
+        private static List<SoloSection> SoloPhrases(List<GuitarNote> notes)
+        {
+            var phrases = new List<SoloSection>();
+            int start = -1;
+            for (int index = 0; index < notes.Count; index++)
+            {
+                var note = notes[index];
+                if (!note.IsSolo)
+                {
+                    start = -1;
+                    continue;
+                }
+
+                if (start < 0)
+                {
+                    start = index;
+                }
+
+                bool ends = note.IsSoloEnd || index + 1 == notes.Count || !notes[index + 1].IsSolo;
+                if (ends)
+                {
+                    phrases.Add(new SoloSection(notes[start].Tick, note.Tick, index - start + 1));
+                    start = -1;
+                }
+            }
+
+            return phrases;
         }
 
         public void ReleaseFrets(int fretMask)
@@ -84,6 +119,8 @@ namespace YARG.Gameplay.Player
             _strumPending = false;
             _tapMask = 0;
             _phraseMask = 0;
+            _phraseFretless = false;
+            _unpickedMask = 0;
             _lastHeldMask = 0;
             _lastHeldTime = 0;
         }
@@ -121,10 +158,18 @@ namespace YARG.Gameplay.Player
             if (strummed && !hammerOn && _hopoLeniency.IsActive)
             {
                 strummed = false;
+                _unpickedMask = 0;
                 _hopoLeniency.Reset();
             }
 
-            int sustainMask = heldMask | _phraseMask;
+            if (strummed && !hammerOn && playMask != 0 && playMask == _unpickedMask
+                && currentTime - _unpickedTime <= STRUM_CLAIM_SECONDS * songSpeed)
+            {
+                strummed = false;
+                _unpickedMask = 0;
+            }
+
+            int sustainMask = heldMask | (_phraseFretless ? _phraseMask : 0);
             if (strummed || hammerOn)
             {
                 sustainMask |= playMask == 0 ? GuitarEngine.OPEN_MASK : playMask;
@@ -138,7 +183,7 @@ namespace YARG.Gameplay.Player
             _soundboard.SetWhammyPitch(whammyAxis);
             if ((strummed || hammerOn) && soloAudio)
             {
-                StartPhrase(strummed, hammerOn, playMask, currentTime);
+                StartPhrase(strummed, hammerOn, playMask, heldMask == 0, currentTime);
             }
         }
 
@@ -181,7 +226,7 @@ namespace YARG.Gameplay.Player
             }
         }
 
-        private void StartPhrase(bool strummed, bool hammerOn, int playMask, double currentTime)
+        private void StartPhrase(bool strummed, bool hammerOn, int playMask, bool fretless, double currentTime)
         {
             if (strummed && playMask != 0)
             {
@@ -202,6 +247,9 @@ namespace YARG.Gameplay.Player
             }
 
             _phraseMask = playMask == 0 ? GuitarEngine.OPEN_MASK : playMask;
+            _phraseFretless = fretless;
+            _unpickedMask = strummed ? 0 : playMask;
+            _unpickedTime = currentTime;
             _lastHeldTime = currentTime;
             if (hammerOn && !strummed)
             {

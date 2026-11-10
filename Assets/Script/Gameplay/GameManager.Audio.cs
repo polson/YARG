@@ -247,6 +247,16 @@ namespace YARG.Gameplay
             return GetStemChannel(stem)?.CreateSoundboard(() => _stemStates[stem].Volume);
         }
 
+        internal BassChordTrack CreateChordTrack()
+        {
+            if (_backgroundStem == SongStem.Bass)
+            {
+                return null;
+            }
+
+            return GetStemChannel(SongStem.Bass)?.CreateChordTrack();
+        }
+
         private BassStemChannel GetStemChannel(SongStem stem)
         {
             return _mixer?[stem] as BassStemChannel;

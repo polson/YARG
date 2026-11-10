@@ -22,6 +22,7 @@ namespace YARG.Audio.BASS
         public bool    IsSustain;
         public int     AttackEndFrame;
         public double  PitchHz;
+        public int     Note = -1;
         public int     BendSemitones;
         public int     LoopStartFrame;
         public int     LoopEndFrame;
@@ -106,21 +107,28 @@ namespace YARG.Audio.BASS
             SetLoop(bodyStart: loopStart, loopEnd: FrameCount, fadeFrames: fadeFrames, format: format);
         }
 
-        public BassStemClip Shifted(int semitones, BassStemFormat format)
+        public BassStemClip Retuned(double[] sourceHz, int endFrame, double targetHz, BassStemFormat format)
         {
-            if (semitones == 0)
+            int channels = format.Channels;
+            double minStep = double.MaxValue;
+            for (int frame = 0; frame < endFrame; frame++)
             {
-                return this;
+                minStep = Math.Min(minStep, targetHz / sourceHz[frame]);
             }
 
-            double ratio = Math.Pow(2, semitones / 12.0);
-            int channels = format.Channels;
-            int frameCount = (int) ((FrameCount - 1) / ratio);
-            var samples = new float[frameCount * channels];
-            for (int frame = 0; frame < frameCount; frame++)
+            var samples = new float[((int) (endFrame / minStep) + 2) * channels];
+            var mapped = new int[endFrame + 1];
+            int nextSource = 0;
+            int frameCount = 0;
+            double position = 0;
+            while (position < endFrame - 2)
             {
-                double position = frame * ratio;
                 int index = (int) position;
+                while (nextSource <= index)
+                {
+                    mapped[nextSource++] = frameCount;
+                }
+
                 float fraction = (float) (position - index);
                 int before = Math.Max(index - 1, 0);
                 int after = Math.Min(index + 2, FrameCount - 1);
@@ -133,29 +141,41 @@ namespace YARG.Audio.BASS
                     float c1 = 0.5f * (y2 - y0);
                     float c2 = y0 - 2.5f * y1 + 2 * y2 - 0.5f * y3;
                     float c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
-                    samples[frame * channels + channel] = ((c3 * fraction + c2) * fraction + c1) * fraction + y1;
+                    samples[frameCount * channels + channel] = ((c3 * fraction + c2) * fraction + c1) * fraction + y1;
                 }
+
+                frameCount++;
+                position += targetHz / sourceHz[index];
             }
 
-            var shifted = new BassStemClip
+            while (nextSource <= endFrame)
+            {
+                mapped[nextSource++] = frameCount;
+            }
+
+            Array.Resize(ref samples, frameCount * channels);
+            var retuned = new BassStemClip
             {
                 SongSeconds = SongSeconds,
                 StartFrame = StartFrame,
                 Samples = samples,
                 FrameCount = frameCount,
                 IsSustain = IsSustain,
-                AttackEndFrame = (int) Math.Round(AttackEndFrame / ratio),
-                PitchHz = PitchHz * ratio,
+                AttackEndFrame = mapped[Math.Min(AttackEndFrame, endFrame)],
+                PitchHz = targetHz,
             };
-            if (HasLoop)
+            if (HasLoop && LoopEndFrame <= endFrame)
             {
-                int loopEnd = Math.Min((int) Math.Round(LoopEndFrame / ratio), frameCount);
-                int fadeFrames = (int) Math.Round(LoopFadeFrames / ratio);
-                int bodyStart = (int) Math.Round((LoopStartFrame - LoopFadeFrames) / ratio);
-                shifted.SetLoop(bodyStart: bodyStart, loopEnd: loopEnd, fadeFrames: fadeFrames, format: format);
+                int bodyStart = mapped[LoopStartFrame - LoopFadeFrames];
+                int fadeFrames = mapped[LoopStartFrame] - bodyStart;
+                int loopEnd = Math.Min(mapped[LoopEndFrame], frameCount);
+                if (fadeFrames > 0 && loopEnd - bodyStart > fadeFrames * 2)
+                {
+                    retuned.SetLoop(bodyStart: bodyStart, loopEnd: loopEnd, fadeFrames: fadeFrames, format: format);
+                }
             }
 
-            return shifted;
+            return retuned;
         }
 
         public bool LockLoopToPeriod(double periodFrames, BassStemFormat format)

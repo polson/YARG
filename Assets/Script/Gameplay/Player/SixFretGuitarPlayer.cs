@@ -81,6 +81,17 @@ namespace YARG.Gameplay.Player
             return instrumentDifficulty;
         }
 
+        protected override InstrumentDifficulty<GuitarNote> GetExpertTrack()
+        {
+            var instrument = Player.Profile.CurrentInstrument;
+            bool hasExpert = instrument.IsSixFret()
+                ? Chart.TryGetSixFretDifficulty(instrument, Difficulty.Expert, out _)
+                : Chart.TryGetFiveFretDifficulty(instrument, Difficulty.Expert, out _);
+            return hasExpert
+                ? Chart.GetSixFretPlayableDifficulty(instrument, Difficulty.Expert, Player.Profile.LeftyFlip)
+                : null;
+        }
+
         // --- CreateEngine() hooks (replaces full method duplication) ---
         private bool _chartIsFiveFretOnSixFret = false;
 

@@ -32,6 +32,7 @@ namespace YARG.Gameplay.Player
         private const double DEDICATED_OPEN_FLASH_HOLD_DURATION = 0.05;
 
         private const int SHIFT_INDICATOR_MEASURES_BEFORE = 5;
+        private const int LOWEST_LEAD_NOTE = 48;
 
         public bool UsingOpenLane { get; private set; }
 
@@ -258,10 +259,32 @@ namespace YARG.Gameplay.Player
                 return;
             }
 
+            soundboard.SetChordTrack(_stem == SongStem.Bass ? null : GameManager.CreateChordTrack());
             _freestyle = new FreestyleSolo(soundboard, () => Engine, SetStemMuteState,
                 fretRowMask: AllFretRows, maxFretIndex: FretRowCount - 1,
-                hopoLeniency: EngineParams.HopoLeniency);
-            _freestyle.RequestSeeds(NoteTrack.Notes, GameManager.GetAudioPlaybackTime);
+                hopoLeniency: EngineParams.HopoLeniency,
+                lowestSeedNote: _stem == SongStem.Bass ? 0 : LOWEST_LEAD_NOTE);
+            _freestyle.RequestSeeds(SeedNotes(), GameManager.GetAudioPlaybackTime);
+        }
+
+        private List<GuitarNote> SeedNotes()
+        {
+            var notes = NoteTrack.Notes;
+            var expert = GetExpertTrack();
+            if (notes.Count == 0 || expert == null)
+            {
+                return notes;
+            }
+
+            uint firstTick = notes[0].Tick;
+            uint lastTick = notes[^1].Tick;
+            return expert.Notes.FindAll(note => note.Tick >= firstTick && note.Tick <= lastTick);
+        }
+
+        protected virtual InstrumentDifficulty<GuitarNote> GetExpertTrack()
+        {
+            var track = Chart.GetFiveFretTrack(Player.Profile.CurrentInstrument);
+            return track.TryGetDifficulty(Difficulty.Expert, out var expert) ? expert : null;
         }
 
         protected virtual void InitializeIndicatorStripes()
@@ -284,7 +307,7 @@ namespace YARG.Gameplay.Player
         protected override void ResetDifficulty(double time)
         {
             Engine.ReplaceChart(NoteTrack);
-            _freestyle?.RequestSeeds(NoteTrack.Notes, GameManager.GetAudioPlaybackTime);
+            _freestyle?.RequestSeeds(SeedNotes(), GameManager.GetAudioPlaybackTime);
             _freestyle?.Reset();
 
             if (Player.Profile.RangeEnabled)

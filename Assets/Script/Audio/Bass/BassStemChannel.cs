@@ -60,6 +60,11 @@ namespace YARG.Audio.BASS
             return _replay?.CreateSoundboard(stemVolume);
         }
 
+        internal BassChordTrack CreateChordTrack()
+        {
+            return _replay?.CreateChordTrack();
+        }
+
         internal void SetPrerenderSource(byte[] bytes, int[] indices)
         {
             _replay?.SetPrerenderSource(bytes, indices);

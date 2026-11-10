@@ -19,7 +19,7 @@ namespace YARG.Audio.BASS
         private const double STRETCH_REGION_PREROLL_SECONDS = 0.1;
         private const double STRETCH_MIN_BODY_SECONDS       = 0.02;
         private const double STRETCH_FADE_SECONDS           = 0.01;
-        private const double PITCH_MIN_BODY_SECONDS         = 0.15;
+        private const double PITCH_MIN_BODY_SECONDS         = 0.1;
         private const double PITCH_MAX_MEASURE_SECONDS      = 0.4;
         private const double LEVEL_SECONDS                  = 0.3;
         private const double MIN_LEVEL_GAIN                 = 0.5;
@@ -30,9 +30,18 @@ namespace YARG.Audio.BASS
         private const float  PITCH_MAX_SPREAD_CENTS         = 25f;
         private const int    MAX_SHIFT_SEMITONES            = 3;
         private const int    MAX_LADDER_STEP_SEMITONES      = 3;
+        private const double DEPARTURE_CENTS                = 250;
+        private const double MAX_OCTAVE_ERROR_CENTS         = 1800;
+        private const int    DEPARTURE_READINGS             = 3;
+        private const int    CURVE_SMOOTHING_READINGS       = 5;
+        private const int    ANCHOR_NEIGHBOURS              = 2;
+        private const int    ANCHOR_OUTLIER_SEMITONES       = 10;
+        private const double MIN_WINDOW_SECONDS             = 0.3;
         private const double BEND_CHECK_SECONDS             = 0.15;
         private const float  BEND_MIN_CENTS                 = 30f;
         private const float  BEND_MAX_CENTS                 = 400f;
+
+        private const double SCALE_MIN_SHARE                = 0.08;
 
         private static readonly int[] PENTATONIC = { 0, 2, 4, 7, 9 };
 
@@ -44,6 +53,7 @@ namespace YARG.Audio.BASS
         private          List<BassStemSoloSeeds> _pending   = new();
         private          List<BassStemSoloSeeds> _published = new();
         private          BassStemSoloSeeds?      _selected;
+        private          BassChordTrack?         _chords;
         private          double                  _requestedSoloTime;
 
         public BassStemSeedLibrary(BassStemFormat format)
@@ -51,7 +61,8 @@ namespace YARG.Audio.BASS
             _format = format;
         }
 
-        public void Request(IReadOnlyList<SoloSection> phrases, List<GuitarNote> notes, Func<double, double> playbackTime)
+        public void Request(IReadOnlyList<SoloSection> phrases, List<GuitarNote> notes, Func<double, double> playbackTime,
+            int lowestNote)
         {
             var requests = new List<BassStemSoloSeeds>(phrases.Count);
             foreach (var phrase in phrases)
@@ -73,12 +84,32 @@ namespace YARG.Audio.BASS
                     continue;
                 }
 
-                requests.Add(new BassStemSoloSeeds(seedNotes[0].SongSeconds, seedNotes[^1].SongSeconds, seedNotes));
+                requests.Add(new BassStemSoloSeeds(seedNotes[0].SongSeconds, seedNotes[^1].SongSeconds, seedNotes, lowestNote));
             }
 
+            BassChordTrack? chords;
             lock (_lock)
             {
                 _requests = requests;
+                chords = _chords;
+            }
+
+            chords?.Request(requests.ConvertAll(request => (request.StartTime, request.EndTime)), playbackTime);
+        }
+
+        public void SetChordTrack(BassChordTrack? chords)
+        {
+            lock (_lock)
+            {
+                _chords = chords;
+            }
+        }
+
+        public int ResolveSemitones(BassStemClip clip)
+        {
+            lock (_lock)
+            {
+                return _selected?.ResolveSemitones(clip) ?? 0;
             }
         }
 
@@ -88,7 +119,10 @@ namespace YARG.Audio.BASS
             {
                 _requestedSoloTime = soloTime;
                 _selected = Find(soloTime);
-                _selected?.Select(songTime);
+                if (_selected != null)
+                {
+                    _selected.Select(songTime, _chords);
+                }
             }
         }
 
@@ -112,6 +146,33 @@ namespace YARG.Audio.BASS
             }
         }
 
+        public bool HasClip(int key)
+        {
+            lock (_lock)
+            {
+                var selected = _selected;
+                if (selected == null)
+                {
+                    return false;
+                }
+
+                if (key == GuitarEngine.OPEN_MASK)
+                {
+                    return selected.TryGetAnyClip(out _);
+                }
+
+                for (int fret = 1; fret <= key; fret <<= 1)
+                {
+                    if ((key & fret) != 0 && selected.TryGetClip(fret, out _))
+                    {
+                        return true;
+                    }
+                }
+
+                return selected.TryGetClip(key, out _) || selected.TryGetAnyClip(out _);
+            }
+        }
+
         public bool TryGetClip(int key, out BassStemClip clip)
         {
             lock (_lock)
@@ -128,7 +189,7 @@ namespace YARG.Audio.BASS
                     return TryGetRandomFretClip(selected, out clip) || selected.TryGetAnyClip(out clip);
                 }
 
-                if (selected.TryGetClip(key, out clip))
+                if (selected.TryTakeClip(key, out clip))
                 {
                     return true;
                 }
@@ -268,13 +329,14 @@ namespace YARG.Audio.BASS
 
         private bool Prepare(BassStemSoloSeeds job, CancellationToken token)
         {
-            var clips = new List<(BassStemClip Clip, bool SingleNote)>();
+            var clips = new List<(BassStemClip Clip, bool SingleNote, int Fret)>();
             foreach (var pair in job.ByKey)
             {
                 bool singleNote = (pair.Key & (pair.Key - 1)) == 0;
+                int fret = singleNote ? ChartFret(pair.Key) : -1;
                 foreach (var clip in pair.Value)
                 {
-                    clips.Add((clip, singleNote));
+                    clips.Add((clip, singleNote, fret));
                 }
             }
 
@@ -294,7 +356,7 @@ namespace YARG.Audio.BASS
                         return local;
                     }
 
-                    var (clip, singleNote) = clips[index];
+                    var (clip, singleNote, _) = clips[index];
                     clip.TrimToCleanEnd(_format);
                     clip.AttackEndFrame = BassSustainStretch.FindAttackEnd(clip.Samples, _format);
                     levels[index] = Level(clip);
@@ -312,20 +374,20 @@ namespace YARG.Audio.BASS
             }
 
             var clean = new List<(BassStemClip Clip, int Note, float Score, bool Bent)>();
-            var anchors = new List<(double SongSeconds, int Note)>();
-            var pitchClassSeconds = new double[12];
+            var anchors = new List<(double SongSeconds, int Note, int Fret)>();
+            var measured = new List<(int Note, double Seconds)>();
             for (int index = 0; index < clips.Count; index++)
             {
-                if (pitches[index] is not { } pitch)
+                if (pitches[index] is not { } pitch || pitch.Note < job.LowestNote)
                 {
                     continue;
                 }
 
                 var clip = clips[index].Clip;
-                pitchClassSeconds[PitchClass(pitch.Note)] += pitch.Voiced * pitch.Seconds;
+                measured.Add((pitch.Note, pitch.Voiced * pitch.Seconds));
                 if (pitch.Voiced >= ANCHOR_MIN_VOICED)
                 {
-                    anchors.Add((clip.SongSeconds, pitch.Note));
+                    anchors.Add((clip.SongSeconds, pitch.Note, clips[index].Fret));
                 }
 
                 if (pitch.Seconds >= PITCH_MIN_BODY_SECONDS && pitch.Voiced >= PITCH_MIN_VOICED
@@ -338,13 +400,18 @@ namespace YARG.Audio.BASS
                 }
             }
 
-            int root = PentatonicRoot(pitchClassSeconds);
+            var pentatonic = PentatonicScale(PentatonicRoot(PitchClassSeconds(measured, int.MinValue, int.MaxValue)));
+            var register = PlanLadder(clean, pentatonic);
+            int low = register != null ? register[0].Note - MAX_SHIFT_SEMITONES : int.MinValue;
+            int high = register != null ? register[^1].Note + MAX_SHIFT_SEMITONES : int.MaxValue;
+            anchors.RemoveAll(anchor => anchor.Note < low || anchor.Note > high);
+            var scale = SoloScale(PitchClassSeconds(measured, low, high));
             var heard = Array.FindAll(levels, level => level > 0);
             Array.Sort(heard);
             double soloLevel = heard.Length > 0 ? heard[heard.Length / 2] : 0;
-            var rungs = PlanLadder(clean, root);
+            var rungs = PlanLadder(clean, scale);
             var played = new List<BassStemClip>();
-            foreach (var (clip, _) in clips)
+            foreach (var (clip, _, _) in clips)
             {
                 if (rungs == null || rungs.Exists(rung => rung.Clip == clip))
                 {
@@ -384,7 +451,7 @@ namespace YARG.Audio.BASS
 
             if (rungs != null)
             {
-                BuildLadder(job, rungs, anchors, root, soloLevel);
+                BuildLadder(job, rungs, anchors, scale, soloLevel);
             }
 
             return true;
@@ -418,21 +485,67 @@ namespace YARG.Audio.BASS
 
             voiced.Sort();
             float median = voiced[voiced.Count / 2];
+            int heldReadings = HeldReadings(readings, median);
             int agreeing = 0;
             double spread = 0;
-            foreach (float pitch in voiced)
+            for (int index = 0; index < heldReadings; index++)
             {
-                double cents = Math.Abs(OctaveFolded(1200 * Math.Log(pitch / median, 2)));
-                if (cents <= PITCH_AGREE_CENTS)
+                float pitch = readings[index];
+                if (pitch <= 0f)
+                {
+                    continue;
+                }
+
+                double rawCents = 1200 * Math.Log(pitch / median, 2);
+                double cents = Math.Abs(OctaveFolded(rawCents));
+                if (cents <= PITCH_AGREE_CENTS && Math.Abs(rawCents) <= MAX_OCTAVE_ERROR_CENTS)
                 {
                     agreeing++;
                     spread += cents;
                 }
             }
 
+            if (agreeing == 0)
+            {
+                return null;
+            }
+
+            int heldFrames = heldReadings < readings.Count ? heldReadings * detector.HopFrames : bodyFrames;
             int note = (int) Math.Round(69 + 12 * Math.Log(median / 440.0, 2));
-            return (note, median, (float) agreeing / readings.Count, spread / agreeing, (double) bodyFrames / _format.Frequency,
+            return (note, median, (float) agreeing / heldReadings, spread / agreeing, (double) heldFrames / _format.Frequency,
                 StartsWithBend(readings, median, (double) mono.Length / _format.Frequency));
+        }
+
+        private static int HeldReadings(List<float> readings, float hz)
+        {
+            int departureRun = 0;
+            for (int index = 0; index < readings.Count; index++)
+            {
+                if (Holds(readings[index], hz))
+                {
+                    departureRun = 0;
+                    continue;
+                }
+
+                departureRun++;
+                if (departureRun >= DEPARTURE_READINGS)
+                {
+                    return index - departureRun + 1;
+                }
+            }
+
+            return readings.Count;
+        }
+
+        private static bool Holds(float reading, double hz)
+        {
+            if (reading <= 0f)
+            {
+                return false;
+            }
+
+            double rawCents = 1200 * Math.Log(reading / hz, 2);
+            return Math.Abs(OctaveFolded(rawCents)) <= DEPARTURE_CENTS && Math.Abs(rawCents) <= MAX_OCTAVE_ERROR_CENTS;
         }
 
         private static double OctaveFolded(double cents)
@@ -460,6 +573,51 @@ namespace YARG.Audio.BASS
             return false;
         }
 
+        private static double[] PitchClassSeconds(List<(int Note, double Seconds)> measured, int low, int high)
+        {
+            var pitchClassSeconds = new double[12];
+            foreach (var (note, seconds) in measured)
+            {
+                if (note >= low && note <= high)
+                {
+                    pitchClassSeconds[PitchClass(note)] += seconds;
+                }
+            }
+
+            return pitchClassSeconds;
+        }
+
+        private static bool[] PentatonicScale(int root)
+        {
+            var scale = new bool[12];
+            foreach (int step in PENTATONIC)
+            {
+                scale[(root + step) % 12] = true;
+            }
+
+            return scale;
+        }
+
+        private static bool[] SoloScale(double[] pitchClassSeconds)
+        {
+            var scale = PentatonicScale(PentatonicRoot(pitchClassSeconds));
+            double total = 0;
+            foreach (double seconds in pitchClassSeconds)
+            {
+                total += seconds;
+            }
+
+            for (int pitchClass = 0; pitchClass < 12; pitchClass++)
+            {
+                if (total > 0 && pitchClassSeconds[pitchClass] / total >= SCALE_MIN_SHARE)
+                {
+                    scale[pitchClass] = true;
+                }
+            }
+
+            return scale;
+        }
+
         private static int PentatonicRoot(double[] pitchClassSeconds)
         {
             int bestRoot = 0;
@@ -483,7 +641,7 @@ namespace YARG.Audio.BASS
         }
 
         private static List<(int Note, BassStemClip Clip, int Shift)>? PlanLadder(
-            List<(BassStemClip Clip, int Note, float Score, bool Bent)> clean, int root)
+            List<(BassStemClip Clip, int Note, float Score, bool Bent)> clean, bool[] scale)
         {
             if (clean.Count == 0)
             {
@@ -503,7 +661,7 @@ namespace YARG.Audio.BASS
             var bentRungs = new List<bool>();
             for (int note = lowest - MAX_SHIFT_SEMITONES; note <= highest + MAX_SHIFT_SEMITONES; note++)
             {
-                if (Array.IndexOf(PENTATONIC, PitchClass(note - root)) < 0)
+                if (!scale[PitchClass(note)])
                 {
                     continue;
                 }
@@ -565,10 +723,108 @@ namespace YARG.Audio.BASS
             return rungs;
         }
 
-        private static int NextScaleNote(int note, int root)
+        private double[] PitchCurve(BassStemClip clip, BassSoloPitch detector, List<float> readings, out int endFrame)
+        {
+            int channels = _format.Channels;
+            var mono = new float[clip.FrameCount];
+            for (int frame = 0; frame < mono.Length; frame++)
+            {
+                float sum = 0;
+                for (int channel = 0; channel < channels; channel++)
+                {
+                    sum += clip.Samples[frame * channels + channel];
+                }
+
+                mono[frame] = sum / channels;
+            }
+
+            detector.Detect(mono, readings);
+            var points = new List<(int Frame, double Cents)>();
+            int departureRun = 0;
+            int minCutFrame = clip.AttackEndFrame + _format.FramesFor(PITCH_MIN_BODY_SECONDS);
+            endFrame = clip.FrameCount;
+            for (int index = 0; index < readings.Count; index++)
+            {
+                int center = index * detector.HopFrames + detector.WindowFrames / 2;
+                if (Holds(readings[index], clip.PitchHz))
+                {
+                    departureRun = 0;
+                    points.Add((center, OctaveFolded(1200 * Math.Log(readings[index] / clip.PitchHz, 2))));
+                    continue;
+                }
+
+                departureRun++;
+                int runStart = (index - departureRun + 1) * detector.HopFrames;
+                if (departureRun >= DEPARTURE_READINGS && runStart >= minCutFrame)
+                {
+                    endFrame = runStart;
+                    break;
+                }
+            }
+
+            int end = endFrame;
+            points.RemoveAll(point => point.Frame >= end);
+            var smoothed = new double[points.Count];
+            var neighbours = new List<double>(CURVE_SMOOTHING_READINGS);
+            for (int index = 0; index < points.Count; index++)
+            {
+                neighbours.Clear();
+                int first = Math.Max(0, index - CURVE_SMOOTHING_READINGS / 2);
+                int last = Math.Min(points.Count - 1, index + CURVE_SMOOTHING_READINGS / 2);
+                for (int neighbour = first; neighbour <= last; neighbour++)
+                {
+                    neighbours.Add(points[neighbour].Cents);
+                }
+
+                neighbours.Sort();
+                smoothed[index] = neighbours[neighbours.Count / 2];
+            }
+
+            var curve = new double[endFrame];
+            int point = 0;
+            for (int frame = 0; frame < endFrame; frame++)
+            {
+                while (point < points.Count && points[point].Frame <= frame)
+                {
+                    point++;
+                }
+
+                double cents;
+                if (points.Count == 0)
+                {
+                    cents = 0;
+                }
+                else if (point == 0)
+                {
+                    cents = smoothed[0];
+                }
+                else if (point == points.Count)
+                {
+                    cents = smoothed[^1];
+                }
+                else
+                {
+                    var (fromFrame, _) = points[point - 1];
+                    var (toFrame, _) = points[point];
+                    double blend = (double) (frame - fromFrame) / (toFrame - fromFrame);
+                    cents = smoothed[point - 1] + (smoothed[point] - smoothed[point - 1]) * blend;
+                }
+
+                curve[frame] = clip.PitchHz * Math.Pow(2, cents / 1200);
+            }
+
+            return curve;
+        }
+
+        private static double NoteHz(int note)
+        {
+            return 440 * Math.Pow(2, (note - 69) / 12.0);
+        }
+
+        private static int NextScaleNote(int note, bool[] scale)
         {
             int next = note + 1;
-            while (Array.IndexOf(PENTATONIC, PitchClass(next - root)) < 0)
+            while (!scale[PitchClass(next)])
             {
                 next++;
             }
@@ -603,27 +859,77 @@ namespace YARG.Audio.BASS
         }
 
         private void BuildLadder(BassStemSoloSeeds job, List<(int Note, BassStemClip Clip, int Shift)> rungs,
-            List<(double SongSeconds, int Note)> anchors, int root, double soloLevel)
+            List<(double SongSeconds, int Note, int Fret)> anchors, bool[] scale, double soloLevel)
         {
-            int locked = 0;
-            foreach (var rung in rungs)
+            var tunings = rungs.ConvertAll(rung => 1200 * Math.Log(rung.Clip.PitchHz / NoteHz(rung.Note - rung.Shift), 2));
+            tunings.Sort();
+            double tuningCents = tunings[tunings.Count / 2];
+            var ladder = new BassStemClip[rungs.Count];
+            var wasCut = new bool[rungs.Count];
+            var wasLocked = new bool[rungs.Count];
+            var options = new ParallelOptions
             {
-                var clip = rung.Clip.Shifted(rung.Shift, _format);
-                clip.BendSemitones = NextScaleNote(rung.Note, root) - rung.Note;
-                if (clip.LockLoopToPeriod(_format.Frequency / clip.PitchHz, _format))
+                MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2),
+            };
+            Parallel.For(0, rungs.Count, options,
+                () => (Pitch: new BassSoloPitch(_format.Frequency), Readings: new List<float>()),
+                (index, _, local) =>
                 {
-                    locked++;
-                }
+                    var rung = rungs[index];
+                    var curve = PitchCurve(rung.Clip, local.Pitch, local.Readings, out int endFrame);
+                    wasCut[index] = endFrame < rung.Clip.FrameCount;
+                    var clip = rung.Clip.Retuned(curve, endFrame, NoteHz(rung.Note) * Math.Pow(2, tuningCents / 1200), _format);
+                    clip.Note = rung.Note;
+                    clip.BendSemitones = NextScaleNote(rung.Note, scale) - rung.Note;
+                    wasLocked[index] = clip.LockLoopToPeriod(_format.Frequency / clip.PitchHz, _format);
+                    if (!clip.HasLoop)
+                    {
+                        clip.PrepareLoop(_format);
+                    }
 
-                job.Ladder.Add(clip);
-            }
+                    ladder[index] = clip;
+                    return local;
+                },
+                _ => { });
+            job.Ladder.AddRange(ladder);
+            int locked = Array.FindAll(wasLocked, value => value).Length;
+            int cut = Array.FindAll(wasCut, value => value).Length;
+
+            YargLogger.LogFormatInfo<int, int, int>("[SoloPitch] tuning {0} cents, {1} of {2} ladder clips cut where the pitch left the note",
+                (int) Math.Round(tuningCents), cut, rungs.Count);
 
             MatchLevels(job.Ladder, soloLevel);
 
             anchors.Sort((left, right) => left.SongSeconds.CompareTo(right.SongSeconds));
-            int start = -1;
             foreach (var anchor in anchors)
             {
+                job.Anchors.Add((anchor.SongSeconds, anchor.Note));
+            }
+
+            int start = -1;
+            var neighbours = new List<int>(ANCHOR_NEIGHBOURS * 2 + 1);
+            for (int anchorIndex = 0; anchorIndex < anchors.Count; anchorIndex++)
+            {
+                var anchor = anchors[anchorIndex];
+                neighbours.Clear();
+                int first = Math.Max(0, anchorIndex - ANCHOR_NEIGHBOURS);
+                int last = Math.Min(anchors.Count - 1, anchorIndex + ANCHOR_NEIGHBOURS);
+                for (int neighbour = first; neighbour <= last; neighbour++)
+                {
+                    neighbours.Add(anchors[neighbour].Note);
+                }
+
+                neighbours.Sort();
+                if (Math.Abs(anchor.Note - neighbours[neighbours.Count / 2]) >= ANCHOR_OUTLIER_SEMITONES)
+                {
+                    continue;
+                }
+
+                if (start >= 0 && anchor.SongSeconds - job.Windows[^1].SongSeconds < MIN_WINDOW_SECONDS)
+                {
+                    continue;
+                }
+
                 int nearest = 0;
                 for (int index = 1; index < rungs.Count; index++)
                 {
@@ -633,18 +939,24 @@ namespace YARG.Audio.BASS
                     }
                 }
 
-                if (start >= 0 && nearest >= start && nearest < start + BassStemSoloSeeds.FRET_COUNT)
+                int fret = anchor.Fret >= 0 ? anchor.Fret : BassStemSoloSeeds.FRET_COUNT / 2;
+                int anchorStart = Math.Max(0, Math.Min(nearest - fret, rungs.Count - BassStemSoloSeeds.FRET_COUNT));
+                if (anchorStart == start)
                 {
                     continue;
                 }
 
-                start = Math.Max(0, Math.Min(nearest - BassStemSoloSeeds.FRET_COUNT / 2,
-                    rungs.Count - BassStemSoloSeeds.FRET_COUNT));
+                start = anchorStart;
                 job.Windows.Add((anchor.SongSeconds, start));
             }
 
-            YargLogger.LogFormatInfo("[SoloPitch] pentatonic root {0}, ladder MIDI notes {1}, {2} pitch-locked loops, {3} window moves",
-                root, string.Join(", ", rungs.ConvertAll(rung => rung.Note)), locked, job.Windows.Count - 1);
+            if (job.Windows.Count == 0)
+            {
+                job.Windows.Add((0, Math.Max(0, (rungs.Count - BassStemSoloSeeds.FRET_COUNT) / 2)));
+            }
+
+            YargLogger.LogFormatInfo("[SoloPitch] ladder MIDI notes {0}, {1} pitch-locked loops, {2} window moves",
+                string.Join(", ", rungs.ConvertAll(rung => rung.Note)), locked, job.Windows.Count - 1);
         }
 
         private void MatchLevels(List<BassStemClip> ladder, double soloLevel)
@@ -681,6 +993,19 @@ namespace YARG.Audio.BASS
             }
 
             return frames > 0 ? Math.Sqrt(energy / (frames * channels)) : 0;
+        }
+
+        private static int ChartFret(int key)
+        {
+            for (int fret = 0; fret < BassStemSoloSeeds.FRET_COUNT; fret++)
+            {
+                if (key == 1 << fret)
+                {
+                    return fret;
+                }
+            }
+
+            return -1;
         }
 
         private static int PitchClass(int note)
