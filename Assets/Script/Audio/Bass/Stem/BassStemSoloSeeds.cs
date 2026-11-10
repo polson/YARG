@@ -54,6 +54,9 @@ namespace YARG.Audio.BASS
                         return true;
                     }
                 }
+
+                clip = null!;
+                return false;
             }
 
             if (ByKey.TryGetValue(key, out var clips))
@@ -68,6 +71,12 @@ namespace YARG.Audio.BASS
 
         public bool TryGetAnyClip(out BassStemClip clip)
         {
+            if (Ladder.Count > 0)
+            {
+                clip = Ladder[WindowStart()];
+                return true;
+            }
+
             foreach (var clips in ByKey.Values)
             {
                 clip = ClipAt(clips);

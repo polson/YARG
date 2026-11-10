@@ -25,6 +25,11 @@ namespace YARG.Audio.BASS
         private const double LEGATO_TRANSITION_SECONDS           = 0.035;
         private const double LEGATO_FADE_IN_SECONDS              = 0.01;
         private const double LOOP_BUFFER_SECONDS                 = 0.25;
+        private const float  WHAMMY_IDLE_PERCENT                 = 0.05f;
+        private const double VIBRATO_DELAY_SECONDS               = 0.6;
+        private const double VIBRATO_RAMP_SECONDS                = 0.3;
+        private const double VIBRATO_RATE_HZ                     = 5.5;
+        private const double VIBRATO_DEPTH_CENTS                 = 20;
 
         private sealed class Voice
         {
@@ -36,6 +41,7 @@ namespace YARG.Audio.BASS
             public bool       IsSustain;
             public bool       IsLooping;
             public long       StartOrder;
+            public long       StartTimestamp;
 
             public Voice(PushStream stream, int pitchFx)
             {
@@ -68,7 +74,7 @@ namespace YARG.Audio.BASS
         private readonly BassStemSeedLibrary          _seeds;
         private readonly Voice[]                      _voices = new Voice[VOICE_COUNT];
         private          int                          _heldFrets;
-        private          float                        _whammyPitch = 1f;
+        private          float                        _whammyPercent;
         private          long                         _playCount;
         private          long                         _lastVoiceStart = Stopwatch.GetTimestamp();
         private          bool                         _disposed;
@@ -211,17 +217,14 @@ namespace YARG.Audio.BASS
 
         public void SetWhammyPitch(float percent)
         {
-            float shift = GlobalAudioHandler.UseWhammyFx
-                ? (float) Math.Pow(2, -GlobalAudioHandler.WhammyPitchShiftAmount * percent / 12.0)
-                : 1f;
             lock (_lock)
             {
-                if (_disposed || _whammyPitch == shift)
+                if (_disposed)
                 {
                     return;
                 }
 
-                _whammyPitch = shift;
+                _whammyPercent = percent;
                 foreach (var voice in _voices)
                 {
                     if (voice.IsLooping)
@@ -280,7 +283,7 @@ namespace YARG.Audio.BASS
                 }
 
                 _heldFrets = 0;
-                _whammyPitch = 1f;
+                _whammyPercent = 0;
                 _lastVoiceStart = Stopwatch.GetTimestamp();
             }
         }
@@ -345,6 +348,7 @@ namespace YARG.Audio.BASS
             voice.IsSustain = clip.IsSustain || voice.IsLooping;
             SetPitch(voice);
             voice.StartOrder = ++_playCount;
+            voice.StartTimestamp = Stopwatch.GetTimestamp();
             Feed(voice);
             return voice;
         }
@@ -472,12 +476,37 @@ namespace YARG.Audio.BASS
         private void SetPitch(Voice voice)
         {
             var pitch = _pitchParams;
-            pitch.fPitchShift = voice.IsLooping ? _whammyPitch : 1f;
+            pitch.fPitchShift = 1f;
+            if (voice.IsLooping)
+            {
+                double semitones = GlobalAudioHandler.UseWhammyFx
+                    ? -GlobalAudioHandler.WhammyPitchShiftAmount * _whammyPercent
+                    : 0;
+                if (_whammyPercent <= WHAMMY_IDLE_PERCENT)
+                {
+                    semitones += VibratoCents(voice) / 100;
+                }
+
+                pitch.fPitchShift = (float) Math.Pow(2, semitones / 12);
+            }
 
             if (!BassHelpers.FXSetParameters(voice.PitchFx, pitch))
             {
                 YargLogger.LogFormatError("Failed to set replay pitch: {0}!", Bass.LastError);
             }
+        }
+
+        private static double VibratoCents(Voice voice)
+        {
+            double held = (Stopwatch.GetTimestamp() - voice.StartTimestamp) / (double) Stopwatch.Frequency;
+            double vibrating = held - VIBRATO_DELAY_SECONDS;
+            if (vibrating <= 0)
+            {
+                return 0;
+            }
+
+            double depth = VIBRATO_DEPTH_CENTS * Math.Min(1, vibrating / VIBRATO_RAMP_SECONDS);
+            return depth * 0.5 * (1 - Math.Cos(2 * Math.PI * VIBRATO_RATE_HZ * vibrating));
         }
 
         private void FadeOut(Voice voice)

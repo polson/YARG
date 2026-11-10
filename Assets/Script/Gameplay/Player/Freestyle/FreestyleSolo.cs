@@ -130,6 +130,7 @@ namespace YARG.Gameplay.Player
                 sustainMask |= playMask == 0 ? GuitarEngine.OPEN_MASK : playMask;
             }
 
+            _soundboard.SelectSeedSet(soloTime, currentTime);
             bool soloAudio = _soundboard.HasSeedSet(soloTime);
             _muted = soloAudio;
             _setStemMuted(soloAudio);
@@ -137,7 +138,7 @@ namespace YARG.Gameplay.Player
             _soundboard.SetWhammyPitch(whammyAxis);
             if ((strummed || hammerOn) && soloAudio)
             {
-                StartPhrase(soloTime, strummed, hammerOn, playMask, currentTime);
+                StartPhrase(strummed, hammerOn, playMask, currentTime);
             }
         }
 
@@ -180,9 +181,8 @@ namespace YARG.Gameplay.Player
             }
         }
 
-        private void StartPhrase(double soloTime, bool strummed, bool hammerOn, int playMask, double currentTime)
+        private void StartPhrase(bool strummed, bool hammerOn, int playMask, double currentTime)
         {
-            _soundboard.SelectSeedSet(soloTime, currentTime);
             if (strummed && playMask != 0)
             {
                 _soundboard.PlayStrum(playMask);
