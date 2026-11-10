@@ -17,7 +17,6 @@ namespace YARG.Audio.BASS
     {
         private const int    VOICE_COUNT                         = 12;
         private const int    FLOAT_BYTES                         = sizeof(float);
-        private const int    PITCH_FFT_SIZE                      = 1024;
         private const double VOICE_FADE_SECONDS                  = 0.08;
         private const double FREESTYLE_RELEASE_SECONDS           = 0.12;
         private const double FREESTYLE_MIN_TRANSITION_SECONDS    = 0.015;
@@ -27,10 +26,10 @@ namespace YARG.Audio.BASS
         private const double LEGATO_FADE_IN_SECONDS              = 0.01;
         private const double LOOP_BUFFER_SECONDS                 = 0.25;
         private const float  WHAMMY_IDLE_PERCENT                 = 0.05f;
-        private const double VIBRATO_DELAY_SECONDS               = 0.2;
-        private const double VIBRATO_RAMP_SECONDS                = 0.2;
+        private const double VIBRATO_DELAY_SECONDS               = 0.1;
+        private const double VIBRATO_RAMP_SECONDS                = 0.15;
         private const double VIBRATO_RATE_HZ                     = 4.5;
-        private const double VIBRATO_DEPTH_CENTS                 = 100;
+        private const double VIBRATO_DEPTH_CENTS                 = 120;
         private const double DRIFT_DEPTH_CENTS                   = 6;
 
         private static readonly double[] DRIFT_RATES_HZ = { 0.37, 0.71, 1.13 };
@@ -90,7 +89,7 @@ namespace YARG.Audio.BASS
         {
             _lock = stemLock;
             _format = format;
-            _pitchParams = new PitchShiftParametersStruct(1, 0, PITCH_FFT_SIZE, pitchParams.OversampleFactor);
+            _pitchParams = pitchParams;
             _volume = volume;
             _seeds = new BassStemSeedLibrary(format);
 

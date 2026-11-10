@@ -205,6 +205,8 @@ namespace YARG.Gameplay.Player
             }
         }
 
+        protected override bool ShowsFreestyleLanes => false;
+
         protected override void RescaleLanesForBRE()
         {
             LaneElement.DefineLaneScale(Player.Profile.CurrentInstrument, 3, true);

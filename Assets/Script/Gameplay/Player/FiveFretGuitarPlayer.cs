@@ -331,7 +331,7 @@ namespace YARG.Gameplay.Player
         protected override void UpdateVisuals(double visualTime)
         {
             // Update coda lane emissions if necessary
-            if (Engine.IsCodaActive)
+            if (Engine.IsCodaActive || ShowsFreestyleLanes && Engine.IsFreestyleActive)
             {
                 UpdateBreLaneEmissions(visualTime);
             }
@@ -349,6 +349,11 @@ namespace YARG.Gameplay.Player
         {
             foreach (var (breLaneIndex, highwayOrderingIndex) in HighwayOrdering)
             {
+                if (BRELanes[highwayOrderingIndex] == null)
+                {
+                    continue;
+                }
+
                 var mostRecentTime = FretToMostRecentTime[breLaneIndex];
                 var normalizedTimeSinceLastHit = CodaSection.GetNormalizedTimeSinceLastHit(visualTime, mostRecentTime);
                 BRELanes[highwayOrderingIndex].SetEmissionColor(normalizedTimeSinceLastHit);
@@ -506,6 +511,47 @@ namespace YARG.Gameplay.Player
 
             StrikelineAnimator.SetSustaining(false);
             _fretArray.ResetAll();
+        }
+
+        protected virtual bool ShowsFreestyleLanes => EngineParams.FreestyleSolos;
+
+        protected override bool ShowsBRELanes(Phrase phrase)
+        {
+            return base.ShowsBRELanes(phrase) || ShowsFreestyleLanes && phrase.Type == PhraseType.Solo;
+        }
+
+        private void LightFreestyleLanes(int fretMask)
+        {
+            if (!ShowsFreestyleLanes || !Engine.IsFreestyleActive)
+            {
+                return;
+            }
+
+            if ((fretMask & ~GuitarEngine.OPEN_MASK) == 0)
+            {
+                fretMask = GuitarEngine.OPEN_MASK;
+            }
+
+            for (int bit = 0; bit < 5; bit++)
+            {
+                if ((fretMask & (1 << bit)) != 0)
+                {
+                    SetLaneLitTime(bit + (int) FiveFretGuitarFret.Green);
+                }
+            }
+
+            if ((fretMask & GuitarEngine.OPEN_MASK) != 0)
+            {
+                SetLaneLitTime((int) FiveFretGuitarFret.Open);
+            }
+        }
+
+        private void SetLaneLitTime(int fret)
+        {
+            if (FretToMostRecentTime.ContainsKey(fret))
+            {
+                FretToMostRecentTime[fret] = GameManager.VisualTime;
+            }
         }
 
         protected override void InitializeSpawnedNote(IPoolable poolable, GuitarNote note)
@@ -874,11 +920,13 @@ namespace YARG.Gameplay.Player
                 if (action is GuitarAction.StrumUp or GuitarAction.StrumDown)
                 {
                     _freestyle?.QueueStrum();
+                    LightFreestyleLanes(Engine.PlayerButtonMask);
                 }
 
                 if (fretMask != 0)
                 {
                     _freestyle?.QueueTap(fretMask);
+                    LightFreestyleLanes(fretMask);
                 }
             }
             else if (fretMask != 0)

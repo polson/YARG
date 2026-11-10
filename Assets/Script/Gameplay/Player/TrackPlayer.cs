@@ -464,11 +464,16 @@ namespace YARG.Gameplay.Player
         {
             foreach (var phrase in NoteTrack.Phrases)
             {
-                if (phrase.Type == PhraseType.BigRockEnding)
+                if (ShowsBRELanes(phrase))
                 {
                     _brePhrases.Add(phrase);
                 }
             }
+        }
+
+        protected virtual bool ShowsBRELanes(Phrase phrase)
+        {
+            return phrase.Type == PhraseType.BigRockEnding;
         }
 
         private void InitializeUnisonEvents()
@@ -832,6 +837,10 @@ namespace YARG.Gameplay.Player
 
                 var phrase = _brePhrases[_breIndex];
                 _breIndex++;
+                if (phrase.TimeEnd < time)
+                {
+                    continue;
+                }
 
                 StartBRE(phrase.Time, phrase.TimeEnd);
             }
