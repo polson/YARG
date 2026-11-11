@@ -1,3 +1,4 @@
+#nullable enable
 using System.Collections.Generic;
 
 namespace YARG.Audio.BASS
@@ -6,6 +7,9 @@ namespace YARG.Audio.BASS
     {
         public const int PITCH_CLASSES = 12;
         public const int FIFTH         = 7;
+
+        private const double MIN_COLOR_SHARE = 0.03;
+        private const int    MAX_COLOR_NOTES = 2;
 
         private static readonly int[] MINOR_PENTATONIC = new int[] { 0, 3, 5, 7, 10 };
         private static readonly int[] MAJOR_PENTATONIC = new int[] { 0, 2, 4, 7, 9 };
@@ -64,6 +68,55 @@ namespace YARG.Audio.BASS
             }
 
             return scale;
+        }
+
+        public static bool[]? ColorScale(IReadOnlyList<(double SongSeconds, int Note)> anchors, bool[] pentatonic)
+        {
+            var weights = new int[PITCH_CLASSES];
+            foreach (var (_, note) in anchors)
+            {
+                weights[PitchClass(note)]++;
+            }
+
+            var outside = new List<int>();
+            for (int pitchClass = 0; pitchClass < PITCH_CLASSES; pitchClass++)
+            {
+                if (!pentatonic[pitchClass] && weights[pitchClass] >= anchors.Count * MIN_COLOR_SHARE && weights[pitchClass] > 0)
+                {
+                    outside.Add(pitchClass);
+                }
+            }
+
+            outside.Sort((left, right) => weights[right].CompareTo(weights[left]));
+            var colors = new bool[PITCH_CLASSES];
+            int added = 0;
+            foreach (int pitchClass in outside)
+            {
+                if (added == MAX_COLOR_NOTES)
+                {
+                    break;
+                }
+
+                if (colors[PitchClass(pitchClass + 1)] || colors[PitchClass(pitchClass - 1)])
+                {
+                    continue;
+                }
+
+                colors[pitchClass] = true;
+                added++;
+            }
+
+            if (added == 0)
+            {
+                return null;
+            }
+
+            for (int pitchClass = 0; pitchClass < PITCH_CLASSES; pitchClass++)
+            {
+                colors[pitchClass] |= pentatonic[pitchClass];
+            }
+
+            return colors;
         }
     }
 }

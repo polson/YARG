@@ -11,6 +11,7 @@ namespace YARG.Audio.BASS
 
         private static readonly int[] FRET_KEYS = { 1, 2, 4, 8, 16 };
         private static readonly int[] ROOT_OFFSETS = { 0, -1, 1 };
+        private static readonly int[] COLOR_OFFSETS = { 0, -1, 1, -2, 2 };
 
         private const int    MAX_WHAMMY_BEND   = 4;
         private const int    DEFAULT_WHAMMY    = 2;
@@ -18,6 +19,7 @@ namespace YARG.Audio.BASS
         private const int    EDGE_SHIFT_RUNGS  = 3;
         private const double LOW_FRET_AVERAGE  = 1.5;
         private const double HIGH_FRET_AVERAGE = 2.5;
+        private const double COLOR_BOX_CHANCE  = 0.35;
 
         public readonly double                                          StartTime;
         public readonly double                                          EndTime;
@@ -40,6 +42,10 @@ namespace YARG.Audio.BASS
         private          int          _root = -1;
         private          bool[]?      _pentatonicScale;
         private          List<int>?   _scaleRungs;
+        private          List<int>?   _colorRungs;
+        private          bool[]?      _colorScale;
+        private          bool         _colorChecked;
+        private          bool         _colorBox;
         private          int          _boxStart = -1;
         private          int          _phraseFretTotal;
         private          int          _phraseFretCount;
@@ -197,10 +203,19 @@ namespace YARG.Audio.BASS
 
         private void UpdateFretRungs()
         {
-            var rungs = ScaleRungs();
+            var previous = BoxRungs();
+            int targetRung = _boxStart < 0
+                ? -1
+                : previous[Math.Clamp(_boxStart + PhraseShift(), 0, previous.Count - FRET_COUNT)];
+            _colorBox = ChooseColorBox();
+            var rungs = BoxRungs();
             int lastStart = rungs.Count - FRET_COUNT;
-            int target = _boxStart < 0 ? WindowStart(rungs) : _boxStart + PhraseShift();
+            int target = targetRung < 0 ? WindowStart(rungs) : FirstAtOrAbove(rungs, targetRung);
             _boxStart = RootAlignedStart(rungs, Math.Clamp(target, 0, lastStart), lastStart);
+            if (_colorBox)
+            {
+                _boxStart = ColorAlignedStart(rungs, _boxStart, lastStart);
+            }
             _phraseFretTotal = 0;
             _phraseFretCount = 0;
             _lastFret = -1;
@@ -245,7 +260,7 @@ namespace YARG.Audio.BASS
 
         private void ShiftBox(int rungCount)
         {
-            var rungs = ScaleRungs();
+            var rungs = BoxRungs();
             int start = Math.Clamp(_boxStart + rungCount, 0, rungs.Count - FRET_COUNT);
             if (start == _boxStart)
             {
@@ -306,6 +321,34 @@ namespace YARG.Audio.BASS
             return target;
         }
 
+        private int ColorAlignedStart(List<int> rungs, int start, int lastStart)
+        {
+            foreach (int offset in COLOR_OFFSETS)
+            {
+                int candidate = start + offset;
+                if (candidate >= 0 && candidate <= lastStart && HasColorNote(rungs, candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            return start;
+        }
+
+        private bool HasColorNote(List<int> rungs, int start)
+        {
+            var pentatonic = PentatonicScale();
+            for (int fret = 0; fret < FRET_COUNT; fret++)
+            {
+                if (!pentatonic[BassSoloHarmony.PitchClass(Ladder[rungs[start + fret]].Note)])
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private (int Note, int Fret) CurrentWindow()
         {
             if (Windows.Count == 0)
@@ -329,7 +372,86 @@ namespace YARG.Audio.BASS
 
         public bool IsPlayableRung(int index)
         {
-            return ScaleRungs().Contains(index);
+            return ScaleRungs().Contains(index) || ColorRungs()?.Contains(index) == true;
+        }
+
+        private List<int> BoxRungs()
+        {
+            return _colorBox ? ColorRungs() ?? ScaleRungs() : ScaleRungs();
+        }
+
+        private static int FirstAtOrAbove(List<int> rungs, int ladderIndex)
+        {
+            for (int index = 0; index < rungs.Count; index++)
+            {
+                if (rungs[index] >= ladderIndex)
+                {
+                    return index;
+                }
+            }
+
+            return rungs.Count - 1;
+        }
+
+        private bool ChooseColorBox()
+        {
+            var colorScale = ColorScale();
+            if (ColorRungs() == null || colorScale == null || _random.NextDouble() >= COLOR_BOX_CHANCE)
+            {
+                return false;
+            }
+
+            var pentatonic = PentatonicScale();
+            if (_root >= 0)
+            {
+                for (int pitchClass = 0; pitchClass < BassSoloHarmony.PITCH_CLASSES; pitchClass++)
+                {
+                    bool isColor = colorScale[pitchClass] && !pentatonic[pitchClass];
+                    if (isColor && BassSoloHarmony.PitchClass(pitchClass - _root) == 1)
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            YargLogger.LogFormatDebug("[SoloFret] {0:0.00}s switching to the solo's color box", _songSeconds);
+            return true;
+        }
+
+        private bool[]? ColorScale()
+        {
+            if (!_colorChecked)
+            {
+                _colorChecked = true;
+                _colorScale = BassSoloHarmony.ColorScale(Anchors, PentatonicScale());
+            }
+
+            return _colorScale;
+        }
+
+        private List<int>? ColorRungs()
+        {
+            if (_colorRungs != null)
+            {
+                return _colorRungs;
+            }
+
+            var colorScale = ColorScale();
+            if (colorScale == null)
+            {
+                return null;
+            }
+
+            var rungs = new List<int>(Ladder.Count);
+            CollectRungs(rungs, colorScale);
+            if (rungs.Count < FRET_COUNT)
+            {
+                _colorScale = null;
+                return null;
+            }
+
+            _colorRungs = rungs;
+            return rungs;
         }
 
         private List<int> ScaleRungs()
