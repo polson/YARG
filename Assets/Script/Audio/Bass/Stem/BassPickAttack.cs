@@ -6,6 +6,7 @@ namespace YARG.Audio.BASS
     internal static class BassPickAttack
     {
         internal const double LEAD_SECONDS = 0.05;
+        internal const double STRONG_RATIO = 2;
 
         private const double SEARCH_SECONDS     = 0.03;
         private const double DISTANCE_SECONDS   = 0.01;
@@ -16,6 +17,12 @@ namespace YARG.Audio.BASS
         private const double PICK_SECONDS       = 0.01;
         private const double BODY_START_SECONDS = 0.03;
         private const double BODY_END_SECONDS   = 0.08;
+        private const double WEAK_RATIO         = 1;
+        private const double TARGET_RATIO       = 1.5;
+        private const double BORROW_SECONDS     = 0.015;
+        private const double BORROW_FADE_RATIO  = 0.4;
+        private const double HIGH_PASS_HZ       = 2000;
+        private const double MAX_BORROW_GAIN    = 4;
 
         internal static int FindOnset(float[] samples, BassStemFormat format, int chartFrame)
         {
@@ -77,6 +84,65 @@ namespace YARG.Audio.BASS
             double pick = Flux(samples, channels, Math.Max(1, pickStart), pickFrames) / pickFrames;
             double body = Flux(samples, channels, bodyStart, bodyFrames) / bodyFrames;
             return body > 0 ? pick / body : 0;
+        }
+
+        internal static float[]? ExtractPick(BassStemClip donor, BassStemFormat format)
+        {
+            int channels = format.Channels;
+            int frames = format.FramesFor(PRE_ONSET_SECONDS + BORROW_SECONDS);
+            if (donor.PickStrength < TARGET_RATIO || donor.FrameCount < frames)
+            {
+                return null;
+            }
+
+            var pick = new float[frames * channels];
+            float smoothing = (float) Math.Exp(-2 * Math.PI * HIGH_PASS_HZ / format.Frequency);
+            int fadeFrames = (int) (frames * BORROW_FADE_RATIO);
+            for (int channel = 0; channel < channels; channel++)
+            {
+                float low = donor.Samples[channel];
+                for (int frame = 0; frame < frames; frame++)
+                {
+                    float sample = donor.Samples[frame * channels + channel];
+                    low = smoothing * low + (1 - smoothing) * sample;
+                    int fromEnd = frames - frame;
+                    float fade = fromEnd < fadeFrames ? (float) (0.5 - 0.5 * Math.Cos(Math.PI * fromEnd / fadeFrames)) : 1;
+                    pick[frame * channels + channel] = (sample - low) * fade;
+                }
+            }
+
+            return pick;
+        }
+
+        internal static bool Borrow(BassStemClip clip, float[] pick, BassStemFormat format)
+        {
+            int channels = format.Channels;
+            int pickStart = format.FramesFor(PRE_ONSET_SECONDS);
+            int pickFrames = format.FramesFor(PICK_SECONDS);
+            int bodyStart = format.FramesFor(BODY_START_SECONDS);
+            int bodyFrames = format.FramesFor(BODY_END_SECONDS) - bodyStart;
+            int borrowFrames = pick.Length / channels;
+            if (clip.PickStrength >= WEAK_RATIO || clip.FrameCount < Math.Max(bodyStart + bodyFrames, borrowFrames))
+            {
+                return false;
+            }
+
+            double pickRate = Flux(clip.Samples, channels, pickStart, pickFrames) / pickFrames;
+            double bodyRate = Flux(clip.Samples, channels, bodyStart, bodyFrames) / bodyFrames;
+            double donorRate = Flux(pick, channels, pickStart, pickFrames) / pickFrames;
+            double missing = TARGET_RATIO * bodyRate - pickRate;
+            if (missing <= 0 || donorRate <= 0)
+            {
+                return false;
+            }
+
+            float gain = (float) Math.Min(Math.Sqrt(missing / donorRate), MAX_BORROW_GAIN);
+            for (int index = 0; index < pick.Length; index++)
+            {
+                clip.Samples[index] += gain * pick[index];
+            }
+
+            return true;
         }
 
         private static double Flux(float[] samples, int channels, int firstFrame, int frames)

@@ -42,7 +42,7 @@ namespace YARG.Audio.BASS
         private const double BEND_CHECK_SECONDS             = 0.15;
         private const float  BEND_MIN_CENTS                 = 30f;
         private const float  BEND_MAX_CENTS                 = 400f;
-        private const double STRONG_PICK_RATIO              = 2;
+        private const double DONOR_PERCENTILE               = 0.9;
 
 
 
@@ -384,7 +384,8 @@ namespace YARG.Audio.BASS
                 return false;
             }
 
-            LogAttacks(clips.ConvertAll(entry => entry.Clip), onsetOffsets);
+            var seedClips = clips.ConvertAll(entry => entry.Clip);
+            LogAttacks(seedClips, onsetOffsets);
             var clean = new List<(BassStemClip Clip, int Note, float Score, bool Bent)>();
             var anchors = new List<(double SongSeconds, int Note, int Fret)>();
             for (int index = 0; index < clips.Count; index++)
@@ -405,12 +406,13 @@ namespace YARG.Audio.BASS
                 {
                     float score = (float) (pitch.Voiced * Math.Min(pitch.Seconds, 1.0)
                         / (1 + pitch.Spread / PITCH_MAX_SPREAD_CENTS)
-                        * (1 + Math.Min(clip.PickStrength / STRONG_PICK_RATIO, 1)));
+                        * (1 + Math.Min(clip.PickStrength / BassPickAttack.STRONG_RATIO, 1)));
                     clip.PitchHz = pitch.Hz;
                     clean.Add((clip, pitch.Note, score, false));
                 }
             }
 
+            BorrowPick(seedClips);
             int maxShift = job.CanStretch ? MAX_STRETCH_SHIFT_SEMITONES : MAX_SHIFT_SEMITONES;
             var rungs = PlanLadder(clean, maxShift, job.LowestNote);
             int low = rungs != null ? rungs[0].Note : int.MinValue;
@@ -935,6 +937,37 @@ namespace YARG.Audio.BASS
             int playableCount = Array.FindAll(playable, value => value).Length;
             YargLogger.LogFormatInfo<int, int, long>("[SoloSustain] {0} of {1} playable ladder clips baked in {2} ms",
                 baked, playableCount, stopwatch.ElapsedMilliseconds);
+        }
+
+        private void BorrowPick(List<BassStemClip> clips)
+        {
+            if (clips.Count == 0)
+            {
+                return;
+            }
+
+            var byStrength = new List<BassStemClip>(clips);
+            byStrength.Sort((left, right) => left.PickStrength.CompareTo(right.PickStrength));
+            var donor = byStrength[(int) ((byStrength.Count - 1) * DONOR_PERCENTILE)];
+            var pick = BassPickAttack.ExtractPick(donor, _format);
+            if (pick == null)
+            {
+                YargLogger.LogFormatInfo("[SoloAttack] no strong pick to borrow, best candidate strength {0}",
+                    Math.Round(donor.PickStrength, 2));
+                return;
+            }
+
+            int borrowed = 0;
+            foreach (var clip in clips)
+            {
+                if (clip != donor && BassPickAttack.Borrow(clip, pick, _format))
+                {
+                    borrowed++;
+                }
+            }
+
+            YargLogger.LogFormatInfo("[SoloAttack] borrowed a pick of strength {0} into {1} of {2} clips",
+                Math.Round(donor.PickStrength, 2), borrowed, clips.Count);
         }
 
         private static void LogAttacks(List<BassStemClip> clips, double[] onsetOffsets)
