@@ -116,6 +116,16 @@ namespace YARG.Audio.BASS
             int channels = format.Channels;
             int frameCount = bodyStartFrame + periodFrames + format.FramesFor(SEAM_FADE_SECONDS);
             var source = clip.Unrolled(frameCount + format.FramesFor(RENDER_MARGIN_SECONDS), channels);
+            if (BassPsola.Enabled && clip.PitchHz > 0)
+            {
+                var shifted = BassPsola.Shift(source, channels, frameCount, format.Frequency / clip.PitchHz,
+                    clip.AttackEndFrame, frame => Math.Pow(2, centsAt(frame) / 1200));
+                if (shifted != null)
+                {
+                    return (source, shifted);
+                }
+            }
+
             var samples = new float[frameCount * channels];
             var block = new float[BLOCK_FRAMES * channels];
             float baseHz = (float) Math.Max(clip.PitchHz, 0);

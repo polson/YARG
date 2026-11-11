@@ -778,6 +778,7 @@ namespace YARG.Audio.BASS
             var ladder = new BassStemClip[rungs.Count];
             var wasCut = new bool[rungs.Count];
             var wasLocked = new bool[rungs.Count];
+            var methods = new string[rungs.Count];
             var options = new ParallelOptions
             {
                 MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2),
@@ -809,8 +810,21 @@ namespace YARG.Audio.BASS
                     int endFrame = curves[sources.IndexOf(rung.Clip)].EndFrame;
                     wasCut[index] = endFrame < rung.Clip.FrameCount;
                     double targetHz = NoteHz(rung.Note) * Math.Pow(2, tuningCents / 1200);
-                    var clip = (render != null ? rung.Clip.StretchRetuned(render, endFrame, targetHz, _format) : null)
-                        ?? rung.Clip.Retuned(endFrame, targetHz, _format);
+                    var clip = BassPsola.Enabled ? rung.Clip.PsolaRetuned(endFrame, targetHz, _format) : null;
+                    methods[index] = "psola";
+                    if (clip == null && render != null)
+                    {
+                        clip = rung.Clip.StretchRetuned(render, endFrame, targetHz, _format);
+                        methods[index] = "vocoder";
+                    }
+
+                    if (clip == null)
+                    {
+                        clip = rung.Clip.Retuned(endFrame, targetHz, _format);
+                        methods[index] = "resample";
+                    }
+
+                    methods[index] = $"{rung.Note} {12 * Math.Log(targetHz / rung.Clip.PitchHz, 2):+0.0;-0.0} st {methods[index]}";
                     clip.Note = rung.Note;
                     wasLocked[index] = clip.LockLoopToPeriod(_format.Frequency / clip.PitchHz, _format);
                     if (!clip.HasLoop)
@@ -828,6 +842,7 @@ namespace YARG.Audio.BASS
 
             YargLogger.LogFormatInfo<int, int, int>("[SoloPitch] tuning {0} cents, {1} of {2} ladder clips cut where the pitch left the note",
                 (int) Math.Round(tuningCents), cut, rungs.Count);
+            YargLogger.LogFormatInfo("[SoloPitch] retunes: {0}", string.Join(", ", methods));
 
             MatchLevels(job.Ladder, soloLevel);
 

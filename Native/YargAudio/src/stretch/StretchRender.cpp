@@ -19,6 +19,7 @@ StretchRender::StretchRender(int channels, int sampleRate, float speed)
     const int window = std::max(4 * BLOCK_FRAMES, windowSteps * 2 * BLOCK_FRAMES);
     stretch_.configure(channels, static_cast<float>(sampleRate), window, window / INTERVAL_DIVISOR);
     stretch_.setTransientFrequency(std::clamp(TRANSIENT_MIN_HZ / sampleRate, 0.001f, 0.49f));
+    stretch_.setNoiseMorph(false);
     capacity_ = std::max(stretch_.seekLength(),
         static_cast<int>(std::ceil(MAX_SPEED * BLOCK_FRAMES)) + 2);
     inputBuffer_.resize(static_cast<std::size_t>(capacity_) * channels);

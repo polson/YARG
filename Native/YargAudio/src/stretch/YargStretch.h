@@ -115,6 +115,10 @@ struct YargStretch {
 		transientMinFreq_ = minimumFrequency;
 	}
 
+	void setNoiseMorph(bool enabled) {
+		noiseMorphEnabled_ = enabled;
+	}
+
 	int transientCount() const {
 		return transientCount_;
 	}
@@ -609,7 +613,7 @@ struct YargStretch {
 					if (noiseMorph.usesGrains()) {
 						Sample strength = std::clamp(NOISE_MORPH_STRENGTH *
 							(smoothTimeFactor_ - Sample(1)) / smoothTimeFactor_, Sample(0), Sample(1));
-						if (blockProcess.sourcePhase || blockProcess.mappedFrequencies || blockProcess.processFormants || transientSamples_ > 0) {
+						if (!noiseMorphEnabled_ || blockProcess.sourcePhase || blockProcess.mappedFrequencies || blockProcess.processFormants || transientSamples_ > 0) {
 							strength = 0;
 						}
 						noiseMorph.apply(stft, [&](int c, int b) { return bandsForChannel(c)[b].input; }, strength, transientMinFreq_, smoothTimeFactor_);
@@ -1627,6 +1631,7 @@ private:
 	Sample smoothEnergyState = 0;
 	Sample smoothTimeFactor_ = 1;
 	Sample sourcePhaseWeight_ = 1;
+	bool noiseMorphEnabled_ = true;
 	void trackTimeFactor(Sample measured) {
 		Sample difference = measured >= smoothTimeFactor_ ? measured - smoothTimeFactor_ : smoothTimeFactor_ - measured;
 		if (difference > smoothTimeFactor_*TIMEFACTOR_SNAP_RATIO) {

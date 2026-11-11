@@ -154,6 +154,21 @@ namespace YARG.Audio.BASS
             return WithRetunedSamples(samples, frameCount, mapped, endFrame, targetHz, format);
         }
 
+        public BassStemClip? PsolaRetuned(int endFrame, double targetHz, BassStemFormat format)
+        {
+            double factor = targetHz / PitchHz;
+            if (endFrame <= 0 || !BassPsola.CanShift(factor))
+            {
+                return null;
+            }
+
+            var samples = BassPsola.Shift(Samples, format.Channels, endFrame, format.Frequency / PitchHz,
+                AttackEndFrame, _ => factor);
+            return samples == null
+                ? null
+                : WithRetunedSamples(samples, endFrame, IdentityMap(endFrame), endFrame, targetHz, format);
+        }
+
         public BassStemClip? StretchRetuned(BassStretchRender render, int endFrame, double targetHz,
             BassStemFormat format)
         {
@@ -171,13 +186,18 @@ namespace YARG.Audio.BASS
                 return null;
             }
 
+            return WithRetunedSamples(samples, endFrame, IdentityMap(endFrame), endFrame, targetHz, format);
+        }
+
+        private static int[] IdentityMap(int endFrame)
+        {
             var mapped = new int[endFrame + 1];
             for (int frame = 0; frame <= endFrame; frame++)
             {
                 mapped[frame] = frame;
             }
 
-            return WithRetunedSamples(samples, endFrame, mapped, endFrame, targetHz, format);
+            return mapped;
         }
 
         private BassStemClip WithRetunedSamples(float[] samples, int frameCount, int[] mapped, int endFrame,

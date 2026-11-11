@@ -8,7 +8,7 @@ namespace YARG.Audio.BASS
 {
     internal static class BassSoloStretch
     {
-        internal const float SPEED = 0.25f;
+        internal const float SPEED = 0.5f;
 
         private const double PREROLL_SECONDS  = 0.05;
         private const double MAX_GAP_SECONDS  = 0.5;

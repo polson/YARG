@@ -13,8 +13,8 @@ namespace YARG.Audio.BASS
         private const double GRAIN_SECONDS = 0.04;
         private const double SEARCH_SECONDS = 0.015;
         private const double SHORT_BODY_SECONDS = 0.075;
-        private const float SHORT_BODY_SPEED = 0.15f;
-        private const float BODY_SPEED = 0.25f;
+        private const float SHORT_BODY_SPEED = 0.3f;
+        private const float BODY_SPEED = 0.5f;
         private const double ONSET_BLOCK_SECONDS = 0.003;
         private const double ONSET_RATIO = 3;
         private const double ONSET_FLOOR_RATIO = 0.01;
