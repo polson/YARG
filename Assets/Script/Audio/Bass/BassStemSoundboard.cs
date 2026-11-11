@@ -49,6 +49,10 @@ namespace YARG.Audio.BASS
         private const double MAX_DECAY_DB                        = 15;
         private const double DECAY_STEP_DB                       = 0.25;
         private const double DECAY_SLIDE_SECONDS                 = 0.05;
+        private const double STRUM_MIN_SPREAD_SECONDS            = 0.008;
+        private const double STRUM_MAX_SPREAD_SECONDS            = 0.015;
+
+        private static readonly double[] CHORD_NOTE_GAINS = { 1, 0.8, 0.65 };
 
         private static readonly double[] DRIFT_RATES_HZ = { 0.37, 0.71, 1.13 };
 
@@ -115,6 +119,8 @@ namespace YARG.Audio.BASS
         private          int                          _heldFrets;
         private          float                        _whammyPercent;
         private readonly Random                       _random = new();
+        private readonly List<BassStemClip>           _chordClips = new();
+        private          float[]                      _silence = Array.Empty<float>();
         private          long                         _playCount;
         private          long                         _lastVoiceStart = Stopwatch.GetTimestamp();
         private          bool                         _disposed;
@@ -200,8 +206,13 @@ namespace YARG.Audio.BASS
 
                 var pick = NextPick();
                 FadePreviousVoices(FREESTYLE_MIN_TRANSITION_SECONDS);
-                int fretCount = FretCount(fretMask);
-                double fretGain = pick.Gain / Math.Sqrt(fretCount);
+                if (FretCount(fretMask) > 1 && _seeds.TryGetChordClips(fretMask, _chordClips))
+                {
+                    StrumChord(fretMask, pick.Gain, pick.Brightness);
+                    return;
+                }
+
+                double fretGain = pick.Gain / Math.Sqrt(FretCount(fretMask));
                 for (int fret = 1; fret < GuitarEngine.OPEN_MASK; fret <<= 1)
                 {
                     if ((fretMask & fret) == 0)
@@ -214,8 +225,49 @@ namespace YARG.Audio.BASS
                         continue;
                     }
 
-                    Start(clip, key: fret, gain: fretGain, firstFrame: 0, distorted: fretCount > 1,
-                        brightness: pick.Brightness);
+                    Start(clip, key: fret, gain: fretGain, firstFrame: 0, brightness: pick.Brightness);
+                }
+            }
+        }
+
+        private void StrumChord(int fretMask, double gain, double brightness)
+        {
+            if (_chordClips.Count == 1)
+            {
+                Start(_chordClips[0], key: fretMask, gain: gain, firstFrame: 0, brightness: brightness);
+                return;
+            }
+
+            double power = 0;
+            for (int index = 0; index < _chordClips.Count; index++)
+            {
+                power += CHORD_NOTE_GAINS[index] * CHORD_NOTE_GAINS[index];
+            }
+
+            double spread = STRUM_MIN_SPREAD_SECONDS
+                + _random.NextDouble() * (STRUM_MAX_SPREAD_SECONDS - STRUM_MIN_SPREAD_SECONDS);
+            int fret = 1;
+            Voice? root = null;
+            for (int index = 0; index < _chordClips.Count; index++)
+            {
+                while ((fretMask & fret) == 0)
+                {
+                    fret <<= 1;
+                }
+
+                var voice = Start(_chordClips[index], key: fret, gain: gain * CHORD_NOTE_GAINS[index] / Math.Sqrt(power),
+                    firstFrame: 0, brightness: brightness, delayFrames: _format.FramesFor(spread * index));
+                fret <<= 1;
+                if (root == null)
+                {
+                    root = voice;
+                }
+                else if (voice.WhammySemitones != root.WhammySemitones)
+                {
+                    voice.BentClip = null;
+                    voice.WhammySemitones = root.WhammySemitones;
+                    SetVoiceVolume(voice, VoiceVolume(voice));
+                    SetPitch(voice, glide: false);
                 }
             }
         }
@@ -402,12 +454,16 @@ namespace YARG.Audio.BASS
         }
 
         private Voice Start(BassStemClip clip, int key, double gain, int firstFrame, double fadeInSeconds = 0,
-            bool distorted = false, double brightness = 1)
+            bool distorted = false, double brightness = 1, int delayFrames = 0)
         {
             var voice = PickVoice(key);
             SetDistorted(voice, distorted);
             voice.Stream.Clear();
             voice.BentStream.Clear();
+            if (delayFrames > 0)
+            {
+                PushSilence(voice, delayFrames);
+            }
             voice.Clip = clip;
             voice.PushedFrames = firstFrame;
             voice.Key = key;
@@ -449,6 +505,18 @@ namespace YARG.Audio.BASS
 
             Feed(voice);
             return voice;
+        }
+
+        private void PushSilence(Voice voice, int frames)
+        {
+            int samples = frames * _format.Channels;
+            if (_silence.Length < samples)
+            {
+                _silence = new float[samples];
+            }
+
+            Push(voice.Stream, _silence, firstFrame: 0, frameCount: frames);
+            Push(voice.BentStream, _silence, firstFrame: 0, frameCount: frames);
         }
 
         private void ShapePick(Voice voice, BassStemClip clip, double brightness)

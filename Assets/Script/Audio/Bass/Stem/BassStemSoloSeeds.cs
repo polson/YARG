@@ -13,6 +13,11 @@ namespace YARG.Audio.BASS
         private static readonly int[] ROOT_OFFSETS = { 0, -1, 1 };
         private static readonly int[] COLOR_OFFSETS = { 0, -1, 1, -2, 2 };
 
+        private const int FIFTH_SEMITONES      = 7;
+        private const int FOURTH_SEMITONES     = 5;
+        private const int OCTAVE_SEMITONES     = 12;
+        private const int FULL_CHORD_FRETS     = 3;
+
         private const int    MAX_WHAMMY_BEND   = 4;
         private const int    DEFAULT_WHAMMY    = 2;
         private const int    BOX_SHIFT_RUNGS   = 3;
@@ -145,6 +150,80 @@ namespace YARG.Audio.BASS
             }
 
             return true;
+        }
+
+        public bool TryGetChordClips(int fretMask, List<BassStemClip> clips)
+        {
+            clips.Clear();
+            if (Ladder.Count == 0)
+            {
+                if (!ByKey.TryGetValue(fretMask, out var recorded))
+                {
+                    return false;
+                }
+
+                clips.Add(ClipAt(recorded));
+                return true;
+            }
+
+            if (!TryTakeClip(fretMask & -fretMask, out var root))
+            {
+                return false;
+            }
+
+            clips.Add(root);
+            var fifth = InScale(root.Note + FIFTH_SEMITONES)
+                ? LadderTake(root.Note + FIFTH_SEMITONES) ?? LadderTake(root.Note - FOURTH_SEMITONES)
+                : null;
+            if (fifth != null)
+            {
+                clips.Add(fifth);
+            }
+
+            if (fifth == null || FretCount(fretMask) >= FULL_CHORD_FRETS)
+            {
+                var octave = LadderTake(root.Note + OCTAVE_SEMITONES) ?? LadderTake(root.Note - OCTAVE_SEMITONES);
+                if (octave != null)
+                {
+                    clips.Add(octave);
+                }
+            }
+
+            clips.Sort((left, right) => left.Note.CompareTo(right.Note));
+            return true;
+        }
+
+        private bool InScale(int note)
+        {
+            int pitchClass = BassSoloHarmony.PitchClass(note);
+            return PentatonicScale()[pitchClass] || ColorScale()?[pitchClass] == true;
+        }
+
+        private static int FretCount(int fretMask)
+        {
+            int count = 0;
+            foreach (int key in FRET_KEYS)
+            {
+                if ((fretMask & key) != 0)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        private BassStemClip? LadderTake(int note)
+        {
+            foreach (var clip in Ladder)
+            {
+                if (clip.Note == note)
+                {
+                    return NextTake(clip);
+                }
+            }
+
+            return null;
         }
 
         public bool TryGetAnyClip(out BassStemClip clip)

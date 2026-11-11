@@ -211,6 +211,15 @@ namespace YARG.Audio.BASS
             }
         }
 
+        public bool TryGetChordClips(int fretMask, List<BassStemClip> clips)
+        {
+            lock (_lock)
+            {
+                clips.Clear();
+                return _selected != null && _selected.TryGetChordClips(fretMask, clips);
+            }
+        }
+
         public void PrepareJobs(List<(long StartFrame, int FrameCount, float[] Samples)> jobs)
         {
             lock (_lock)
