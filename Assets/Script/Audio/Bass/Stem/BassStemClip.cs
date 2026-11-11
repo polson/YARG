@@ -32,6 +32,8 @@ namespace YARG.Audio.BASS
         public int     BendSemitones;
         public int     ChartFrame;
         public double  PickStrength;
+        public double  DecayDbPerSecond;
+        public BassStemClip[] Takes = Array.Empty<BassStemClip>();
 
         public bool HasLoop => LoopEndFrame > LoopStartFrame;
 

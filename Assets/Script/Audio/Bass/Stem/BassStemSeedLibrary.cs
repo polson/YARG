@@ -44,6 +44,9 @@ namespace YARG.Audio.BASS
         private const float  BEND_MAX_CENTS                 = 400f;
         private const double DONOR_PERCENTILE               = 0.9;
         private const double MIN_READABLE_SHARE             = 0.05;
+        private const int    MAX_TAKES                      = 3;
+        private const int    TAKE_EXTRA_SHIFT               = 1;
+        private const float  TAKE_MIN_SCORE_RATIO           = 0.5f;
 
 
 
@@ -355,6 +358,7 @@ namespace YARG.Audio.BASS
             var pitches = new (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)?[clips.Count];
             var levels = new double[clips.Count];
             var onsetOffsets = new double[clips.Count];
+            var decays = new double[clips.Count];
             Parallel.For(0, clips.Count, options,
                 () => (Pitch: new BassSoloPitch(_format.Frequency), Readings: new List<float>()),
                 (index, state, local) =>
@@ -371,6 +375,7 @@ namespace YARG.Audio.BASS
                         : double.NaN;
                     clip.TrimToCleanEnd(_format);
                     clip.AttackEndFrame = BassSustainStretch.FindAttackEnd(clip.Samples, _format);
+                    decays[index] = BassNoteDecay.Measure(clip.Samples, _format, clip.AttackEndFrame);
                     levels[index] = Level(clip);
                     if (singleNote)
                     {
@@ -419,6 +424,9 @@ namespace YARG.Audio.BASS
                 }
             }
 
+            double decay = BassNoteDecay.Typical(decays);
+            YargLogger.LogFormatInfo("[SoloSustain] notes decay {0} dB per second",
+                Math.Round(decay, 1));
             BorrowPick(seedClips);
             int maxShift = job.CanStretch ? MAX_STRETCH_SHIFT_SEMITONES : MAX_SHIFT_SEMITONES;
             var rungs = PlanLadder(clean, maxShift, job.LowestNote);
@@ -431,7 +439,7 @@ namespace YARG.Audio.BASS
             var played = new List<BassStemClip>();
             foreach (var (clip, _, _) in clips)
             {
-                if (rungs == null || rungs.Exists(rung => rung.Clip == clip))
+                if (rungs == null || rungs.Exists(rung => rung.Clip == clip || rung.Takes.Contains(clip)))
                 {
                     played.Add(clip);
                 }
@@ -472,7 +480,28 @@ namespace YARG.Audio.BASS
                 BuildLadder(job, rungs, anchors, soloLevel);
             }
 
+            SetDecay(job, decay);
             return true;
+        }
+
+        private static void SetDecay(BassStemSoloSeeds job, double decay)
+        {
+            foreach (var keyed in job.ByKey.Values)
+            {
+                foreach (var clip in keyed)
+                {
+                    clip.DecayDbPerSecond = decay;
+                }
+            }
+
+            foreach (var clip in job.Ladder)
+            {
+                clip.DecayDbPerSecond = decay;
+                foreach (var take in clip.Takes)
+                {
+                    take.DecayDbPerSecond = decay;
+                }
+            }
         }
 
         private (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)? Measure(BassStemClip clip, BassSoloPitch detector,
@@ -586,7 +615,7 @@ namespace YARG.Audio.BASS
             return false;
         }
 
-        private static List<(int Note, BassStemClip Clip, int Shift)>? PlanLadder(
+        private static List<(int Note, BassStemClip Clip, int Shift, List<BassStemClip> Takes)>? PlanLadder(
             List<(BassStemClip Clip, int Note, float Score, bool Bent)> clean, int maxShift, int lowestNote)
         {
             if (clean.Count == 0)
@@ -603,7 +632,7 @@ namespace YARG.Audio.BASS
                 highest = Math.Max(highest, candidate.Note);
             }
 
-            var rungs = new List<(int Note, BassStemClip Clip, int Shift)>();
+            var rungs = new List<(int Note, BassStemClip Clip, int Shift, List<BassStemClip> Takes)>();
             var bentRungs = new List<bool>();
             int first = Math.Max(lowest - maxShift, Math.Min(lowestNote, lowest));
             int last = Math.Min(highest + maxShift, Math.Max(HIGHEST_LADDER_NOTE, highest));
@@ -637,7 +666,8 @@ namespace YARG.Audio.BASS
 
                 if (nearest != null)
                 {
-                    rungs.Add((note, nearest, nearestShift));
+                    var takes = AlternateTakes(clean, note, nearest, Math.Abs(nearestShift), nearestScore, nearestBent);
+                    rungs.Add((note, nearest, nearestShift, takes));
                     bentRungs.Add(nearestBent);
                 }
             }
@@ -663,7 +693,31 @@ namespace YARG.Audio.BASS
                 return null;
             }
 
+            YargLogger.LogFormatInfo<int, int>("[SoloPitch] {0} of {1} ladder notes have alternate takes",
+                rungs.FindAll(rung => rung.Takes.Count > 0).Count, rungs.Count);
             return rungs;
+        }
+
+        private static List<BassStemClip> AlternateTakes(
+            List<(BassStemClip Clip, int Note, float Score, bool Bent)> clean, int note, BassStemClip chosen,
+            int chosenDistance, float chosenScore, bool chosenBent)
+        {
+            var options = clean.FindAll(candidate => candidate.Clip != chosen && candidate.Bent == chosenBent
+                && Math.Abs(note - candidate.Note) <= chosenDistance + TAKE_EXTRA_SHIFT
+                && candidate.Score >= chosenScore * TAKE_MIN_SCORE_RATIO);
+            options.Sort((left, right) =>
+            {
+                int byDistance = Math.Abs(note - left.Note).CompareTo(Math.Abs(note - right.Note));
+                return byDistance != 0 ? byDistance : right.Score.CompareTo(left.Score);
+            });
+
+            var takes = new List<BassStemClip>();
+            for (int index = 0; index < options.Count && takes.Count < MAX_TAKES - 1; index++)
+            {
+                takes.Add(options[index].Clip);
+            }
+
+            return takes;
         }
 
         private double[] PitchCurve(BassStemClip clip, BassSoloPitch detector, List<float> readings, out int endFrame)
@@ -764,7 +818,8 @@ namespace YARG.Audio.BASS
             return 440 * Math.Pow(2, (note - 69) / 12.0);
         }
 
-        private static (int Start, int Length) LongestUnbrokenRun(List<(int Note, BassStemClip Clip, int Shift)> rungs)
+        private static (int Start, int Length) LongestUnbrokenRun(
+            List<(int Note, BassStemClip Clip, int Shift, List<BassStemClip> Takes)> rungs)
         {
             int bestStart = 0;
             int bestLength = 0;
@@ -790,7 +845,7 @@ namespace YARG.Audio.BASS
             return (bestStart, bestLength);
         }
 
-        private void BuildLadder(BassStemSoloSeeds job, List<(int Note, BassStemClip Clip, int Shift)> rungs,
+        private void BuildLadder(BassStemSoloSeeds job, List<(int Note, BassStemClip Clip, int Shift, List<BassStemClip> Takes)> rungs,
             List<(double SongSeconds, int Note, int Fret)> anchors, double soloLevel)
         {
             var tunings = rungs.ConvertAll(rung => 1200 * Math.Log(rung.Clip.PitchHz / NoteHz(rung.Note - rung.Shift), 2));
@@ -811,6 +866,14 @@ namespace YARG.Audio.BASS
                 {
                     sources.Add(rung.Clip);
                 }
+
+                foreach (var take in rung.Takes)
+                {
+                    if (!sources.Contains(take))
+                    {
+                        sources.Add(take);
+                    }
+                }
             }
 
             var curves = new (double[] Curve, int EndFrame)[sources.Count];
@@ -825,34 +888,20 @@ namespace YARG.Audio.BASS
                 _ => { });
             Parallel.For(0, rungs.Count, options,
                 () => job.CanStretch ? BassStretchRender.Create(_format.Channels, _format.Frequency, speed: 1) : null,
-                (index, _, render) =>
+                (index, state, render) =>
                 {
                     var rung = rungs[index];
-                    int endFrame = curves[sources.IndexOf(rung.Clip)].EndFrame;
-                    wasCut[index] = endFrame < rung.Clip.FrameCount;
                     double targetHz = NoteHz(rung.Note) * Math.Pow(2, tuningCents / 1200);
-                    var clip = BassPsola.Enabled ? rung.Clip.PsolaRetuned(endFrame, targetHz, _format) : null;
-                    methods[index] = "psola";
-                    if (clip == null && render != null)
+                    var clip = RetuneTake(rung.Clip, rung.Note, targetHz, sources, curves, render,
+                        out wasCut[index], out wasLocked[index], out methods[index]);
+                    var takes = new BassStemClip[rung.Takes.Count];
+                    for (int take = 0; take < takes.Length; take++)
                     {
-                        clip = rung.Clip.StretchRetuned(render, endFrame, targetHz, _format);
-                        methods[index] = "vocoder";
+                        takes[take] = RetuneTake(rung.Takes[take], rung.Note, targetHz, sources, curves, render,
+                            out _, out _, out _);
                     }
 
-                    if (clip == null)
-                    {
-                        clip = rung.Clip.Retuned(endFrame, targetHz, _format);
-                        methods[index] = "resample";
-                    }
-
-                    methods[index] = $"{rung.Note} {12 * Math.Log(targetHz / rung.Clip.PitchHz, 2):+0.0;-0.0} st {methods[index]}";
-                    clip.Note = rung.Note;
-                    wasLocked[index] = clip.LockLoopToPeriod(_format.Frequency / clip.PitchHz, _format);
-                    if (!clip.HasLoop)
-                    {
-                        clip.PrepareLoop(_format);
-                    }
-
+                    clip.Takes = takes;
                     ladder[index] = clip;
                     return render;
                 },
@@ -865,7 +914,13 @@ namespace YARG.Audio.BASS
                 (int) Math.Round(tuningCents), cut, rungs.Count);
             YargLogger.LogFormatInfo("[SoloPitch] retunes: {0}", string.Join(", ", methods));
 
-            MatchLevels(job.Ladder, soloLevel);
+            var leveled = new List<BassStemClip>(job.Ladder);
+            foreach (var clip in job.Ladder)
+            {
+                leveled.AddRange(clip.Takes);
+            }
+
+            MatchLevels(leveled, soloLevel);
 
             anchors.Sort((left, right) => left.SongSeconds.CompareTo(right.SongSeconds));
             foreach (var anchor in anchors)
@@ -914,6 +969,37 @@ namespace YARG.Audio.BASS
             }
         }
 
+        private BassStemClip RetuneTake(BassStemClip source, int note, double targetHz, List<BassStemClip> sources,
+            (double[] Curve, int EndFrame)[] curves, BassStretchRender? render, out bool cut, out bool locked,
+            out string method)
+        {
+            int endFrame = curves[sources.IndexOf(source)].EndFrame;
+            cut = endFrame < source.FrameCount;
+            var clip = BassPsola.Enabled ? source.PsolaRetuned(endFrame, targetHz, _format) : null;
+            method = "psola";
+            if (clip == null && render != null)
+            {
+                clip = source.StretchRetuned(render, endFrame, targetHz, _format);
+                method = "vocoder";
+            }
+
+            if (clip == null)
+            {
+                clip = source.Retuned(endFrame, targetHz, _format);
+                method = "resample";
+            }
+
+            method = $"{note} {12 * Math.Log(targetHz / source.PitchHz, 2):+0.0;-0.0} st {method}";
+            clip.Note = note;
+            locked = clip.LockLoopToPeriod(_format.Frequency / clip.PitchHz, _format);
+            if (!clip.HasLoop)
+            {
+                clip.PrepareLoop(_format);
+            }
+
+            return clip;
+        }
+
         private void BakeSustainBodies(BassStemSoloSeeds job, ParallelOptions options)
         {
             var ladder = job.Ladder;
@@ -935,6 +1021,11 @@ namespace YARG.Audio.BASS
                         var clip = ladder[index];
                         clip.Bent = BassSustainBodies.RenderBent(clip, render, _format, bends[index]);
                         clip.BendSemitones = bends[index];
+                        foreach (var take in clip.Takes)
+                        {
+                            take.Bent = clip.Bent;
+                            take.BendSemitones = clip.BendSemitones;
+                        }
                     }
 
                     return render;

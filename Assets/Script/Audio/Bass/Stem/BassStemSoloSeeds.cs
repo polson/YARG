@@ -47,6 +47,8 @@ namespace YARG.Audio.BASS
         private          int          _fretBeforeLast = -1;
         private          int          _lastShift;
         private          double       _lastPlaySeconds;
+        private readonly Dictionary<BassStemClip, int> _lastTakes = new();
+        private readonly Random       _random = new();
 
         public BassStemSoloSeeds(double startTime, double endTime,
             List<(int Key, double SongSeconds, double PlaybackSeconds, double DurationSeconds, bool IsSustain)> notes,
@@ -127,6 +129,7 @@ namespace YARG.Audio.BASS
             int fret = Array.IndexOf(FRET_KEYS, key);
             if (Ladder.Count > 0 && fret >= 0)
             {
+                clip = NextTake(clip);
                 _phraseFretTotal += fret;
                 _phraseFretCount++;
                 FollowRun(fret);
@@ -154,6 +157,20 @@ namespace YARG.Audio.BASS
 
             clip = null!;
             return false;
+        }
+
+        private BassStemClip NextTake(BassStemClip clip)
+        {
+            int count = clip.Takes.Length + 1;
+            if (count == 1)
+            {
+                return clip;
+            }
+
+            _lastTakes.TryGetValue(clip, out int last);
+            int take = (last + 1 + _random.Next(count - 1)) % count;
+            _lastTakes[clip] = take;
+            return take == 0 ? clip : clip.Takes[take - 1];
         }
 
         private BassStemClip RungClip(int fret)
