@@ -24,9 +24,7 @@ namespace YARG.Audio.BASS
         private const double FREESTYLE_TRANSITION_INTERVAL_RATIO = 0.25;
         private const double LEGATO_TRANSITION_SECONDS           = 0.035;
         private const double LEGATO_FADE_IN_SECONDS              = 0.01;
-        private const double VIBRATO_CROSSFADE_SECONDS           = 0.05;
         private const double LOOP_BUFFER_SECONDS                 = 0.25;
-        private const float  WHAMMY_IDLE_PERCENT                 = 0.05f;
         private const float  WHAMMY_FULL_BEND_PERCENT            = 0.9f;
         private const double PITCH_GLIDE_SECONDS                 = 0.02;
         private const float  CHORD_OVERDRIVE_MIX                 = 1f;
@@ -43,14 +41,6 @@ namespace YARG.Audio.BASS
         private const double GRACE_CHANCE                        = 0.2;
         private const double GRACE_SECONDS                       = 0.035;
         private const float  CHORD_OVERDRIVE_DRIVE               = 15f;
-        private const double VIBRATO_DELAY_SECONDS               = 0.3;
-        private const double VIBRATO_RAMP_SECONDS                = 0.15;
-        private const double VIBRATO_RATE_HZ                     = 4.5;
-        private const double VIBRATO_DEPTH_CENTS                 = 90;
-        private const double VIBRATO_RATE_SPREAD                 = 0.1;
-        private const double VIBRATO_RATE_WANDER                 = 0.08;
-        private const double VIBRATO_WANDER_HZ                   = 0.3;
-        private const double VIBRATO_DEPTH_SPREAD                = 0.15;
         private const double DRIFT_DEPTH_CENTS                   = 6;
 
         private static readonly double[] DRIFT_RATES_HZ = { 0.37, 0.71, 1.13 };
@@ -58,18 +48,14 @@ namespace YARG.Audio.BASS
         private sealed class Voice
         {
             public readonly PushStream Stream;
-            public readonly PushStream VibratoStream;
             public readonly PushStream BentStream;
             public BassStemClip? Clip;
-            public BassStemClip? VibratoClip;
             public BassStemClip? BentClip;
             public int        PushedFrames;
-            public int        VibratoPushedFrames;
             public int        BentPushedFrames;
             public double     Gain;
             public double     BentShare;
             public BassOverdriveDsp? Overdrive;
-            public BassOverdriveDsp? VibratoOverdrive;
             public BassOverdriveDsp? BentOverdrive;
             public bool       IsDistorted;
             public float      Frequency;
@@ -79,18 +65,13 @@ namespace YARG.Audio.BASS
             public long       StartOrder;
             public long       StartTimestamp;
             public readonly double[] DriftPhases = new double[DRIFT_RATES_HZ.Length];
-            public double     VibratoRateHz;
-            public double     VibratoWanderPhase;
-            public int        VibratoSeed;
             public int        WhammySemitones;
 
-            public Voice(PushStream stream, PushStream vibratoStream, PushStream bentStream)
+            public Voice(PushStream stream, PushStream bentStream)
             {
                 Stream = stream;
-                VibratoStream = vibratoStream;
                 BentStream = bentStream;
                 Overdrive = BassOverdriveDsp.Attach(stream.Handle, 0, CHORD_OVERDRIVE_DRIVE);
-                VibratoOverdrive = BassOverdriveDsp.Attach(vibratoStream.Handle, 0, CHORD_OVERDRIVE_DRIVE);
                 BentOverdrive = BassOverdriveDsp.Attach(bentStream.Handle, 0, CHORD_OVERDRIVE_DRIVE);
             }
 
@@ -137,9 +118,8 @@ namespace YARG.Audio.BASS
             for (int index = 0; index < VOICE_COUNT; index++)
             {
                 var stream = manager.CreatePushStream(sampleRate: format.Frequency, channelCount: format.Channels);
-                var vibratoStream = manager.CreatePushStream(sampleRate: format.Frequency, channelCount: format.Channels);
                 var bentStream = manager.CreatePushStream(sampleRate: format.Frequency, channelCount: format.Channels);
-                _voices[index] = new Voice(stream: stream, vibratoStream: vibratoStream, bentStream: bentStream);
+                _voices[index] = new Voice(stream: stream, bentStream: bentStream);
             }
         }
 
@@ -295,7 +275,6 @@ namespace YARG.Audio.BASS
                     return;
                 }
 
-                bool wasIdle = IsWhammyIdle;
                 _whammyPercent = percent;
                 foreach (var voice in _voices)
                 {
@@ -305,11 +284,7 @@ namespace YARG.Audio.BASS
                     }
 
                     SetPitch(voice, glide: true);
-                    if (voice.VibratoClip != null && IsWhammyIdle != wasIdle)
-                    {
-                        SlideVoiceVolume(voice, _volume() * voice.Gain, VIBRATO_CROSSFADE_SECONDS);
-                    }
-                    else if (voice.BentClip != null && Shares(voice).Bent != voice.BentShare)
+                    if (voice.BentClip != null && Shares(voice).Bent != voice.BentShare)
                     {
                         SlideVoiceVolume(voice, _volume() * voice.Gain, PITCH_GLIDE_SECONDS);
                     }
@@ -358,10 +333,8 @@ namespace YARG.Audio.BASS
                 foreach (var voice in _voices)
                 {
                     voice.Stream.Clear();
-                    voice.VibratoStream.Clear();
                     voice.BentStream.Clear();
                     voice.Clip = null;
-                    voice.VibratoClip = null;
                     voice.BentClip = null;
                     voice.Key = 0;
                     voice.IsSustain = false;
@@ -404,10 +377,8 @@ namespace YARG.Audio.BASS
                 foreach (var voice in _voices)
                 {
                     voice.Overdrive?.Dispose();
-                    voice.VibratoOverdrive?.Dispose();
                     voice.BentOverdrive?.Dispose();
                     voice.Stream.Dispose();
-                    voice.VibratoStream.Dispose();
                     voice.BentStream.Dispose();
                 }
             }
@@ -433,15 +404,12 @@ namespace YARG.Audio.BASS
             var voice = PickVoice(key);
             SetDistorted(voice, distorted);
             voice.Stream.Clear();
-            voice.VibratoStream.Clear();
             voice.BentStream.Clear();
             voice.Clip = clip;
             voice.PushedFrames = firstFrame;
             voice.Key = key;
             voice.IsLooping = clip.HasLoop && voice.IsFullyHeld(_heldFrets);
             voice.IsSustain = clip.IsSustain || voice.IsLooping;
-            voice.VibratoClip = voice.IsLooping ? clip.Vibrato : null;
-            voice.VibratoPushedFrames = firstFrame;
             voice.BentClip = voice.IsLooping ? clip.Bent : null;
             voice.BentPushedFrames = firstFrame;
             voice.WhammySemitones = clip.Bent != null ? clip.BendSemitones : clip.Note >= 0 ? _seeds.WhammyBend(clip) : 0;
@@ -472,10 +440,6 @@ namespace YARG.Audio.BASS
             {
                 voice.DriftPhases[index] = _random.NextDouble() * 2 * Math.PI;
             }
-
-            voice.VibratoRateHz = VIBRATO_RATE_HZ * (1 + VIBRATO_RATE_SPREAD * (2 * _random.NextDouble() - 1));
-            voice.VibratoWanderPhase = _random.NextDouble() * 2 * Math.PI;
-            voice.VibratoSeed = _random.Next();
 
             Feed(voice);
             return voice;
@@ -515,7 +479,6 @@ namespace YARG.Audio.BASS
             voice.IsDistorted = distorted;
             float mix = distorted ? CHORD_OVERDRIVE_MIX : 0;
             voice.Overdrive?.Set(mix, CHORD_OVERDRIVE_DRIVE);
-            voice.VibratoOverdrive?.Set(mix, CHORD_OVERDRIVE_DRIVE);
             voice.BentOverdrive?.Set(mix, CHORD_OVERDRIVE_DRIVE);
         }
 
@@ -591,11 +554,6 @@ namespace YARG.Audio.BASS
             {
                 SetPitch(voice, glide: true);
                 FeedLoop(voice.Stream, clip, ref voice.PushedFrames);
-                if (voice.VibratoClip != null)
-                {
-                    FeedLoop(voice.VibratoStream, voice.VibratoClip, ref voice.VibratoPushedFrames);
-                }
-
                 if (voice.BentClip != null)
                 {
                     FeedLoop(voice.BentStream, voice.BentClip, ref voice.BentPushedFrames);
@@ -664,15 +622,7 @@ namespace YARG.Audio.BASS
                         : -GlobalAudioHandler.WhammyPitchShiftAmount * _whammyPercent;
                 }
 
-                if (voice.VibratoClip == null)
-                {
-                    semitones += DriftCents(voice) / 100;
-                    if (IsWhammyIdle)
-                    {
-                        semitones += VibratoCents(voice) / 100;
-                    }
-                }
-
+                semitones += DriftCents(voice) / 100;
                 freq = (float) (_format.Frequency * Math.Pow(2, semitones / 12));
             }
 
@@ -688,7 +638,6 @@ namespace YARG.Audio.BASS
         private static void SetVoiceFrequency(Voice voice, float freq, double glideSeconds)
         {
             SetFrequency(voice.Stream, freq, glideSeconds);
-            SetFrequency(voice.VibratoStream, freq, glideSeconds);
             SetFrequency(voice.BentStream, (float) (freq * Math.Pow(2, -voice.WhammySemitones / 12.0)), glideSeconds);
         }
 
@@ -703,21 +652,14 @@ namespace YARG.Audio.BASS
             }
         }
 
-        private bool IsWhammyIdle => _whammyPercent <= WHAMMY_IDLE_PERCENT;
-
         private double BendProgress => GlobalAudioHandler.UseWhammyFx
             ? Math.Min(1, _whammyPercent / WHAMMY_FULL_BEND_PERCENT)
             : 0;
 
-        private (double Plain, double Vibrato, double Bent) Shares(Voice voice)
+        private (double Plain, double Bent) Shares(Voice voice)
         {
-            if (voice.VibratoClip != null && IsWhammyIdle)
-            {
-                return (0, 1, 0);
-            }
-
             double bent = voice.BentClip != null && voice.WhammySemitones > 0 ? BendProgress : 0;
-            return (1 - bent, 0, bent);
+            return (1 - bent, bent);
         }
 
         private void SetVoiceVolume(Voice voice, double volume)
@@ -725,7 +667,6 @@ namespace YARG.Audio.BASS
             var shares = Shares(voice);
             voice.BentShare = shares.Bent;
             voice.Stream.SetVolume(volume * shares.Plain);
-            voice.VibratoStream.SetVolume(volume * shares.Vibrato);
             voice.BentStream.SetVolume(volume * shares.Bent);
         }
 
@@ -734,7 +675,6 @@ namespace YARG.Audio.BASS
             var shares = Shares(voice);
             voice.BentShare = shares.Bent;
             SlideVolume(voice.Stream, volume * shares.Plain, seconds);
-            SlideVolume(voice.VibratoStream, volume * shares.Vibrato, seconds);
             SlideVolume(voice.BentStream, volume * shares.Bent, seconds);
         }
 
@@ -749,16 +689,14 @@ namespace YARG.Audio.BASS
         private static bool IsFading(Voice voice)
         {
             return Bass.ChannelIsSliding(voice.Stream.Handle, ChannelAttribute.Volume)
-                || Bass.ChannelIsSliding(voice.VibratoStream.Handle, ChannelAttribute.Volume)
                 || Bass.ChannelIsSliding(voice.BentStream.Handle, ChannelAttribute.Volume);
         }
 
         private static float Loudness(Voice voice)
         {
             Bass.ChannelGetAttribute(voice.Stream.Handle, ChannelAttribute.Volume, out float volume);
-            Bass.ChannelGetAttribute(voice.VibratoStream.Handle, ChannelAttribute.Volume, out float vibratoVolume);
             Bass.ChannelGetAttribute(voice.BentStream.Handle, ChannelAttribute.Volume, out float bentVolume);
-            return volume + vibratoVolume + bentVolume;
+            return volume + bentVolume;
         }
 
         private static double DriftCents(Voice voice)
@@ -773,35 +711,6 @@ namespace YARG.Audio.BASS
             return cents * DRIFT_DEPTH_CENTS / DRIFT_RATES_HZ.Length;
         }
 
-        private static double VibratoCents(Voice voice)
-        {
-            double held = (Stopwatch.GetTimestamp() - voice.StartTimestamp) / (double) Stopwatch.Frequency;
-            double vibrating = held - VIBRATO_DELAY_SECONDS;
-            if (vibrating <= 0)
-            {
-                return 0;
-            }
-
-            double wanderSpeed = 2 * Math.PI * VIBRATO_WANDER_HZ;
-            double wander = VIBRATO_RATE_WANDER / wanderSpeed
-                * (Math.Cos(voice.VibratoWanderPhase) - Math.Cos(wanderSpeed * vibrating + voice.VibratoWanderPhase));
-            double cycles = voice.VibratoRateHz * (vibrating + wander);
-            double depth = VIBRATO_DEPTH_CENTS * Math.Min(1, vibrating / VIBRATO_RAMP_SECONDS)
-                * (1 + VIBRATO_DEPTH_SPREAD * CycleRandom(voice.VibratoSeed, (int) cycles));
-            return depth * 0.5 * Math.Sin(2 * Math.PI * cycles);
-        }
-
-        private static double CycleRandom(int seed, int cycle)
-        {
-            uint hash = (uint) seed ^ (uint) cycle * 0x9E3779B9u;
-            hash ^= hash >> 16;
-            hash *= 0x85EBCA6Bu;
-            hash ^= hash >> 13;
-            hash *= 0xC2B2AE35u;
-            hash ^= hash >> 16;
-            return hash / (double) uint.MaxValue * 2 - 1;
-        }
-
         private void FadeOut(Voice voice)
         {
             FadeOut(voice, fadeSeconds: voice.IsLooping ? FREESTYLE_RELEASE_SECONDS : VOICE_FADE_SECONDS);
@@ -810,13 +719,11 @@ namespace YARG.Audio.BASS
         private void FadeOut(Voice voice, double fadeSeconds)
         {
             voice.Clip = null;
-            voice.VibratoClip = null;
             voice.BentClip = null;
             voice.Key = 0;
             voice.IsSustain = false;
             voice.IsLooping = false;
             SlideVolume(voice.Stream, 0, fadeSeconds);
-            SlideVolume(voice.VibratoStream, 0, fadeSeconds);
             SlideVolume(voice.BentStream, 0, fadeSeconds);
         }
     }

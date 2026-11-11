@@ -42,6 +42,7 @@ namespace YARG.Audio.BASS
         private const double BEND_CHECK_SECONDS             = 0.15;
         private const float  BEND_MIN_CENTS                 = 30f;
         private const float  BEND_MAX_CENTS                 = 400f;
+        private const double STRONG_PICK_RATIO              = 2;
 
 
 
@@ -279,12 +280,16 @@ namespace YARG.Audio.BASS
             (int Key, double SongSeconds, double PlaybackSeconds, double DurationSeconds, bool IsSustain) note,
             List<(long StartFrame, int FrameCount, float[] Samples)> jobs)
         {
-            long startFrame = (long) Math.Round(note.PlaybackSeconds * _format.Frequency);
+            long chartFrame = (long) Math.Round(note.PlaybackSeconds * _format.Frequency);
             int frameCount = BassStemClip.FramesFor(_format, note.DurationSeconds);
-            if (startFrame < 0 || frameCount <= 0)
+            if (chartFrame < 0 || frameCount <= 0)
             {
                 return;
             }
+
+            int leadFrames = (int) Math.Min(_format.FramesFor(BassPickAttack.LEAD_SECONDS), chartFrame);
+            long startFrame = chartFrame - leadFrames;
+            frameCount += leadFrames;
 
             var clip = new BassStemClip
             {
@@ -293,6 +298,7 @@ namespace YARG.Audio.BASS
                 Samples = new float[frameCount * _format.Channels],
                 FrameCount = frameCount,
                 IsSustain = note.IsSustain,
+                ChartFrame = leadFrames,
             };
             if (!job.ByKey.TryGetValue(note.Key, out var keyed))
             {
@@ -347,6 +353,7 @@ namespace YARG.Audio.BASS
             };
             var pitches = new (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)?[clips.Count];
             var levels = new double[clips.Count];
+            var onsetOffsets = new double[clips.Count];
             Parallel.For(0, clips.Count, options,
                 () => (Pitch: new BassSoloPitch(_format.Frequency), Readings: new List<float>()),
                 (index, state, local) =>
@@ -358,6 +365,9 @@ namespace YARG.Audio.BASS
                     }
 
                     var (clip, singleNote, _) = clips[index];
+                    onsetOffsets[index] = clip.AlignToOnset(_format, out int offsetFrames)
+                        ? offsetFrames * 1000.0 / _format.Frequency
+                        : double.NaN;
                     clip.TrimToCleanEnd(_format);
                     clip.AttackEndFrame = BassSustainStretch.FindAttackEnd(clip.Samples, _format);
                     levels[index] = Level(clip);
@@ -374,6 +384,7 @@ namespace YARG.Audio.BASS
                 return false;
             }
 
+            LogAttacks(clips.ConvertAll(entry => entry.Clip), onsetOffsets);
             var clean = new List<(BassStemClip Clip, int Note, float Score, bool Bent)>();
             var anchors = new List<(double SongSeconds, int Note, int Fret)>();
             for (int index = 0; index < clips.Count; index++)
@@ -393,7 +404,8 @@ namespace YARG.Audio.BASS
                     && pitch.Spread <= PITCH_MAX_SPREAD_CENTS)
                 {
                     float score = (float) (pitch.Voiced * Math.Min(pitch.Seconds, 1.0)
-                        / (1 + pitch.Spread / PITCH_MAX_SPREAD_CENTS));
+                        / (1 + pitch.Spread / PITCH_MAX_SPREAD_CENTS)
+                        * (1 + Math.Min(clip.PickStrength / STRONG_PICK_RATIO, 1)));
                     clip.PitchHz = pitch.Hz;
                     clean.Add((clip, pitch.Note, score, false));
                 }
@@ -896,13 +908,10 @@ namespace YARG.Audio.BASS
         private void BakeSustainBodies(BassStemSoloSeeds job, ParallelOptions options)
         {
             var ladder = job.Ladder;
-            var random = new Random();
-            var seeds = new int[ladder.Count];
             var bends = new int[ladder.Count];
             var playable = new bool[ladder.Count];
-            for (int index = 0; index < seeds.Length; index++)
+            for (int index = 0; index < ladder.Count; index++)
             {
-                seeds[index] = random.Next();
                 bends[index] = job.WhammyBend(ladder[index]);
                 playable[index] = job.IsPlayableRung(index);
             }
@@ -915,7 +924,6 @@ namespace YARG.Audio.BASS
                     if (render != null && playable[index])
                     {
                         var clip = ladder[index];
-                        clip.Vibrato = BassSustainBodies.RenderVibrato(clip, render, _format, seeds[index]);
                         clip.Bent = BassSustainBodies.RenderBent(clip, render, _format, bends[index]);
                         clip.BendSemitones = bends[index];
                     }
@@ -923,10 +931,22 @@ namespace YARG.Audio.BASS
                     return render;
                 },
                 render => render?.Dispose());
-            int baked = ladder.FindAll(clip => clip.Vibrato != null && clip.Bent != null).Count;
+            int baked = ladder.FindAll(clip => clip.Bent != null).Count;
             int playableCount = Array.FindAll(playable, value => value).Length;
             YargLogger.LogFormatInfo<int, int, long>("[SoloSustain] {0} of {1} playable ladder clips baked in {2} ms",
                 baked, playableCount, stopwatch.ElapsedMilliseconds);
+        }
+
+        private static void LogAttacks(List<BassStemClip> clips, double[] onsetOffsets)
+        {
+            var offsets = Array.FindAll(onsetOffsets, offset => !double.IsNaN(offset));
+            var strengths = clips.ConvertAll(clip => clip.PickStrength);
+            Array.Sort(offsets);
+            strengths.Sort();
+            YargLogger.LogFormatInfo("[SoloAttack] {0} of {1} onsets found, median chart offset {2} ms, median pick strength {3}",
+                offsets.Length, clips.Count,
+                offsets.Length > 0 ? Math.Round(offsets[offsets.Length / 2], 1) : double.NaN,
+                strengths.Count > 0 ? Math.Round(strengths[strengths.Count / 2], 2) : double.NaN);
         }
 
         private void MatchLevels(List<BassStemClip> ladder, double soloLevel)

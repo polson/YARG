@@ -22,7 +22,7 @@ namespace YARG.Audio.BASS
         }
 
         internal static float[]? Shift(float[] source, int channels, int frameCount, double periodFrames,
-            int attackEndFrame, Func<double, double> factorAt)
+            int attackEndFrame, int dryFrames, Func<double, double> factorAt)
         {
             int sourceFrames = source.Length / channels;
             if (frameCount <= 0 || periodFrames < 2 || sourceFrames < periodFrames * MIN_MARKS)
@@ -81,7 +81,23 @@ namespace YARG.Audio.BASS
             }
 
             MatchLevel(source, output, Math.Min(frameCount, sourceFrames) * channels);
+            KeepDryPick(source, output, channels, Math.Min(dryFrames, Math.Min(frameCount, sourceFrames)));
             return output;
+        }
+
+        private static void KeepDryPick(float[] source, float[] output, int channels, int dryFrames)
+        {
+            int fadeFrames = dryFrames / 2;
+            int solidFrames = dryFrames - fadeFrames;
+            for (int frame = 0; frame < dryFrames; frame++)
+            {
+                float blend = frame < solidFrames ? 0 : (float) (frame - solidFrames + 1) / (fadeFrames + 1);
+                for (int channel = 0; channel < channels; channel++)
+                {
+                    int index = frame * channels + channel;
+                    output[index] = source[index] * (1 - blend) + output[index] * blend;
+                }
+            }
         }
 
         private static void MatchLevel(float[] source, float[] output, int sampleCount)

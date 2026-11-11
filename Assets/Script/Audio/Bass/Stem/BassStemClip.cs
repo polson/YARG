@@ -14,6 +14,7 @@ namespace YARG.Audio.BASS
         private const double BLEED_GUARD_SECONDS   = 0.03;
         private const double MIN_CLEAN_SECONDS     = 0.025;
         private const double SHORT_BODY_SECONDS    = 0.1;
+        private const double DRY_PICK_SECONDS      = 0.012;
 
         public double  SongSeconds;
         public long    StartFrame;
@@ -27,9 +28,10 @@ namespace YARG.Audio.BASS
         public int     LoopEndFrame;
         public int     LoopFadeFrames;
         public float[] LoopTail = Array.Empty<float>();
-        public BassStemClip? Vibrato;
         public BassStemClip? Bent;
         public int     BendSemitones;
+        public int     ChartFrame;
+        public double  PickStrength;
 
         public bool HasLoop => LoopEndFrame > LoopStartFrame;
 
@@ -41,6 +43,26 @@ namespace YARG.Audio.BASS
         public static int FramesFor(BassStemFormat format, double seconds)
         {
             return (int) Math.Min(Math.Round(seconds * format.Frequency), MaxFrames(format));
+        }
+
+        public bool AlignToOnset(BassStemFormat format, out int offsetFrames)
+        {
+            int onset = BassPickAttack.FindOnset(Samples, format, ChartFrame);
+            int start = Math.Min(onset >= 0 ? onset : ChartFrame, FrameCount - 1);
+            offsetFrames = start - ChartFrame;
+            if (start > 0)
+            {
+                int channels = format.Channels;
+                var samples = new float[(FrameCount - start) * channels];
+                Array.Copy(Samples, start * channels, samples, 0, samples.Length);
+                Samples = samples;
+                FrameCount -= start;
+                StartFrame += start;
+            }
+
+            ChartFrame = 0;
+            PickStrength = onset >= 0 ? BassPickAttack.Strength(Samples, format, onsetFrame: 0) : 0;
+            return onset >= 0;
         }
 
         public void TrimToCleanEnd(BassStemFormat format)
@@ -163,7 +185,7 @@ namespace YARG.Audio.BASS
             }
 
             var samples = BassPsola.Shift(Samples, format.Channels, endFrame, format.Frequency / PitchHz,
-                AttackEndFrame, _ => factor);
+                AttackEndFrame, format.FramesFor(DRY_PICK_SECONDS), _ => factor);
             return samples == null
                 ? null
                 : WithRetunedSamples(samples, endFrame, IdentityMap(endFrame), endFrame, targetHz, format);
