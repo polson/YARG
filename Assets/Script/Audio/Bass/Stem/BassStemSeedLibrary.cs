@@ -43,6 +43,7 @@ namespace YARG.Audio.BASS
         private const float  BEND_MIN_CENTS                 = 30f;
         private const float  BEND_MAX_CENTS                 = 400f;
         private const double DONOR_PERCENTILE               = 0.9;
+        private const double MIN_READABLE_SHARE             = 0.05;
 
 
 
@@ -386,6 +387,12 @@ namespace YARG.Audio.BASS
 
             var seedClips = clips.ConvertAll(entry => entry.Clip);
             LogAttacks(seedClips, onsetOffsets);
+            if (!HasReadablePitches(clips, pitches))
+            {
+                job.ByKey.Clear();
+                return true;
+            }
+
             var clean = new List<(BassStemClip Clip, int Note, float Score, bool Bent)>();
             var anchors = new List<(double SongSeconds, int Note, int Fret)>();
             for (int index = 0; index < clips.Count; index++)
@@ -937,6 +944,36 @@ namespace YARG.Audio.BASS
             int playableCount = Array.FindAll(playable, value => value).Length;
             YargLogger.LogFormatInfo<int, int, long>("[SoloSustain] {0} of {1} playable ladder clips baked in {2} ms",
                 baked, playableCount, stopwatch.ElapsedMilliseconds);
+        }
+
+        private static bool HasReadablePitches(List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,
+            (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)?[] pitches)
+        {
+            int singles = 0;
+            int readable = 0;
+            for (int index = 0; index < clips.Count; index++)
+            {
+                if (!clips[index].SingleNote)
+                {
+                    continue;
+                }
+
+                singles++;
+                if (pitches[index] is { } pitch && pitch.Voiced >= ANCHOR_MIN_VOICED)
+                {
+                    readable++;
+                }
+            }
+
+            if (singles == 0 || readable >= singles * MIN_READABLE_SHARE)
+            {
+                return true;
+            }
+
+            YargLogger.LogFormatInfo<int, int>(
+                "[SoloPitch] only {0} of {1} single notes have a readable pitch, leaving this solo to the stem",
+                readable, singles);
+            return false;
         }
 
         private void BorrowPick(List<BassStemClip> clips)
