@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using YARG.Audio.BASS.Effects;
+using YARG.Core.Engine.Guitar;
 using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
@@ -13,11 +14,17 @@ namespace YARG.Audio.BASS
         private static readonly int[] FRET_KEYS = { 1, 2, 4, 8, 16 };
         private static readonly int[] ROOT_OFFSETS = { 0, -1, 1 };
         private static readonly int[] COLOR_OFFSETS = { 0, -1, 1, -2, 2 };
+        private static readonly int[] MINOR_PENTATONIC = { 0, 3, 5, 7, 10 };
+        private static readonly int[] MAJOR_PENTATONIC = { 0, 2, 4, 7, 9 };
 
         private const int FIFTH_SEMITONES      = 7;
         private const int FOURTH_SEMITONES     = 5;
         private const int OCTAVE_SEMITONES     = 12;
         private const int FULL_CHORD_FRETS     = 3;
+        private const int PITCH_CLASSES        = 12;
+
+        private const double MIN_COLOR_SHARE   = 0.03;
+        private const int    MAX_COLOR_NOTES   = 2;
 
         private const int    MAX_WHAMMY_BEND   = 4;
         private const int    DEFAULT_WHAMMY    = 2;
@@ -99,7 +106,7 @@ namespace YARG.Audio.BASS
             var scale = PentatonicScale();
             for (int semitones = 1; semitones <= MAX_WHAMMY_BEND; semitones++)
             {
-                if (scale[BassSoloHarmony.PitchClass(clip.Note + semitones)])
+                if (scale[PitchClass(clip.Note + semitones)])
                 {
                     return semitones;
                 }
@@ -155,6 +162,68 @@ namespace YARG.Audio.BASS
             return true;
         }
 
+        public bool HasClip(int key)
+        {
+            if (key == GuitarEngine.OPEN_MASK)
+            {
+                return TryGetAnyClip(out _);
+            }
+
+            for (int fret = 1; fret <= key; fret <<= 1)
+            {
+                if ((key & fret) != 0 && TryGetClip(fret, out _))
+                {
+                    return true;
+                }
+            }
+
+            return TryGetClip(key, out _) || TryGetAnyClip(out _);
+        }
+
+        public bool TryPickClip(int key, out BassStemClip clip)
+        {
+            if (key == GuitarEngine.OPEN_MASK)
+            {
+                return TryGetRandomFretClip(out clip) || TryGetAnyClip(out clip);
+            }
+
+            if (TryTakeClip(key, out clip))
+            {
+                return true;
+            }
+
+            for (int fret = 1; fret <= key; fret <<= 1)
+            {
+                if ((key & fret) != 0 && TryGetClip(fret, out clip))
+                {
+                    return true;
+                }
+            }
+
+            return TryGetAnyClip(out clip);
+        }
+
+        private bool TryGetRandomFretClip(out BassStemClip clip)
+        {
+            clip = null!;
+            int availableFrets = 0;
+            for (int fretMask = 1; fretMask < GuitarEngine.OPEN_MASK; fretMask <<= 1)
+            {
+                if (!TryGetClip(fretMask, out var fretClip))
+                {
+                    continue;
+                }
+
+                availableFrets++;
+                if (_random.Next(availableFrets) == 0)
+                {
+                    clip = fretClip;
+                }
+            }
+
+            return availableFrets > 0;
+        }
+
         public bool TryGetChordClips(int fretMask, List<BassStemClip> clips)
         {
             clips.Clear();
@@ -198,7 +267,7 @@ namespace YARG.Audio.BASS
 
         private bool InScale(int note)
         {
-            int pitchClass = BassSoloHarmony.PitchClass(note);
+            int pitchClass = PitchClass(note);
             return PentatonicScale()[pitchClass] || ColorScale()?[pitchClass] == true;
         }
 
@@ -394,7 +463,7 @@ namespace YARG.Audio.BASS
             foreach (int offset in ROOT_OFFSETS)
             {
                 int start = target + offset;
-                if (start >= 0 && start <= lastStart && BassSoloHarmony.PitchClass(Ladder[rungs[start]].Note) == _root)
+                if (start >= 0 && start <= lastStart && PitchClass(Ladder[rungs[start]].Note) == _root)
                 {
                     return start;
                 }
@@ -422,7 +491,7 @@ namespace YARG.Audio.BASS
             var pentatonic = PentatonicScale();
             for (int fret = 0; fret < FRET_COUNT; fret++)
             {
-                if (!pentatonic[BassSoloHarmony.PitchClass(Ladder[rungs[start + fret]].Note)])
+                if (!pentatonic[PitchClass(Ladder[rungs[start + fret]].Note)])
                 {
                     return true;
                 }
@@ -486,10 +555,10 @@ namespace YARG.Audio.BASS
             var pentatonic = PentatonicScale();
             if (_root >= 0)
             {
-                for (int pitchClass = 0; pitchClass < BassSoloHarmony.PITCH_CLASSES; pitchClass++)
+                for (int pitchClass = 0; pitchClass < PITCH_CLASSES; pitchClass++)
                 {
                     bool isColor = colorScale[pitchClass] && !pentatonic[pitchClass];
-                    if (isColor && BassSoloHarmony.PitchClass(pitchClass - _root) == 1)
+                    if (isColor && PitchClass(pitchClass - _root) == 1)
                     {
                         return false;
                     }
@@ -502,13 +571,59 @@ namespace YARG.Audio.BASS
 
         private bool[]? ColorScale()
         {
-            if (!_colorChecked)
+            if (_colorChecked)
             {
-                _colorChecked = true;
-                _colorScale = BassSoloHarmony.ColorScale(Anchors, PentatonicScale());
+                return _colorScale;
             }
 
-            return _colorScale;
+            _colorChecked = true;
+            var pentatonic = PentatonicScale();
+            var weights = new int[PITCH_CLASSES];
+            foreach (var (_, note) in Anchors)
+            {
+                weights[PitchClass(note)]++;
+            }
+
+            var outside = new List<int>();
+            for (int pitchClass = 0; pitchClass < PITCH_CLASSES; pitchClass++)
+            {
+                if (!pentatonic[pitchClass] && weights[pitchClass] >= Anchors.Count * MIN_COLOR_SHARE && weights[pitchClass] > 0)
+                {
+                    outside.Add(pitchClass);
+                }
+            }
+
+            outside.Sort((left, right) => weights[right].CompareTo(weights[left]));
+            var colors = new bool[PITCH_CLASSES];
+            int added = 0;
+            foreach (int pitchClass in outside)
+            {
+                if (added == MAX_COLOR_NOTES)
+                {
+                    break;
+                }
+
+                if (colors[PitchClass(pitchClass + 1)] || colors[PitchClass(pitchClass - 1)])
+                {
+                    continue;
+                }
+
+                colors[pitchClass] = true;
+                added++;
+            }
+
+            if (added == 0)
+            {
+                return null;
+            }
+
+            for (int pitchClass = 0; pitchClass < PITCH_CLASSES; pitchClass++)
+            {
+                colors[pitchClass] |= pentatonic[pitchClass];
+            }
+
+            _colorScale = colors;
+            return colors;
         }
 
         private List<int>? ColorRungs()
@@ -577,8 +692,59 @@ namespace YARG.Audio.BASS
                 return _pentatonicScale;
             }
 
-            _pentatonicScale = BassSoloHarmony.PentatonicScale(Anchors);
-            return _pentatonicScale;
+            var weights = new double[PITCH_CLASSES];
+            foreach (var (_, note) in Anchors)
+            {
+                weights[PitchClass(note)]++;
+            }
+
+            int bestRoot = 0;
+            bool bestIsMinor = true;
+            double bestScore = -1;
+
+            for (int root = 0; root < PITCH_CLASSES; root++)
+            {
+                double minorScore = 0;
+                foreach (int interval in MINOR_PENTATONIC)
+                {
+                    minorScore += weights[(root + interval) % PITCH_CLASSES];
+                }
+
+                if (minorScore > bestScore)
+                {
+                    bestScore = minorScore;
+                    bestRoot = root;
+                    bestIsMinor = true;
+                }
+
+                double majorScore = 0;
+                foreach (int interval in MAJOR_PENTATONIC)
+                {
+                    majorScore += weights[(root + interval) % PITCH_CLASSES];
+                }
+
+                if (majorScore > bestScore)
+                {
+                    bestScore = majorScore;
+                    bestRoot = root;
+                    bestIsMinor = false;
+                }
+            }
+
+            var scale = new bool[PITCH_CLASSES];
+            int[] intervals = bestIsMinor ? MINOR_PENTATONIC : MAJOR_PENTATONIC;
+            foreach (int interval in intervals)
+            {
+                scale[(bestRoot + interval) % PITCH_CLASSES] = true;
+            }
+
+            _pentatonicScale = scale;
+            return scale;
+        }
+
+        private static int PitchClass(int note)
+        {
+            return (note % PITCH_CLASSES + PITCH_CLASSES) % PITCH_CLASSES;
         }
 
         private void CollectRungs(List<int> rungs, bool[] good)
@@ -586,7 +752,7 @@ namespace YARG.Audio.BASS
             rungs.Clear();
             for (int index = 0; index < Ladder.Count; index++)
             {
-                if (good[BassSoloHarmony.PitchClass(Ladder[index].Note)])
+                if (good[PitchClass(Ladder[index].Note)])
                 {
                     rungs.Add(index);
                 }

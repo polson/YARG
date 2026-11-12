@@ -221,7 +221,7 @@ namespace YARG.Gameplay
             {
                 if (_mixer.Channels[index] is BassStemChannel channel)
                 {
-                    channel.StartPrerender();
+                    channel.Replay?.StartPrerender();
                 }
             }
         }
@@ -232,7 +232,7 @@ namespace YARG.Gameplay
             {
                 if (_mixer.Channels[index] is BassStemChannel channel)
                 {
-                    channel.PumpReplay();
+                    channel.Replay?.Pump();
                 }
             }
         }
@@ -244,17 +244,16 @@ namespace YARG.Gameplay
                 return null;
             }
 
-            return GetStemChannel(stem)?.CreateSoundboard(() => _stemStates[stem].Volume);
-        }
-
-        internal BassChordTrack CreateChordTrack()
-        {
-            if (_backgroundStem == SongStem.Bass)
+            var replay = GetStemChannel(stem)?.Replay;
+            if (replay == null)
             {
                 return null;
             }
 
-            return GetStemChannel(SongStem.Bass)?.CreateChordTrack();
+            var chords = stem == SongStem.Bass || _backgroundStem == SongStem.Bass
+                ? null
+                : GetStemChannel(SongStem.Bass)?.Replay?.CreateChordTrack();
+            return replay.CreateSoundboard(() => _stemStates[stem].Volume, chords);
         }
 
         private BassStemChannel GetStemChannel(SongStem stem)

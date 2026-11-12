@@ -6,8 +6,6 @@ namespace YARG.Audio.BASS
 {
     internal static class BassPsola
     {
-        internal static bool Enabled = true;
-
         private const double MAX_SHIFT_SEMITONES = 7;
         private const double MARK_SEARCH_RATIO   = 0.15;
         private const double MIN_MARK_MATCH      = 0.5;

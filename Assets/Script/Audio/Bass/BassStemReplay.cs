@@ -5,7 +5,6 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using ManagedBass;
-using ManagedBass.Fx;
 using YARG.Core.Audio;
 using YARG.Core.Logging;
 using YARG.Settings;
@@ -19,7 +18,6 @@ namespace YARG.Audio.BASS
         private const int FLOAT_BYTES                  = sizeof(float);
 
         private readonly AudioManager               _manager;
-        private readonly PitchShiftParametersStruct _pitchParams;
         private readonly Func<double>               _normalizationGain;
         private readonly List<BassStemSoundboard>   _soundboards = new();
         private readonly List<BassChordTrack>       _chordTracks = new();
@@ -30,19 +28,17 @@ namespace YARG.Audio.BASS
         private          CancellationTokenSource?   _prerenderCts;
         private          Task                       _prerenderTask = Task.CompletedTask;
 
-        public BassStemReplay(AudioManager manager, int stream, PitchShiftParametersStruct pitchParams, Func<double> normalizationGain)
+        public BassStemReplay(AudioManager manager, int stream, Func<double> normalizationGain)
         {
             Bass.ChannelGetInfo(stream, out ChannelInfo info);
             _manager = manager;
-            _pitchParams = pitchParams;
             _normalizationGain = normalizationGain;
             _format = new BassStemFormat(frequency: info.Frequency, channels: info.Channels);
         }
 
-        public BassStemSoundboard CreateSoundboard(Func<double> stemVolume)
+        public BassStemSoundboard CreateSoundboard(Func<double> stemVolume, BassChordTrack? chords)
         {
-            var soundboard = new BassStemSoundboard(_lock, _manager, _format,
-                () => stemVolume() * _normalizationGain());
+            var soundboard = new BassStemSoundboard(_manager, _format, () => stemVolume() * _normalizationGain(), chords);
             lock (_lock)
             {
                 _soundboards.Add(soundboard);

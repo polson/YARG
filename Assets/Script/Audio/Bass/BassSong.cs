@@ -381,7 +381,7 @@ namespace YARG.Audio.BASS
                         .Where(info => info.Stem == stem.Stem && info.Indices != null)
                         .SelectMany(info => info.Indices!)
                         .ToArray();
-                    channel.SetPrerenderSource(prerenderBytes, indices);
+                    channel.Replay?.SetPrerenderSource(prerenderBytes, indices);
                 }
             }
 

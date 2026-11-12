@@ -259,7 +259,6 @@ namespace YARG.Gameplay.Player
                 return;
             }
 
-            soundboard.SetChordTrack(_stem == SongStem.Bass ? null : GameManager.CreateChordTrack());
             _freestyle = new FreestyleSolo(soundboard, () => Engine, SetStemMuteState, PlayFreestyleHit,
                 fretRowMask: AllFretRows, maxFretIndex: FretRowCount - 1,
                 hopoLeniency: EngineParams.HopoLeniency,

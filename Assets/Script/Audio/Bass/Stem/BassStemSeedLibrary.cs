@@ -59,28 +59,30 @@ namespace YARG.Audio.BASS
 
 
 
-        // Lock order: the stem lock (BassStemReplay.Lock) is always taken before this one.
+        // Lock order: the replay lock or a soundboard lock is always taken before this one.
         private readonly object                  _lock = new();
         private readonly BassStemFormat          _format;
-        private readonly Random                  _random = new();
         private          List<BassStemSoloSeeds> _requests  = new();
         private          List<BassStemSoloSeeds> _pending   = new();
         private          List<BassStemSoloSeeds> _published = new();
-        private          BassStemSoloSeeds?      _selected;
-        private          BassChordTrack?         _chords;
+        private readonly BassChordTrack?         _chords;
         private          double                  _requestedSoloTime;
-        private          Func<BassSynthGuitar?>? _loadSynth;
+        private readonly Func<BassSynthGuitar?>? _loadSynth;
         private          BassSynthGuitar?        _synth;
-        private          BassCabinetSet?         _cabinets;
+        private readonly BassCabinetSet?         _cabinets;
 
-        public BassStemSeedLibrary(BassStemFormat format)
+        public BassStemSeedLibrary(BassStemFormat format, BassChordTrack? chords, Func<BassSynthGuitar?>? loadSynth,
+            BassCabinetSet? cabinets)
         {
             _format = format;
+            _chords = chords;
+            _loadSynth = loadSynth;
+            _cabinets = cabinets;
         }
 
-        public void Request(IReadOnlyList<SoloSection> phrases, List<GuitarNote> notes, Func<double, double> playbackTime,
-            int lowestNote)
+        public void Request(List<GuitarNote> notes, Func<double, double> playbackTime, int lowestNote)
         {
+            var phrases = SoloPhrases(notes);
             var requests = new List<BassStemSoloSeeds>(phrases.Count);
             foreach (var phrase in phrases)
             {
@@ -104,73 +106,51 @@ namespace YARG.Audio.BASS
                 requests.Add(new BassStemSoloSeeds(seedNotes[0].SongSeconds, seedNotes[^1].SongSeconds, seedNotes, lowestNote));
             }
 
-            BassChordTrack? chords;
             lock (_lock)
             {
                 _requests = requests;
-                chords = _chords;
             }
 
-            chords?.Request(requests.ConvertAll(request => (request.StartTime, request.EndTime)), playbackTime);
+            _chords?.Request(requests.ConvertAll(request => (request.StartTime, request.EndTime)), playbackTime);
         }
 
-        public void SetChordTrack(BassChordTrack? chords)
+        private static List<SoloSection> SoloPhrases(List<GuitarNote> notes)
         {
-            lock (_lock)
+            var phrases = new List<SoloSection>();
+            int start = -1;
+            for (int index = 0; index < notes.Count; index++)
             {
-                _chords = chords;
-            }
-        }
-
-        public int WhammyBend(BassStemClip clip)
-        {
-            lock (_lock)
-            {
-                return _selected?.WhammyBend(clip) ?? 0;
-            }
-        }
-
-        public void UseSynth(Func<BassSynthGuitar?> load, BassCabinetSet? cabinets)
-        {
-            lock (_lock)
-            {
-                _loadSynth = load;
-                _cabinets = cabinets;
-            }
-        }
-
-        public double SynthGain
-        {
-            get
-            {
-                lock (_lock)
+                var note = notes[index];
+                if (!note.IsSolo)
                 {
-                    return _selected?.SynthGain ?? 0;
+                    start = -1;
+                    continue;
+                }
+
+                if (start < 0)
+                {
+                    start = index;
+                }
+
+                bool ends = note.IsSoloEnd || index + 1 == notes.Count || !notes[index + 1].IsSolo;
+                if (ends)
+                {
+                    phrases.Add(new SoloSection(notes[start].Tick, note.Tick, index - start + 1));
+                    start = -1;
                 }
             }
+
+            return phrases;
         }
 
-        public BassLeadAmpTone Tone
-        {
-            get
-            {
-                lock (_lock)
-                {
-                    return _selected?.Tone ?? BassLeadAmpTone.Default;
-                }
-            }
-        }
-
-        public void Select(double soloTime, double songTime)
+        public BassStemSoloSeeds? Select(double soloTime, double songTime)
         {
             lock (_lock)
             {
                 _requestedSoloTime = soloTime;
-                _selected = Find(soloTime);
-                if (_selected != null)
-                {
-                    _selected.Select(songTime, _chords);
-                }
+                var seeds = Find(soloTime);
+                seeds?.Select(songTime, _chords);
+                return seeds;
             }
         }
 
@@ -181,85 +161,6 @@ namespace YARG.Audio.BASS
                 _requests = new List<BassStemSoloSeeds>();
                 _pending = new List<BassStemSoloSeeds>();
                 _published.Clear();
-                _selected = null;
-            }
-        }
-
-        public bool HasSeeds(double soloTime)
-        {
-            lock (_lock)
-            {
-                var seeds = Find(soloTime);
-                return seeds != null && !seeds.IsEmpty;
-            }
-        }
-
-        public bool HasClip(int key)
-        {
-            lock (_lock)
-            {
-                var selected = _selected;
-                if (selected == null)
-                {
-                    return false;
-                }
-
-                if (key == GuitarEngine.OPEN_MASK)
-                {
-                    return selected.TryGetAnyClip(out _);
-                }
-
-                for (int fret = 1; fret <= key; fret <<= 1)
-                {
-                    if ((key & fret) != 0 && selected.TryGetClip(fret, out _))
-                    {
-                        return true;
-                    }
-                }
-
-                return selected.TryGetClip(key, out _) || selected.TryGetAnyClip(out _);
-            }
-        }
-
-        public bool TryGetClip(int key, out BassStemClip clip)
-        {
-            lock (_lock)
-            {
-                var selected = _selected;
-                if (selected == null)
-                {
-                    clip = null!;
-                    return false;
-                }
-
-                if (key == GuitarEngine.OPEN_MASK)
-                {
-                    return TryGetRandomFretClip(selected, out clip) || selected.TryGetAnyClip(out clip);
-                }
-
-                if (selected.TryTakeClip(key, out clip))
-                {
-                    return true;
-                }
-
-                for (int fret = 1; fret <= key; fret <<= 1)
-                {
-                    if ((key & fret) != 0 && selected.TryGetClip(fret, out clip))
-                    {
-                        return true;
-                    }
-                }
-
-                return selected.TryGetAnyClip(out clip);
-            }
-        }
-
-        public bool TryGetChordClips(int fretMask, List<BassStemClip> clips)
-        {
-            lock (_lock)
-            {
-                clips.Clear();
-                return _selected != null && _selected.TryGetChordClips(fretMask, clips);
             }
         }
 
@@ -274,20 +175,17 @@ namespace YARG.Audio.BASS
         public void Publish(CancellationToken token)
         {
             List<BassStemSoloSeeds> pending;
-            Func<BassSynthGuitar?>? loadSynth;
             lock (_lock)
             {
                 pending = _pending;
                 _pending = new List<BassStemSoloSeeds>();
                 _published.Clear();
-                _selected = null;
-                loadSynth = _loadSynth;
             }
 
-            if (loadSynth != null && _synth == null)
+            if (_loadSynth != null && _synth == null)
             {
                 var stopwatch = Stopwatch.StartNew();
-                _synth = loadSynth();
+                _synth = _loadSynth();
                 YargLogger.LogFormatInfo("[SoloSynth] guitar samples {0} in {1} ms",
                     _synth != null ? "loaded" : "failed to load", stopwatch.ElapsedMilliseconds);
             }
@@ -1148,13 +1046,7 @@ namespace YARG.Audio.BASS
                 noteFrames.Add((uint) frames);
             }
 
-            BassCabinetSet? cabinets;
-            lock (_lock)
-            {
-                cabinets = _cabinets;
-            }
-
-            var tone = BassLeadAmpDsp.Match(_format.Frequency, cabinets, stem.ToArray(), di.ToArray(),
+            var tone = BassLeadAmpDsp.Match(_format.Frequency, _cabinets, stem.ToArray(), di.ToArray(),
                 noteFrames.ToArray());
             YargLogger.LogFormatInfo("[SoloTone] {0} on {1} notes", tone != null ? "matched" : "skipped", picked.Count);
             return tone;
@@ -1196,13 +1088,7 @@ namespace YARG.Audio.BASS
 
         private void LogTone(BassLeadAmpTone tone)
         {
-            BassCabinetSet? cabinets;
-            lock (_lock)
-            {
-                cabinets = _cabinets;
-            }
-
-            string cabinet = cabinets != null && tone.Cabinet < cabinets.Count ? cabinets.Names[tone.Cabinet] : "none";
+            string cabinet = _cabinets != null && tone.Cabinet < _cabinets.Count ? _cabinets.Names[tone.Cabinet] : "none";
             YargLogger.LogFormatInfo(
                 "[SoloTone] cabinet {0}, drive {1}, bands {2} dB, wah {3}, echo {4}, reverb wet {5} room {6}, level gain {7}, reverb level gain {8}",
                 cabinet, Math.Round(tone.Drive, 2),
@@ -1216,20 +1102,14 @@ namespace YARG.Audio.BASS
         private void AddChordAnchors(List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,
             List<(double SongSeconds, int Note, int Fret)> anchors)
         {
-            BassChordTrack? chords;
-            lock (_lock)
-            {
-                chords = _chords;
-            }
-
-            if (chords == null)
+            if (_chords == null)
             {
                 return;
             }
 
             foreach (var (clip, singleNote, fret) in clips)
             {
-                int root = singleNote ? chords.RootAt(clip.SongSeconds) : -1;
+                int root = singleNote ? _chords.RootAt(clip.SongSeconds) : -1;
                 if (root >= 0)
                 {
                     anchors.Add((clip.SongSeconds, CHORD_ANCHOR_NOTE + root, fret));
@@ -1243,7 +1123,7 @@ namespace YARG.Audio.BASS
         {
             int endFrame = curves[sources.IndexOf(source)].EndFrame;
             cut = endFrame < source.FrameCount;
-            var clip = BassPsola.Enabled ? source.PsolaRetuned(endFrame, targetHz, _format) : null;
+            var clip = source.PsolaRetuned(endFrame, targetHz, _format);
             method = "psola";
             if (clip == null && render != null)
             {
@@ -1567,27 +1447,6 @@ namespace YARG.Audio.BASS
             var job = queue[index];
             queue.RemoveAt(index);
             return job;
-        }
-
-        private bool TryGetRandomFretClip(BassStemSoloSeeds seeds, out BassStemClip clip)
-        {
-            clip = null!;
-            int availableFrets = 0;
-            for (int fretMask = 1; fretMask < GuitarEngine.OPEN_MASK; fretMask <<= 1)
-            {
-                if (!seeds.TryGetClip(fretMask, out var fretClip))
-                {
-                    continue;
-                }
-
-                availableFrets++;
-                if (_random.Next(availableFrets) == 0)
-                {
-                    clip = fretClip;
-                }
-            }
-
-            return availableFrets > 0;
         }
     }
 }

@@ -17,7 +17,6 @@ namespace YARG.Audio.BASS
         private          StreamHandle               _reverbHandles;
         private          PitchShiftParametersStruct _pitchParams;
         private          IBassReverbDsp              _reverbDsp;
-        private readonly BassStemReplay              _replay;
 
         private          double _volume;
         private          bool   _isReverbing;
@@ -30,8 +29,8 @@ namespace YARG.Audio.BASS
             _streamHandles = streamHandles;
             _reverbHandles = reverbHandles;
             _pitchParams = pitchParams;
-            _replay = BassStemReplay.IsFreestyleStem(stem)
-                ? new BassStemReplay(manager, streamHandles.Stream, pitchParams, normalizationGain)
+            Replay = BassStemReplay.IsFreestyleStem(stem)
+                ? new BassStemReplay(manager, streamHandles.Stream, normalizationGain)
                 : null;
 
             _length = Bass.ChannelGetLength(_streamHandles.Stream);
@@ -55,30 +54,7 @@ namespace YARG.Audio.BASS
             ApplyPitchShift(shift);
         }
 
-        internal BassStemSoundboard CreateSoundboard(Func<double> stemVolume)
-        {
-            return _replay?.CreateSoundboard(stemVolume);
-        }
-
-        internal BassChordTrack CreateChordTrack()
-        {
-            return _replay?.CreateChordTrack();
-        }
-
-        internal void SetPrerenderSource(byte[] bytes, int[] indices)
-        {
-            _replay?.SetPrerenderSource(bytes, indices);
-        }
-
-        internal void StartPrerender()
-        {
-            _replay?.StartPrerender();
-        }
-
-        internal void PumpReplay()
-        {
-            _replay?.Pump();
-        }
+        internal BassStemReplay Replay { get; }
 
         private void ApplyPitchShift(float shift)
         {
@@ -139,7 +115,7 @@ namespace YARG.Audio.BASS
 
             // Publish after the mixer seek so the next DSP callback cannot retain pre-seek tail.
             _reverbDsp?.RequestReset();
-            _replay?.ResetAfterSeek();
+            Replay?.ResetAfterSeek();
         }
 
         protected override void SetVolume_Internal(double volume)
@@ -215,7 +191,7 @@ namespace YARG.Audio.BASS
 
         protected override void DisposeUnmanagedResources()
         {
-            _replay?.Dispose();
+            Replay?.Dispose();
             _reverbDsp?.Dispose();
             _reverbDsp = null;
         }

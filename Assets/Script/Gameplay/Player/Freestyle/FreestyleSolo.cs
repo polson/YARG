@@ -61,36 +61,7 @@ namespace YARG.Gameplay.Player
 
         public void RequestSeeds(List<GuitarNote> notes, Func<double, double> playbackTime)
         {
-            _soundboard.RequestSeeds(SoloPhrases(notes), notes, playbackTime, _lowestSeedNote);
-        }
-
-        private static List<SoloSection> SoloPhrases(List<GuitarNote> notes)
-        {
-            var phrases = new List<SoloSection>();
-            int start = -1;
-            for (int index = 0; index < notes.Count; index++)
-            {
-                var note = notes[index];
-                if (!note.IsSolo)
-                {
-                    start = -1;
-                    continue;
-                }
-
-                if (start < 0)
-                {
-                    start = index;
-                }
-
-                bool ends = note.IsSoloEnd || index + 1 == notes.Count || !notes[index + 1].IsSolo;
-                if (ends)
-                {
-                    phrases.Add(new SoloSection(notes[start].Tick, note.Tick, index - start + 1));
-                    start = -1;
-                }
-            }
-
-            return phrases;
+            _soundboard.RequestSeeds(notes, playbackTime, _lowestSeedNote);
         }
 
         public void ReleaseFrets(int fretMask)
@@ -172,8 +143,7 @@ namespace YARG.Gameplay.Player
                 sustainMask |= playMask == 0 ? GuitarEngine.OPEN_MASK : playMask;
             }
 
-            _soundboard.SelectSeedSet(soloTime, currentTime);
-            bool soloAudio = _soundboard.HasSeedSet(soloTime);
+            bool soloAudio = _soundboard.SelectSeedSet(soloTime, currentTime);
             _muted = soloAudio;
             _setStemMuted(soloAudio);
             _soundboard.SetHeldFrets(sustainMask);
