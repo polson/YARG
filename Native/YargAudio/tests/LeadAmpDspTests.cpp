@@ -245,11 +245,12 @@ struct Matched {
 };
 
 Matched match(float drive, const Tone& tone, int noteCount, float wahStartHz = 0.0f, float wahEndHz = 0.0f,
-    double rumble = 0.0, const std::vector<std::vector<float>>& cabinets = {}, int stemCabinet = 0) {
+    double rumble = 0.0, const std::vector<std::vector<float>>& cabinets = {}, int stemCabinet = 0,
+    int noteFrames = SAMPLE_RATE * 2 / 5) {
     std::vector<float> stem, di;
     std::vector<std::uint32_t> frames;
     for (int note = 0; note < noteCount; ++note) {
-        const auto played = pluck(196 * std::pow(2.0, note / 4.0), SAMPLE_RATE * 2 / 5);
+        const auto played = pluck(196 * std::pow(2.0, note / 4.0), noteFrames);
         auto heard = monoRender(played, drive, tone, wahStartHz, wahEndHz,
             cabinets.empty() ? nullptr : &cabinets[stemCabinet]);
         for (std::size_t frame = 0; frame < heard.size(); ++frame) {
@@ -456,6 +457,20 @@ void matchIgnoresLowBleed() {
     }
 }
 
+void matchWorksOnShortNotes() {
+    Tone tone{};
+    tone[6] = -6.0f;
+    tone[15] = 6.0f;
+    const auto matched = match(3.0f, tone, 8, 0.0f, 0.0f, 0.0, {}, 0, SAMPLE_RATE * 12 / 100);
+    REQUIRE(matched.result == YARG_AUDIO_OK);
+    REQUIRE(std::abs(std::log2(matched.drive / 3.0f)) < 1.0);
+    REQUIRE(matched.tone[15] - matched.tone[6] > 6.0f);
+
+    const auto wah = match(3.0f, {}, 8, 1800.0f, 500.0f, 0.0, {}, 0, SAMPLE_RATE * 12 / 100);
+    REQUIRE(wah.result == YARG_AUDIO_OK);
+    REQUIRE(wah.wahStartHz == 0.0f && wah.wahEndHz == 0.0f);
+}
+
 void matchNeedsEnoughNotes() {
     const auto matched = match(1.0f, {}, 2);
     REQUIRE(matched.result == YARG_AUDIO_ERROR_INVALID_STATE);
@@ -493,4 +508,5 @@ void runLeadAmpDspTests() {
     toneSwitchesCabinet();
     echoFollowsTheTone();
     matchPicksTheCabinet();
+    matchWorksOnShortNotes();
 }

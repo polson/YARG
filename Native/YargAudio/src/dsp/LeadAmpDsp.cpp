@@ -86,7 +86,7 @@ constexpr float MATCH_ATTACK_SECONDS = 0.05f;
 constexpr float MATCH_WINDOW_SECONDS = 0.005f;
 constexpr float MATCH_BODY_SECONDS = 0.08f;
 constexpr float MATCH_LEVEL_SECONDS = 0.3f;
-constexpr float MATCH_MIN_NOTE_SECONDS = 0.2f;
+constexpr float MATCH_MIN_NOTE_SECONDS = 0.1f;
 constexpr float MATCH_MAX_NOTE_SECONDS = 0.35f;
 constexpr int MATCH_MIN_NOTES = 3;
 constexpr int MATCH_TONE_PASSES = 24;
@@ -102,6 +102,7 @@ constexpr float WAH_EARLY_END_SECONDS = 0.08f;
 constexpr float WAH_LATE_START_SECONDS = 0.2f;
 constexpr double WAH_MIN_SWEEP_OCTAVES = 0.4;
 constexpr int WAH_FIT_PASSES = 6;
+constexpr float WAH_MIN_NOTE_SECONDS = 0.25f;
 
 float logCosh(float value) noexcept {
     const float magnitude = std::abs(value);
@@ -933,14 +934,24 @@ int leadAmpMatch(float sampleRate, const Cabinet* cabinets, std::size_t cabinetC
         }
         const Cabinet* cabinet = cabinetCount > 0 ? &cabinets[chosen] : nullptr;
 
+        std::vector<MatchNote> wahNotes;
+        std::vector<std::vector<float>> wahStemNotes;
+        const auto wahFrames = static_cast<std::size_t>(WAH_MIN_NOTE_SECONDS * sampleRate);
+        for (std::size_t index = 0; index < notes.size(); ++index) {
+            if (notes[index].frames < wahFrames) continue;
+            wahNotes.push_back(notes[index]);
+            wahStemNotes.push_back(stemNotes[index]);
+        }
+
         float wahStart = 0.0f, wahEnd = 0.0f;
-        const auto stemSweeps = sweeps(stemNotes, sampleRate);
-        if (hasWah(stemSweeps, sweeps(render(notes, sampleRate, cabinet, fitted), sampleRate))) {
+        const auto stemSweeps = sweeps(wahStemNotes, sampleRate);
+        if (wahNotes.size() >= MATCH_MIN_NOTES
+            && hasWah(stemSweeps, sweeps(render(wahNotes, sampleRate, cabinet, fitted), sampleRate))) {
             const auto wanted = typical(stemSweeps);
             wahStart = wahHz(wanted.early);
             wahEnd = wahHz(wanted.late);
             for (int pass = 0; pass < WAH_FIT_PASSES; ++pass) {
-                const auto heard = typical(sweeps(render(notes, sampleRate, cabinet, fitted, wahStart, wahEnd),
+                const auto heard = typical(sweeps(render(wahNotes, sampleRate, cabinet, fitted, wahStart, wahEnd),
                     sampleRate));
                 wahStart = wahHz(std::log2(wahStart) + wanted.early - heard.early);
                 wahEnd = wahHz(std::log2(wahEnd) + wanted.late - heard.late);

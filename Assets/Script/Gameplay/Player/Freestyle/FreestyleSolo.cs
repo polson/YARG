@@ -15,7 +15,7 @@ namespace YARG.Gameplay.Player
     {
         private const double MUTE_LEAD_SECONDS = 0.1;
         private const double TAP_WINDOW_SECONDS = 0.25;
-        private const double STRUM_CLAIM_SECONDS = 0.25;
+        private const double STRUM_REPICK_SECONDS = 0.06;
 
         private readonly BassStemSoundboard _soundboard;
         private readonly Func<GuitarEngine> _currentEngine;
@@ -157,18 +157,13 @@ namespace YARG.Gameplay.Player
             int playMask = heldMask != 0 ? heldMask : tappedMask;
             bool fretInput = fretsChanged || tappedMask != 0;
             bool hammerOn = _phraseMask != 0 && fretInput && playMask != 0;
-            if (strummed && !hammerOn && _hopoLeniency.IsActive)
+            bool repick = strummed && playMask != 0 && playMask == _unpickedMask
+                && currentTime - _unpickedTime <= STRUM_REPICK_SECONDS * songSpeed;
+            if (strummed && !hammerOn && !repick && _hopoLeniency.IsActive)
             {
                 strummed = false;
                 _unpickedMask = 0;
                 _hopoLeniency.Reset();
-            }
-
-            if (strummed && !hammerOn && playMask != 0 && playMask == _unpickedMask
-                && currentTime - _unpickedTime <= STRUM_CLAIM_SECONDS * songSpeed)
-            {
-                strummed = false;
-                _unpickedMask = 0;
             }
 
             int sustainMask = heldMask | (_phraseFretless ? _phraseMask : 0);

@@ -52,7 +52,7 @@ namespace YARG.Audio.BASS
         private const int    CHORD_ANCHOR_NOTE              = 60;
         private const double SYNTH_NOTE_LEVEL               = 1.32;
         private const double DEFAULT_SOLO_LEVEL             = 0.1;
-        private const double TONE_MIN_NOTE_SECONDS          = 0.2;
+        private const double TONE_MIN_NOTE_SECONDS          = 0.1;
         private const double TONE_MAX_NOTE_SECONDS          = 0.35;
         private const int    MAX_TONE_NOTES                 = 8;
         private const double MAX_SPACE_SECONDS              = 40;
@@ -461,7 +461,7 @@ namespace YARG.Audio.BASS
             LogAttacks(seedClips, onsetOffsets);
             if (_synth != null)
             {
-                PrepareSynth(job, clips, pitches, levels, decays, onsetOffsets);
+                PrepareSynth(job, clips, pitches, levels, decays);
                 return true;
             }
 
@@ -1049,7 +1049,7 @@ namespace YARG.Audio.BASS
 
         private void PrepareSynth(BassStemSoloSeeds job, List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,
             (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)?[] pitches, double[] levels,
-            double[] decays, double[] onsetOffsets)
+            double[] decays)
         {
             var anchors = new List<(double SongSeconds, int Note, int Fret)>();
             var tunings = new List<double>();
@@ -1079,7 +1079,7 @@ namespace YARG.Audio.BASS
             var heard = Array.FindAll(levels, level => level > 0);
             Array.Sort(heard);
             double soloLevel = heard.Length > 0 ? heard[heard.Length / 2] : DEFAULT_SOLO_LEVEL;
-            job.Tone = MatchSpace(job, MatchTone(clips, pitches, onsetOffsets));
+            job.Tone = MatchSpace(job, MatchTone(clips, pitches));
             LogTone(job.Tone);
             job.SynthGain = soloLevel / SYNTH_NOTE_LEVEL * job.Tone.LevelGain;
             SetDecay(job, BassNoteDecay.Typical(decays));
@@ -1088,8 +1088,7 @@ namespace YARG.Audio.BASS
         }
 
         private BassLeadAmpTone MatchTone(List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,
-            (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)?[] pitches,
-            double[] onsetOffsets)
+            (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)?[] pitches)
         {
             int minFrames = _format.FramesFor(TONE_MIN_NOTE_SECONDS);
             var picked = new List<(BassStemClip Clip, double Hz)>();
@@ -1098,7 +1097,7 @@ namespace YARG.Audio.BASS
                 var clip = clips[index].Clip;
                 if (pitches[index] is not { } pitch || pitch.Bent || pitch.Voiced < PITCH_MIN_VOICED
                     || pitch.Note < BassSynthGuitar.LOWEST_NOTE || pitch.Note > BassSynthGuitar.HIGHEST_NOTE
-                    || double.IsNaN(onsetOffsets[index]) || clip.FrameCount < minFrames)
+                    || clip.FrameCount < minFrames)
                 {
                     continue;
                 }
@@ -1143,7 +1142,7 @@ namespace YARG.Audio.BASS
 
             var tone = BassLeadAmpDsp.Match(_format.Frequency, cabinets, stem.ToArray(), di.ToArray(),
                 noteFrames.ToArray());
-            YargLogger.LogFormatInfo("[SoloTone] matched on {0} notes", picked.Count);
+            YargLogger.LogFormatInfo("[SoloTone] {0} on {1} notes", tone != null ? "matched" : "skipped", picked.Count);
             return tone ?? BassLeadAmpTone.Default;
         }
 
