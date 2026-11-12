@@ -22,11 +22,11 @@ namespace YARG.Gameplay.Player
         private readonly Action<bool> _setStemMuted;
         private readonly Action<int> _onPlayed;
         private readonly int _fretRowMask;
-        private readonly int _lowestNote;
+        private readonly int _highestFretIndex;
         private EngineTimer _hopoLeniency;
 
         private bool _strumPending;
-        private bool _muted;
+        private bool _stemMutedBySolo;
         private int _tapMask;
         private int _phraseMask;
         private bool _phraseFretless;
@@ -36,14 +36,14 @@ namespace YARG.Gameplay.Player
         private double _lastHeldTime;
 
         public FreestyleSolo(BassStemSoundboard soundboard, Func<GuitarEngine> currentEngine, Action<bool> setStemMuted,
-            Action<int> onPlayed, int fretRowMask, double hopoLeniency, int lowestNote)
+            Action<int> onPlayed, int fretRowMask, double hopoLeniency)
         {
             _soundboard = soundboard;
             _currentEngine = currentEngine;
             _setStemMuted = setStemMuted;
             _onPlayed = onPlayed;
             _fretRowMask = fretRowMask;
-            _lowestNote = lowestNote;
+            _highestFretIndex = HighestFretBit(fretRowMask);
             _hopoLeniency = new EngineTimer("Freestyle HOPO Leniency", hopoLeniency);
         }
 
@@ -59,7 +59,7 @@ namespace YARG.Gameplay.Player
 
         public void RequestPhrases(List<GuitarNote> notes, Func<double, double> playbackTime)
         {
-            _soundboard.RequestPhrases(notes, playbackTime, _lowestNote);
+            _soundboard.RequestPhrases(notes, playbackTime);
         }
 
         public void ReleaseFrets(int fretMask)
@@ -81,9 +81,9 @@ namespace YARG.Gameplay.Player
         private void ClearInput()
         {
             _hopoLeniency.Reset();
-            if (_muted)
+            if (_stemMutedBySolo)
             {
-                _muted = false;
+                _stemMutedBySolo = false;
                 _setStemMuted(false);
             }
 
@@ -111,8 +111,8 @@ namespace YARG.Gameplay.Player
                 _hopoLeniency.Reset();
             }
 
-            double soloTime;
-            if (!TryGetSoloTime(engine, currentTime, isSeekingReplay, out soloTime))
+            double? soloTime = SoloTime(engine, currentTime, isSeekingReplay);
+            if (soloTime == null)
             {
                 Stop();
                 return;
@@ -141,8 +141,8 @@ namespace YARG.Gameplay.Player
                 sustainMask |= playMask == 0 ? GuitarEngine.OPEN_MASK : playMask;
             }
 
-            bool soloAudio = _soundboard.SelectPhrase(soloTime, currentTime);
-            _muted = soloAudio;
+            bool soloAudio = _soundboard.SelectPhrase(soloTime.Value, currentTime);
+            _stemMutedBySolo = soloAudio;
             _setStemMuted(soloAudio);
             _soundboard.SetHeldFrets(sustainMask);
             _soundboard.SetWhammyPitch(whammyAxis);
@@ -152,18 +152,15 @@ namespace YARG.Gameplay.Player
             }
         }
 
-        private static bool TryGetSoloTime(GuitarEngine engine, double currentTime, bool isSeekingReplay,
-            out double soloTime)
+        private static double? SoloTime(GuitarEngine engine, double currentTime, bool isSeekingReplay)
         {
             double? freestyleTime = engine.FreestyleSoloTime;
             if (freestyleTime == null || isSeekingReplay)
             {
-                soloTime = 0;
-                return false;
+                return null;
             }
 
-            soloTime = freestyleTime.Value;
-            return currentTime >= soloTime - MUTE_LEAD_SECONDS;
+            return currentTime >= freestyleTime.Value - MUTE_LEAD_SECONDS ? freestyleTime : null;
         }
 
         private void Stop()
@@ -231,7 +228,7 @@ namespace YARG.Gameplay.Player
 
         private int HighestFret(int noteMask)
         {
-            for (int fret = HighestFretIndex; fret >= 0; fret--)
+            for (int fret = _highestFretIndex; fret >= 0; fret--)
             {
                 int mask = 1 << fret;
                 if ((noteMask & mask) != 0)
@@ -243,18 +240,15 @@ namespace YARG.Gameplay.Player
             return 0;
         }
 
-        private int HighestFretIndex
+        private static int HighestFretBit(int fretRowMask)
         {
-            get
+            int index = 0;
+            for (int mask = fretRowMask >> 1; mask != 0; mask >>= 1)
             {
-                int index = 0;
-                for (int mask = _fretRowMask >> 1; mask != 0; mask >>= 1)
-                {
-                    index++;
-                }
-
-                return index;
+                index++;
             }
+
+            return index;
         }
     }
 }

@@ -36,7 +36,6 @@ namespace YARG.Audio.BASS
 
         public readonly double                                          StartTime;
         public readonly double                                          EndTime;
-        public readonly int                                             LowestNote;
         public readonly List<BassStemClip>                              Ladder = new();
         public readonly List<(double SongSeconds, int Note, int Fret)>  Windows = new();
         public readonly List<(double SongSeconds, int Note)>            Anchors = new();
@@ -65,11 +64,10 @@ namespace YARG.Audio.BASS
         private readonly Dictionary<BassStemClip, int> _lastTakes = new();
         private readonly Random       _random = new();
 
-        public BassSoloPhrase(double startTime, double endTime, int lowestNote)
+        public BassSoloPhrase(double startTime, double endTime)
         {
             StartTime = startTime;
             EndTime = endTime;
-            LowestNote = lowestNote;
         }
 
         public bool IsEmpty => Ladder.Count == 0;
@@ -104,7 +102,7 @@ namespace YARG.Audio.BASS
             return DEFAULT_WHAMMY;
         }
 
-        public bool TryGetClip(int key, out BassStemClip clip)
+        private bool TryGetClip(int key, out BassStemClip clip)
         {
             int fret = Array.IndexOf(FRET_KEYS, key);
             if (fret < 0 || Ladder.Count == 0)
@@ -117,7 +115,7 @@ namespace YARG.Audio.BASS
             return true;
         }
 
-        public bool TryTakeClip(int key, out BassStemClip clip)
+        private bool TryTakeClip(int key, out BassStemClip clip)
         {
             if (!TryGetClip(key, out clip))
             {
@@ -133,24 +131,6 @@ namespace YARG.Audio.BASS
             YargLogger.LogFormatDebug("[SoloFret] {0:0.00}s fret {1} note {2} window {3} root {4}",
                 _songSeconds, fret, clip.Note, windowNote, _root);
             return true;
-        }
-
-        public bool HasClip(int key)
-        {
-            if (key == GuitarEngine.OPEN_MASK)
-            {
-                return TryGetAnyClip(out _);
-            }
-
-            for (int fret = 1; fret <= key; fret <<= 1)
-            {
-                if ((key & fret) != 0 && TryGetClip(fret, out _))
-                {
-                    return true;
-                }
-            }
-
-            return TryGetClip(key, out _) || TryGetAnyClip(out _);
         }
 
         public bool TryPickClip(int key, out BassStemClip clip)
@@ -260,7 +240,7 @@ namespace YARG.Audio.BASS
             return null;
         }
 
-        public bool TryGetAnyClip(out BassStemClip clip)
+        private bool TryGetAnyClip(out BassStemClip clip)
         {
             if (Ladder.Count == 0)
             {

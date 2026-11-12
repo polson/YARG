@@ -123,7 +123,7 @@ namespace YARG.Audio.BASS
             return -1;
         }
 
-        public static int[] Roots(float[] samples, BassStemFormat format)
+        private static int[] Roots(float[] samples, BassStemFormat format)
         {
             int factor = Math.Max(1, format.Frequency / TARGET_RATE);
             int channels = format.Channels;

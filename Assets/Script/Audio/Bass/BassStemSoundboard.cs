@@ -180,9 +180,9 @@ namespace YARG.Audio.BASS
 
         private int LoopBufferFrames => _format.FramesFor(LOOP_BUFFER_SECONDS);
 
-        public void RequestPhrases(List<GuitarNote> notes, Func<double, double> playbackTime, int lowestNote)
+        public void RequestPhrases(List<GuitarNote> notes, Func<double, double> playbackTime)
         {
-            _library.Request(notes, playbackTime, lowestNote);
+            _library.Request(notes, playbackTime);
         }
 
         public bool SelectPhrase(double soloTime, double songTime)
@@ -231,7 +231,7 @@ namespace YARG.Audio.BASS
         {
             lock (_lock)
             {
-                if (_disposed || !_phrase!.HasClip(fretMask))
+                if (_disposed || _phrase!.IsEmpty)
                 {
                     return;
                 }

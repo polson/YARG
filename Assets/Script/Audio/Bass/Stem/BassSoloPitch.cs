@@ -38,8 +38,6 @@ namespace YARG.Audio.BASS
 
         public int HopFrames => _hop;
 
-        public int WindowFrames => _window;
-
         public void Detect(float[] mono, List<float> readings)
         {
             readings.Clear();

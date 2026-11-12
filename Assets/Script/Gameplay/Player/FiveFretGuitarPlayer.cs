@@ -32,7 +32,6 @@ namespace YARG.Gameplay.Player
         private const double DEDICATED_OPEN_FLASH_HOLD_DURATION = 0.05;
 
         private const int SHIFT_INDICATOR_MEASURES_BEFORE = 5;
-        private const int LOWEST_LEAD_NOTE = 48;
 
         public bool UsingOpenLane { get; private set; }
 
@@ -261,8 +260,7 @@ namespace YARG.Gameplay.Player
 
             _freestyle = new FreestyleSolo(soundboard, () => Engine, SetStemMuteState, PlayFreestyleHit,
                 fretRowMask: AllFretRows,
-                hopoLeniency: EngineParams.HopoLeniency,
-                lowestNote: _stem == SongStem.Bass ? 0 : LOWEST_LEAD_NOTE);
+                hopoLeniency: EngineParams.HopoLeniency);
             _freestyle.RequestPhrases(PhraseNotes(), GameManager.GetAudioPlaybackTime);
         }
 

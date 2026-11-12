@@ -6,8 +6,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using YARG.Audio.BASS.Effects;
 using YARG.Core.Chart;
-using YARG.Core.Engine;
-using YARG.Core.Engine.Guitar;
 using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
@@ -41,6 +39,10 @@ namespace YARG.Audio.BASS
         private const int    MAX_TONE_NOTES            = 8;
         private const double MAX_SPACE_SECONDS         = 40;
         private const double MAX_ANALYSIS_SECONDS      = 3;
+
+        private const double DECAY_DEFAULT_DB_PER_SEC  = 3;
+        private const double DECAY_MIN_DB_PER_SEC      = 1;
+        private const double DECAY_MAX_DB_PER_SEC      = 10;
 
         private sealed class RenderJob
         {
@@ -79,7 +81,7 @@ namespace YARG.Audio.BASS
             _cabinets = cabinets;
         }
 
-        public void Request(List<GuitarNote> notes, Func<double, double> playbackTime, int lowestNote)
+        public void Request(List<GuitarNote> notes, Func<double, double> playbackTime)
         {
             var phrases = SoloPhrases(notes);
             var requests = new List<RenderJob>(phrases.Count);
@@ -102,7 +104,7 @@ namespace YARG.Audio.BASS
                     continue;
                 }
 
-                var solo = new BassSoloPhrase(phraseNotes[0].SongSeconds, phraseNotes[^1].SongSeconds, lowestNote);
+                var solo = new BassSoloPhrase(phraseNotes[0].SongSeconds, phraseNotes[^1].SongSeconds);
                 requests.Add(new RenderJob(solo, phraseNotes));
             }
 
@@ -114,9 +116,9 @@ namespace YARG.Audio.BASS
             _chords?.Request(requests.ConvertAll(request => (request.Phrase.StartTime, request.Phrase.EndTime)), playbackTime);
         }
 
-        private static List<SoloSection> SoloPhrases(List<GuitarNote> notes)
+        private static List<(uint StartTick, uint EndTick)> SoloPhrases(List<GuitarNote> notes)
         {
-            var phrases = new List<SoloSection>();
+            var phrases = new List<(uint StartTick, uint EndTick)>();
             int start = -1;
             for (int index = 0; index < notes.Count; index++)
             {
@@ -135,7 +137,7 @@ namespace YARG.Audio.BASS
                 bool ends = note.IsSoloEnd || index + 1 == notes.Count || !notes[index + 1].IsSolo;
                 if (ends)
                 {
-                    phrases.Add(new SoloSection(notes[start].Tick, note.Tick, index - start + 1));
+                    phrases.Add((notes[start].Tick, note.Tick));
                     start = -1;
                 }
             }
@@ -243,7 +245,7 @@ namespace YARG.Audio.BASS
                 return;
             }
 
-            int leadFrames = (int) Math.Min(_format.FramesFor(BassPickAttack.LEAD_SECONDS), chartFrame);
+            int leadFrames = (int) Math.Min(_format.FramesFor(BassStemClip.ONSET_LEAD_SECONDS), chartFrame);
             long startFrame = chartFrame - leadFrames;
             frameCount += leadFrames;
 
@@ -312,8 +314,8 @@ namespace YARG.Audio.BASS
                     var (clip, singleNote, _) = clips[index];
                     clip.AlignToOnset(_format);
                     clip.TrimToCleanEnd(_format);
-                    clip.AttackEndFrame = BassSustainStretch.FindAttackEnd(clip.Samples, _format);
-                    decays[index] = BassNoteDecay.Measure(clip.Samples, _format, clip.AttackEndFrame);
+                    clip.AttackEndFrame = clip.MeasureAttackEnd(_format);
+                    decays[index] = clip.MeasureDecay(_format);
                     levels[index] = Level(clip);
                     if (singleNote)
                     {
@@ -376,7 +378,7 @@ namespace YARG.Audio.BASS
             LogTone(phrase.Tone);
             double stemGain = phrase.Tone.StemGain > 0 ? phrase.Tone.StemGain : soloLevel / SYNTH_NOTE_LEVEL;
             phrase.SynthGain = stemGain * phrase.Tone.LevelGain * phrase.Tone.ReverbLevelGain;
-            SetDecay(phrase, BassNoteDecay.Typical(decays));
+            SetDecay(phrase, TypicalDecay(decays));
             int singles = clips.FindAll(clip => clip.SingleNote).Count;
             YargLogger.LogFormatInfo(
                 "[SoloLevel] {0} notes ({1} single, {2} chord), stem gain {3}, tone gain {4}, reverb gain {5}, synth gain {6}, solo level {7}",
@@ -515,6 +517,26 @@ namespace YARG.Audio.BASS
                     take.DecayDbPerSecond = decay;
                 }
             }
+        }
+
+        private static double TypicalDecay(IEnumerable<double> measured)
+        {
+            var rates = new List<double>();
+            foreach (double rate in measured)
+            {
+                if (!double.IsNaN(rate))
+                {
+                    rates.Add(rate);
+                }
+            }
+
+            if (rates.Count == 0)
+            {
+                return DECAY_DEFAULT_DB_PER_SEC;
+            }
+
+            rates.Sort();
+            return Math.Clamp(rates[rates.Count / 2], DECAY_MIN_DB_PER_SEC, DECAY_MAX_DB_PER_SEC);
         }
 
         private (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)? Measure(BassStemClip clip, BassSoloPitch detector,
