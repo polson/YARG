@@ -30,7 +30,9 @@ namespace YARG.Audio.BASS
                 Note = note;
             }
 
-            public float MiddleGain
+            public float MiddleGain => MiddleTakes?[0].Gain ?? 0;
+
+            public List<(BassStemClip Clip, float Gain)>? MiddleTakes
             {
                 get
                 {
@@ -39,11 +41,11 @@ namespace YARG.Audio.BASS
                     {
                         if (middle-- == 0)
                         {
-                            return takes[0].Gain;
+                            return takes;
                         }
                     }
 
-                    return 0;
+                    return null;
                 }
             }
         }
@@ -131,6 +133,24 @@ namespace YARG.Audio.BASS
             }
 
             return ladder;
+        }
+
+        internal float[] DiNote(double hz, int frames, BassStemFormat format)
+        {
+            int note = (int) Math.Round(69 + 12 * Math.Log(hz / 440, 2));
+            var sample = Nearest(Math.Clamp(note, LOWEST_NOTE, HIGHEST_NOTE));
+            var clip = sample.MiddleTakes![0].Clip;
+            double rate = hz / NoteHz(sample.Note);
+            int sourceFrames = Math.Min(clip.FrameCount, (int) Math.Ceiling(frames * rate) + 4);
+            var mono = new float[sourceFrames];
+            for (int frame = 0; frame < sourceFrames; frame++)
+            {
+                mono[frame] = clip.Samples[frame * format.Channels];
+            }
+
+            var played = Resample(mono, (int) Math.Round(format.Frequency * rate), format.Frequency, frames);
+            Array.Resize(ref played, frames);
+            return played;
         }
 
         private static BassStemClip PlayedAt(List<(BassStemClip Clip, float Gain)> takes, int note, double rate)

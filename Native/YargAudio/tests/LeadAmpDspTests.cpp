@@ -2,10 +2,13 @@
 #include "Test.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 using yarg::audio::LeadAmp;
+using Tone = std::array<float, LeadAmp::TONE_BANDS>;
 
 namespace {
 
@@ -42,8 +45,10 @@ double tonePower(const std::vector<float>& samples, int firstFrame, int frames, 
     return real * real + imaginary * imaginary;
 }
 
-std::vector<float> run(std::vector<float> samples, float gain, const std::vector<float>& cabinet = {}) {
+std::vector<float> run(std::vector<float> samples, float gain, const std::vector<float>& cabinet = {},
+    float drive = 1.0f, const Tone& tone = {}) {
     LeadAmp amp(CHANNELS, SAMPLE_RATE, cabinet.data(), cabinet.size(), SAMPLE_RATE);
+    amp.setTone(drive, tone.data());
     const std::size_t frames = samples.size() / CHANNELS;
     const std::size_t block = 512;
     for (std::size_t first = 0; first < frames; first += block) {
@@ -178,6 +183,128 @@ void humPlaysUnderNotesAndFadesAfter() {
     REQUIRE(rms(output, 0, SAMPLE_RATE * 4, frames) < 1e-4);
 }
 
+std::vector<float> pluck(double frequency, int frames) {
+    std::vector<float> samples(static_cast<std::size_t>(frames));
+    for (int frame = 0; frame < frames; ++frame) {
+        const double time = static_cast<double>(frame) / SAMPLE_RATE;
+        double value = 0;
+        for (int harmonic = 1; harmonic <= 12; ++harmonic) {
+            value += std::sin(2 * PI * frequency * harmonic * time) / harmonic;
+        }
+        samples[frame] = static_cast<float>(0.1 * std::exp(-4 * time) * value);
+    }
+    return samples;
+}
+
+std::vector<float> monoRender(const std::vector<float>& input, float drive, const Tone& tone) {
+    LeadAmp amp(1, SAMPLE_RATE);
+    amp.setTone(drive, tone.data());
+    auto samples = input;
+    for (std::size_t first = 0; first < samples.size(); first += 512) {
+        amp.process(samples.data() + first, std::min<std::size_t>(512, samples.size() - first), 1.0f);
+    }
+    return samples;
+}
+
+double punch(const std::vector<float>& samples) {
+    double attack = 0;
+    for (int first = 0; first + 240 <= SAMPLE_RATE / 20; first += 240) {
+        double energy = 0;
+        for (int frame = first; frame < first + 240; ++frame) energy += samples[frame] * samples[frame];
+        attack = std::max(attack, std::sqrt(energy / 240));
+    }
+    double body = 0;
+    const int bodyStart = SAMPLE_RATE * 8 / 100;
+    for (std::size_t frame = bodyStart; frame < samples.size(); ++frame) body += samples[frame] * samples[frame];
+    return attack / std::sqrt(body / (samples.size() - bodyStart));
+}
+
+struct Matched {
+    int result;
+    float drive;
+    Tone tone;
+    float levelGain;
+};
+
+Matched match(float drive, const Tone& tone, int noteCount) {
+    std::vector<float> stem, di;
+    std::vector<std::uint32_t> frames;
+    for (int note = 0; note < noteCount; ++note) {
+        const auto played = pluck(196 * std::pow(2.0, note / 4.0), SAMPLE_RATE * 2 / 5);
+        const auto heard = monoRender(played, drive, tone);
+        di.insert(di.end(), played.begin(), played.end());
+        stem.insert(stem.end(), heard.begin(), heard.end());
+        frames.push_back(static_cast<std::uint32_t>(played.size()));
+    }
+    Matched matched{};
+    matched.result = yarg::audio::leadAmpMatch(SAMPLE_RATE, nullptr, 0, 0, stem.data(), di.data(), frames.data(),
+        frames.size(), &matched.drive, matched.tone.data(), matched.tone.size(), &matched.levelGain);
+    return matched;
+}
+
+void flatToneLeavesSoundUnchanged() {
+    const auto input = sine(330, 0.1, SAMPLE_RATE / 2);
+    LeadAmp amp(CHANNELS, SAMPLE_RATE);
+    auto untouched = input;
+    amp.process(untouched.data(), untouched.size() / CHANNELS, 1.0f);
+    REQUIRE(run(input, 1.0f) == untouched);
+}
+
+void driveSquashesTheAttack() {
+    const auto input = pluck(220, SAMPLE_RATE * 2 / 5);
+    REQUIRE(punch(monoRender(input, 4.0f, {})) < 0.8 * punch(monoRender(input, 0.25f, {})));
+}
+
+void toneBandBoostsItsOctave() {
+    Tone tone{};
+    tone[4] = 12.0f;
+    const auto input = sine(500, 0.1, SAMPLE_RATE / 2);
+    const int first = SAMPLE_RATE / 4;
+    const int frames = 8192;
+    const auto flat = run(input, 1.0f);
+    const auto boosted = run(input, 1.0f, {}, 1.0f, tone);
+    const double flatRatio = tonePower(flat, first, frames, 1000) / tonePower(flat, first, frames, 500);
+    const double boostedRatio = tonePower(boosted, first, frames, 1000) / tonePower(boosted, first, frames, 500);
+    REQUIRE(boostedRatio > 4 * flatRatio);
+}
+
+void invalidToneIsRejected() {
+    Tone tone{};
+    REQUIRE(LeadAmp::validTone(1.0f, tone.data()));
+    REQUIRE(!LeadAmp::validTone(LeadAmp::MAX_DRIVE * 2, tone.data()));
+    tone[0] = LeadAmp::MAX_TONE_DB + 1;
+    REQUIRE(!LeadAmp::validTone(1.0f, tone.data()));
+    REQUIRE(!LeadAmp::validTone(1.0f, nullptr));
+}
+
+void matchKeepsTheDefaultTone() {
+    const auto matched = match(1.0f, {}, 8);
+    REQUIRE(matched.result == YARG_AUDIO_OK);
+    REQUIRE(std::abs(std::log2(matched.drive)) < 0.3);
+    for (float band : matched.tone) {
+        REQUIRE(std::abs(band) < 2.0f);
+    }
+    REQUIRE(std::abs(matched.levelGain - 1.0f) < 0.1f);
+}
+
+void matchFindsDriveAndTone() {
+    Tone tone{};
+    tone[2] = -6.0f;
+    tone[5] = 6.0f;
+    const auto matched = match(3.0f, tone, 8);
+    REQUIRE(matched.result == YARG_AUDIO_OK);
+    REQUIRE(std::abs(std::log2(matched.drive / 3.0f)) < 0.6);
+    REQUIRE(matched.tone[5] - matched.tone[2] > 8.0f);
+    REQUIRE(std::isfinite(matched.levelGain) && matched.levelGain > 0.0f);
+}
+
+void matchNeedsEnoughNotes() {
+    const auto matched = match(1.0f, {}, 2);
+    REQUIRE(matched.result == YARG_AUDIO_ERROR_INVALID_STATE);
+    REQUIRE(matched.drive == 1.0f);
+    REQUIRE(matched.levelGain == 1.0f);
+}
+
 }
 
 void runLeadAmpDspTests() {
@@ -194,4 +321,11 @@ void runLeadAmpDspTests() {
     cabinetShapesTone();
     longCabinetIsTruncated();
     humPlaysUnderNotesAndFadesAfter();
+    flatToneLeavesSoundUnchanged();
+    driveSquashesTheAttack();
+    toneBandBoostsItsOctave();
+    invalidToneIsRejected();
+    matchKeepsTheDefaultTone();
+    matchFindsDriveAndTone();
+    matchNeedsEnoughNotes();
 }

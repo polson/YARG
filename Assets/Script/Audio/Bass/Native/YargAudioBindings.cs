@@ -40,6 +40,8 @@ namespace YARG.Audio.BASS.Native
         private static OverdriveDspDestroyDelegate? _overdriveDspDestroy;
         private static LeadAmpDspAttachDelegate? _leadAmpDspAttach;
         private static LeadAmpDspSetGainDelegate? _leadAmpDspSetGain;
+        private static LeadAmpDspSetToneDelegate? _leadAmpDspSetTone;
+        private static LeadAmpMatchDelegate? _leadAmpMatch;
         private static LeadAmpDspDestroyDelegate? _leadAmpDspDestroy;
         private static FreeverbDspAttachDelegate? _freeverbDspAttach;
         private static FreeverbDspResetDelegate? _freeverbDspReset;
@@ -185,6 +187,15 @@ namespace YARG.Audio.BASS.Native
 
         internal static int LeadAmpDspSetGain(BassLeadAmpDsp dsp, float gain) =>
             EnsureBound(ref _leadAmpDspSetGain, "yarg_lead_amp_dsp_set_gain")(dsp, gain);
+
+        internal static int LeadAmpDspSetTone(BassLeadAmpDsp dsp, float drive, float[] bandsDb, int bandCount) =>
+            EnsureBound(ref _leadAmpDspSetTone, "yarg_lead_amp_dsp_set_tone")(dsp, drive, bandsDb, bandCount);
+
+        internal static int LeadAmpMatch(float sampleRate, float[]? cabinet, int cabinetFrames, float cabinetRate,
+            float[] stem, float[] di, uint[] noteFrames, int noteCount, out float drive, float[] bandsDb, int bandCount,
+            out float levelGain) =>
+            EnsureBound(ref _leadAmpMatch, "yarg_lead_amp_match")(sampleRate, cabinet, cabinetFrames, cabinetRate, stem,
+                di, noteFrames, noteCount, out drive, bandsDb, bandCount, out levelGain);
 
         internal static void LeadAmpDspDestroy(IntPtr dsp) =>
             EnsureBound(ref _leadAmpDspDestroy, "yarg_lead_amp_dsp_destroy")(dsp);
@@ -335,6 +346,8 @@ namespace YARG.Audio.BASS.Native
             _overdriveDspDestroy = GetFunction<OverdriveDspDestroyDelegate>(handle, "yarg_overdrive_dsp_destroy");
             _leadAmpDspAttach = GetFunction<LeadAmpDspAttachDelegate>(handle, "yarg_lead_amp_dsp_attach");
             _leadAmpDspSetGain = GetFunction<LeadAmpDspSetGainDelegate>(handle, "yarg_lead_amp_dsp_set_gain");
+            _leadAmpDspSetTone = GetFunction<LeadAmpDspSetToneDelegate>(handle, "yarg_lead_amp_dsp_set_tone");
+            _leadAmpMatch = GetFunction<LeadAmpMatchDelegate>(handle, "yarg_lead_amp_match");
             _leadAmpDspDestroy = GetFunction<LeadAmpDspDestroyDelegate>(handle, "yarg_lead_amp_dsp_destroy");
             _freeverbDspAttach = GetFunction<FreeverbDspAttachDelegate>(handle, "yarg_freeverb_dsp_attach");
             _freeverbDspReset = GetFunction<FreeverbDspResetDelegate>(handle, "yarg_freeverb_dsp_reset");
@@ -518,6 +531,14 @@ namespace YARG.Audio.BASS.Native
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int LeadAmpDspSetGainDelegate(BassLeadAmpDsp dsp, float gain);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int LeadAmpDspSetToneDelegate(BassLeadAmpDsp dsp, float drive, float[] bandsDb, int bandCount);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int LeadAmpMatchDelegate(float sampleRate, float[]? cabinet, int cabinetFrames, float cabinetRate,
+            float[] stem, float[] di, uint[] noteFrames, int noteCount, out float drive, [Out] float[] bandsDb,
+            int bandCount, out float levelGain);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate void LeadAmpDspDestroyDelegate(IntPtr dsp);

@@ -18,7 +18,8 @@
 extern "C" {
 #endif
 
-#define YARG_AUDIO_ABI_VERSION 29u
+#define YARG_AUDIO_ABI_VERSION 30u
+#define YARG_LEAD_AMP_TONE_BANDS 9
 
 typedef struct yarg_stretch_stream yarg_stretch_stream;
 typedef struct yarg_stretch_render yarg_stretch_render;
@@ -217,6 +218,18 @@ YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_attach(
     uint32_t channel, float gain, const float* cabinet, uint32_t cabinet_frames, float cabinet_rate,
     int32_t priority, yarg_lead_amp_dsp** dsp, int32_t* bass_error);
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_set_gain(yarg_lead_amp_dsp* dsp, float gain);
+/* Sets the amp's drive multiplier and its post-cabinet correction EQ, one gain in dB per octave band
+   starting at 62.5 Hz. band_count must be YARG_LEAD_AMP_TONE_BANDS. */
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_set_tone(
+    yarg_lead_amp_dsp* dsp, float drive, const float* bands_db, uint32_t band_count);
+/* Fits drive and correction EQ so DI notes played through the amp sound like the paired stem notes.
+   stem and di hold note_count mono notes back to back, note i being note_frames[i] long in both,
+   each starting at its pick. level_gain scales the amp output back to the level it had at the
+   default tone. Returns YARG_AUDIO_ERROR_INVALID_STATE when too few notes are long enough. */
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_lead_amp_match(
+    float sample_rate, const float* cabinet, uint32_t cabinet_frames, float cabinet_rate,
+    const float* stem, const float* di, const uint32_t* note_frames, uint32_t note_count,
+    float* drive, float* bands_db, uint32_t band_count, float* level_gain);
 YARG_AUDIO_API void YARG_AUDIO_CALL yarg_lead_amp_dsp_destroy(yarg_lead_amp_dsp* dsp);
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_one_shot_stream_create(
     const yarg_one_shot_config* config,

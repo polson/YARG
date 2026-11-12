@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using YARG.Audio.BASS.Effects;
 using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
@@ -39,6 +40,7 @@ namespace YARG.Audio.BASS
         public          long                                                     RegionStartFrame;
         public          bool                                                     CanStretch;
         public          double                                                   SynthGain;
+        public          BassLeadAmpTone                                          Tone = BassLeadAmpTone.Default;
 
         private const double PHRASE_RESET_SECONDS = 0.6;
 

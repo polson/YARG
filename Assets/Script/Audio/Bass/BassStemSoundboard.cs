@@ -140,6 +140,7 @@ namespace YARG.Audio.BASS
         private readonly BassOverdriveDsp?            _amp;
         private readonly BassMixerBus?                _synthBus;
         private readonly BassLeadAmpDsp?              _synthAmp;
+        private          BassLeadAmpTone              _synthTone = BassLeadAmpTone.Default;
         private readonly BassFreeverbDsp?             _synthReverb;
 
         internal BassStemSoundboard(object stemLock, AudioManager manager, BassStemFormat format,
@@ -150,6 +151,8 @@ namespace YARG.Audio.BASS
             _volume = volume;
             _seeds = new BassStemSeedLibrary(format);
 
+            float[]? cabinet = null;
+            int cabinetRate = 0;
             if (manager is BassAudioManager bassManager)
             {
                 _cleanBus = bassManager.CreateMixerBus(format.Frequency, format.Channels);
@@ -167,7 +170,7 @@ namespace YARG.Audio.BASS
                     if (BassSynthGuitar.Enabled)
                     {
                         _synthBus = bassManager.CreateMixerBus(format.Frequency, format.Channels);
-                        var cabinet = BassGuitarSamples.LoadCabinet(out int cabinetRate);
+                        cabinet = BassGuitarSamples.LoadCabinet(out cabinetRate);
                         _synthAmp = _synthBus != null
                             ? BassLeadAmpDsp.Attach(_synthBus.SourceHandle, 0, cabinet, cabinetRate, SYNTH_AMP_PRIORITY)
                             : null;
@@ -193,7 +196,7 @@ namespace YARG.Audio.BASS
 
             if (_synthBus != null)
             {
-                _seeds.UseSynth(() => BassGuitarSamples.Load(format));
+                _seeds.UseSynth(() => BassGuitarSamples.Load(format), cabinet, cabinetRate);
             }
         }
 
@@ -579,6 +582,12 @@ namespace YARG.Audio.BASS
             voice.PlaybackRate = clip.PlaybackRate;
             if (voice.IsSynth)
             {
+                var tone = _seeds.Tone;
+                if (tone != _synthTone && _synthAmp?.SetTone(tone) == true)
+                {
+                    _synthTone = tone;
+                }
+
                 _synthAmp?.SetGain((float) Math.Clamp(_volume() * _seeds.SynthGain, 0, MAX_SYNTH_GAIN));
             }
 

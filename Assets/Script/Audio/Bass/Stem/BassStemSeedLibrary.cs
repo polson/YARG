@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using YARG.Audio.BASS.Effects;
 using YARG.Core.Chart;
 using YARG.Core.Engine;
 using YARG.Core.Engine.Guitar;
@@ -51,6 +52,9 @@ namespace YARG.Audio.BASS
         private const int    CHORD_ANCHOR_NOTE              = 60;
         private const double SYNTH_NOTE_LEVEL               = 1.32;
         private const double DEFAULT_SOLO_LEVEL             = 0.1;
+        private const double TONE_MIN_NOTE_SECONDS          = 0.2;
+        private const double TONE_MAX_NOTE_SECONDS          = 0.35;
+        private const int    MAX_TONE_NOTES                 = 8;
 
 
 
@@ -66,6 +70,8 @@ namespace YARG.Audio.BASS
         private          double                  _requestedSoloTime;
         private          Func<BassSynthGuitar?>? _loadSynth;
         private          BassSynthGuitar?        _synth;
+        private          float[]?                _cabinet;
+        private          int                     _cabinetRate;
 
         public BassStemSeedLibrary(BassStemFormat format)
         {
@@ -124,11 +130,13 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public void UseSynth(Func<BassSynthGuitar?> load)
+        public void UseSynth(Func<BassSynthGuitar?> load, float[]? cabinet, int cabinetRate)
         {
             lock (_lock)
             {
                 _loadSynth = load;
+                _cabinet = cabinet;
+                _cabinetRate = cabinetRate;
             }
         }
 
@@ -139,6 +147,17 @@ namespace YARG.Audio.BASS
                 lock (_lock)
                 {
                     return _selected?.SynthGain ?? 0;
+                }
+            }
+        }
+
+        public BassLeadAmpTone Tone
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _selected?.Tone ?? BassLeadAmpTone.Default;
                 }
             }
         }
@@ -438,7 +457,7 @@ namespace YARG.Audio.BASS
             LogAttacks(seedClips, onsetOffsets);
             if (_synth != null)
             {
-                PrepareSynth(job, clips, pitches, levels, decays);
+                PrepareSynth(job, clips, pitches, levels, decays, onsetOffsets);
                 return true;
             }
 
@@ -1026,7 +1045,7 @@ namespace YARG.Audio.BASS
 
         private void PrepareSynth(BassStemSoloSeeds job, List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,
             (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)?[] pitches, double[] levels,
-            double[] decays)
+            double[] decays, double[] onsetOffsets)
         {
             var anchors = new List<(double SongSeconds, int Note, int Fret)>();
             var tunings = new List<double>();
@@ -1056,10 +1075,81 @@ namespace YARG.Audio.BASS
             var heard = Array.FindAll(levels, level => level > 0);
             Array.Sort(heard);
             double soloLevel = heard.Length > 0 ? heard[heard.Length / 2] : DEFAULT_SOLO_LEVEL;
-            job.SynthGain = soloLevel / SYNTH_NOTE_LEVEL;
+            job.Tone = MatchTone(clips, pitches, onsetOffsets);
+            job.SynthGain = soloLevel / SYNTH_NOTE_LEVEL * job.Tone.LevelGain;
             SetDecay(job, BassNoteDecay.Typical(decays));
             YargLogger.LogFormatInfo("[SoloSynth] {0} measured pitches, {1} chord anchors, tuning {2} cents, solo level {3}",
                 measured, anchors.Count - measured, Math.Round(tuningCents), Math.Round(soloLevel, 4));
+        }
+
+        private BassLeadAmpTone MatchTone(List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,
+            (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)?[] pitches,
+            double[] onsetOffsets)
+        {
+            int minFrames = _format.FramesFor(TONE_MIN_NOTE_SECONDS);
+            var picked = new List<(BassStemClip Clip, double Hz)>();
+            for (int index = 0; index < clips.Count; index++)
+            {
+                var clip = clips[index].Clip;
+                if (pitches[index] is not { } pitch || pitch.Bent || pitch.Voiced < PITCH_MIN_VOICED
+                    || pitch.Note < BassSynthGuitar.LOWEST_NOTE || pitch.Note > BassSynthGuitar.HIGHEST_NOTE
+                    || double.IsNaN(onsetOffsets[index]) || clip.FrameCount < minFrames)
+                {
+                    continue;
+                }
+
+                picked.Add((clip, pitch.Hz));
+            }
+
+            picked.Sort((left, right) => right.Clip.FrameCount.CompareTo(left.Clip.FrameCount));
+            if (picked.Count > MAX_TONE_NOTES)
+            {
+                picked.RemoveRange(MAX_TONE_NOTES, picked.Count - MAX_TONE_NOTES);
+            }
+
+            int channels = _format.Channels;
+            int maxFrames = _format.FramesFor(TONE_MAX_NOTE_SECONDS);
+            var stem = new List<float>();
+            var di = new List<float>();
+            var noteFrames = new List<uint>();
+            foreach (var (clip, hz) in picked)
+            {
+                int frames = Math.Min(clip.FrameCount, maxFrames);
+                for (int frame = 0; frame < frames; frame++)
+                {
+                    float sum = 0;
+                    for (int channel = 0; channel < channels; channel++)
+                    {
+                        sum += clip.Samples[frame * channels + channel];
+                    }
+
+                    stem.Add(sum / channels);
+                }
+
+                di.AddRange(_synth!.DiNote(hz, frames, _format));
+                noteFrames.Add((uint) frames);
+            }
+
+            float[]? cabinet;
+            int cabinetRate;
+            lock (_lock)
+            {
+                cabinet = _cabinet;
+                cabinetRate = _cabinetRate;
+            }
+
+            var tone = BassLeadAmpDsp.Match(_format.Frequency, cabinet, cabinetRate, stem.ToArray(), di.ToArray(),
+                noteFrames.ToArray());
+            if (tone == null)
+            {
+                return BassLeadAmpTone.Default;
+            }
+
+            YargLogger.LogFormatInfo("[SoloTone] {0} notes, drive {1}, bands {2} dB, level gain {3}",
+                picked.Count, Math.Round(tone.Drive, 2),
+                string.Join(" ", Array.ConvertAll(tone.BandsDb, band => Math.Round(band, 1))),
+                Math.Round(tone.LevelGain, 2));
+            return tone;
         }
 
         private void AddChordAnchors(List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,

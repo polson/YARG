@@ -3,8 +3,11 @@
 #include "BitCastCompat.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <iterator>
 #include <new>
+#include <vector>
 
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
 
@@ -65,6 +68,18 @@ constexpr int HUM_HARMONICS = 12;
 constexpr float NOISE_OPEN_LEVEL = 0.02f;
 constexpr float NOISE_CLOSED_LEVEL = 0.001f;
 constexpr float NOISE_RELEASE_SECONDS = 0.5f;
+constexpr float TONE_Q = 1.41f;
+constexpr float MATCH_DRIVES[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
+constexpr float MATCH_ATTACK_SECONDS = 0.05f;
+constexpr float MATCH_WINDOW_SECONDS = 0.005f;
+constexpr float MATCH_BODY_SECONDS = 0.08f;
+constexpr float MATCH_LEVEL_SECONDS = 0.3f;
+constexpr float MATCH_MIN_NOTE_SECONDS = 0.2f;
+constexpr float MATCH_MAX_NOTE_SECONDS = 0.35f;
+constexpr int MATCH_MIN_NOTES = 3;
+constexpr int MATCH_TONE_PASSES = 24;
+constexpr double MATCH_BAND_FLOOR = 1e-5;
+constexpr std::size_t MATCH_RENDER_BLOCK = 512;
 
 float logCosh(float value) noexcept {
     const float magnitude = std::abs(value);
@@ -82,6 +97,7 @@ namespace yarg::audio {
 LeadAmp::LeadAmp(int channels, float sampleRate, const float* cabinet, std::size_t cabinetFrames,
     float cabinetRate)
     : channels_(std::clamp(channels, 1, MAX_CHANNELS)),
+      sampleRate_(sampleRate),
       couplingCoefficient_(static_cast<float>(std::exp(-2.0 * PI * COUPLING_HZ / sampleRate))),
       interstageCoefficient_(onePole(std::min(INTERSTAGE_LOW_PASS_HZ, 0.45f * sampleRate), sampleRate)),
       echoToneCoefficient_(onePole(ECHO_TONE_HZ, sampleRate)),
@@ -106,19 +122,8 @@ LeadAmp::LeadAmp(int channels, float sampleRate, const float* cabinet, std::size
         biquad.a2 = static_cast<float>((1.0 - alpha) / a0);
         return biquad;
     };
-    const auto peak = [&angle](float hz, float gainDb, float q) {
-        const double w0 = angle(hz);
-        const double cosine = std::cos(w0);
-        const double alpha = std::sin(w0) / (2.0 * q);
-        const double amplitude = std::pow(10.0, gainDb / 40.0);
-        const double a0 = 1.0 + alpha / amplitude;
-        Biquad biquad;
-        biquad.b0 = static_cast<float>((1.0 + alpha * amplitude) / a0);
-        biquad.b1 = static_cast<float>(-2.0 * cosine / a0);
-        biquad.b2 = static_cast<float>((1.0 - alpha * amplitude) / a0);
-        biquad.a1 = static_cast<float>(-2.0 * cosine / a0);
-        biquad.a2 = static_cast<float>((1.0 - alpha / amplitude) / a0);
-        return biquad;
+    const auto peak = [sampleRate](float hz, float gainDb, float q) {
+        return LeadAmp::peak(sampleRate, hz, gainDb, q);
     };
     const auto lowShelf = [&angle](float hz, float gainDb, float q) {
         const double w0 = angle(hz);
@@ -148,6 +153,9 @@ LeadAmp::LeadAmp(int channels, float sampleRate, const float* cabinet, std::size
     filters_[CAB_HONK] = peak(CAB_HONK_HZ, CAB_HONK_DB, CAB_HONK_Q);
     filters_[CAB_LOW_PASS_1] = pass(CAB_LOW_PASS_HZ, false, CAB_LOW_PASS_Q1);
     filters_[CAB_LOW_PASS_2] = pass(CAB_LOW_PASS_HZ, false, CAB_LOW_PASS_Q2);
+    for (int band = 0; band < TONE_BANDS; ++band) {
+        filters_[TONE_FIRST + band] = toneBand(sampleRate, band, 0.0f);
+    }
 
     echoLength_ = static_cast<int>(std::ceil(ECHO_SECONDS[1] * sampleRate)) + 1;
     for (int channel = 0; channel < channels_; ++channel) {
@@ -213,6 +221,44 @@ void LeadAmp::loadCabinet(const float* cabinet, std::size_t frames, float cabine
     cabinet_ = std::move(resampled);
 }
 
+LeadAmp::Biquad LeadAmp::peak(float sampleRate, float hz, float gainDb, float q) noexcept {
+    const double w0 = 2.0 * PI * std::min(hz, 0.45f * sampleRate) / sampleRate;
+    const double cosine = std::cos(w0);
+    const double alpha = std::sin(w0) / (2.0 * q);
+    const double amplitude = std::pow(10.0, gainDb / 40.0);
+    const double a0 = 1.0 + alpha / amplitude;
+    Biquad biquad;
+    biquad.b0 = static_cast<float>((1.0 + alpha * amplitude) / a0);
+    biquad.b1 = static_cast<float>(-2.0 * cosine / a0);
+    biquad.b2 = static_cast<float>((1.0 - alpha * amplitude) / a0);
+    biquad.a1 = static_cast<float>(-2.0 * cosine / a0);
+    biquad.a2 = static_cast<float>((1.0 - alpha / amplitude) / a0);
+    return biquad;
+}
+
+float LeadAmp::toneHz(int band) noexcept {
+    return TONE_LOWEST_HZ * static_cast<float>(1 << band);
+}
+
+LeadAmp::Biquad LeadAmp::toneBand(float sampleRate, int band, float gainDb) noexcept {
+    return peak(sampleRate, toneHz(band), gainDb, TONE_Q);
+}
+
+bool LeadAmp::validTone(float drive, const float* bandsDb) noexcept {
+    if (!bandsDb || !std::isfinite(drive) || drive < MIN_DRIVE || drive > MAX_DRIVE) return false;
+    for (int band = 0; band < TONE_BANDS; ++band) {
+        if (!std::isfinite(bandsDb[band]) || std::abs(bandsDb[band]) > MAX_TONE_DB) return false;
+    }
+    return true;
+}
+
+void LeadAmp::setTone(float drive, const float* bandsDb) noexcept {
+    targetDrive_ = drive;
+    for (int band = 0; band < TONE_BANDS; ++band) {
+        filters_[TONE_FIRST + band] = toneBand(sampleRate_, band, bandsDb[band]);
+    }
+}
+
 float LeadAmp::run(int filter, ChannelState& state, float input) const noexcept {
     const auto& biquad = filters_[filter];
     auto& memory = state.filters[filter];
@@ -271,8 +317,10 @@ float LeadAmp::shape(Shaper& shaper, float input, float bias, float offset) noex
 
 void LeadAmp::process(float* samples, std::size_t frames, float gain) noexcept {
     if (gain_ < 0.0f) gain_ = gain;
+    if (drive_ < 0.0f) drive_ = targetDrive_;
     for (std::size_t frame = 0; frame < frames; ++frame) {
         gain_ += (gain - gain_) * gainCoefficient_;
+        drive_ += (targetDrive_ - drive_) * gainCoefficient_;
         const float pickupNoise = noise(samples + frame * channels_);
         for (int channel = 0; channel < channels_; ++channel) {
             float& sample = samples[frame * channels_ + channel];
@@ -281,7 +329,7 @@ void LeadAmp::process(float* samples, std::size_t frames, float gain) noexcept {
             float signal = run(PRE_HIGH_PASS, state, sample + pickupNoise);
             signal = run(PRE_BOOST, state, signal);
             signal = run(PRE_LOW_PASS, state, signal);
-            const float first = shape(state.first, signal * INPUT_GAIN, FIRST_BIAS, firstOffset_);
+            const float first = shape(state.first, signal * INPUT_GAIN * drive_, FIRST_BIAS, firstOffset_);
 
             const float coupled = first - state.couplingInput + couplingCoefficient_ * state.couplingOutput;
             state.couplingInput = first;
@@ -298,6 +346,9 @@ void LeadAmp::process(float* samples, std::size_t frames, float gain) noexcept {
                 }
             } else {
                 amp = convolve(state, amp);
+            }
+            for (int band = TONE_FIRST; band < FILTER_COUNT; ++band) {
+                amp = run(band, state, amp);
             }
 
             int read = echoIndex_ - state.echoFrames;
@@ -321,6 +372,15 @@ void YARG_BASS_CALLBACK leadAmpDspProc(std::uint32_t, std::uint32_t,
     if (!buffer || !user || length == 0 || length % sizeof(float) != 0) return;
 
     auto* state = static_cast<yarg_lead_amp_dsp*>(user);
+    const std::uint32_t toneVersion = state->toneVersion.load(std::memory_order_acquire);
+    if (toneVersion != state->appliedToneVersion) {
+        std::array<float, LeadAmp::TONE_BANDS> bands{};
+        for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+            bands[band] = bitCast<float>(state->toneBits[band].load(std::memory_order_relaxed));
+        }
+        state->amp.setTone(bitCast<float>(state->driveBits.load(std::memory_order_relaxed)), bands.data());
+        state->appliedToneVersion = toneVersion;
+    }
     const float gain = bitCast<float>(state->gainBits.load(std::memory_order_relaxed));
     const std::size_t frames = length / sizeof(float) / static_cast<std::size_t>(state->channelCount);
     state->amp.process(static_cast<float*>(buffer), frames, gain);
@@ -378,6 +438,242 @@ int leadAmpDspSetGain(yarg_lead_amp_dsp* dsp, float gain) noexcept {
     return YARG_AUDIO_OK;
 }
 
+int leadAmpDspSetTone(yarg_lead_amp_dsp* dsp, float drive, const float* bandsDb, std::size_t bandCount) noexcept {
+    if (!dsp || bandCount != LeadAmp::TONE_BANDS || !LeadAmp::validTone(drive, bandsDb)) {
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    }
+    dsp->driveBits.store(bitCast<std::uint32_t>(drive), std::memory_order_relaxed);
+    for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+        dsp->toneBits[band].store(bitCast<std::uint32_t>(bandsDb[band]), std::memory_order_relaxed);
+    }
+    dsp->toneVersion.fetch_add(1, std::memory_order_release);
+    return YARG_AUDIO_OK;
+}
+
+namespace {
+
+struct MatchNote {
+    const float* stem;
+    const float* di;
+    std::size_t frames;
+};
+
+struct ToneMeasure {
+    std::array<double, LeadAmp::TONE_BANDS> bands{};
+    double punch = 0.0;
+    double level = 0.0;
+};
+
+double median(std::vector<double> values) {
+    if (values.empty()) return 0.0;
+    const auto middle = values.begin() + static_cast<std::ptrdiff_t>(values.size() / 2);
+    std::nth_element(values.begin(), middle, values.end());
+    return *middle;
+}
+
+double rms(const float* samples, std::size_t first, std::size_t end) {
+    if (end <= first) return 0.0;
+    double energy = 0.0;
+    for (std::size_t frame = first; frame < end; ++frame) {
+        energy += static_cast<double>(samples[frame]) * samples[frame];
+    }
+    return std::sqrt(energy / static_cast<double>(end - first));
+}
+
+double bandEnergy(const float* samples, std::size_t frames, float sampleRate, float hz) {
+    const double w0 = 2.0 * PI * std::min(hz, 0.45f * sampleRate) / sampleRate;
+    const double alpha = std::sin(w0) / (2.0 * TONE_Q);
+    const double a0 = 1.0 + alpha;
+    const double b0 = alpha / a0;
+    const double a1 = -2.0 * std::cos(w0) / a0;
+    const double a2 = (1.0 - alpha) / a0;
+    double z1 = 0.0, z2 = 0.0, energy = 0.0;
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+        const double input = samples[frame];
+        const double output = b0 * input + z1;
+        z1 = -a1 * output + z2;
+        z2 = -b0 * input - a2 * output;
+        energy += output * output;
+    }
+    return energy;
+}
+
+ToneMeasure measure(const std::vector<std::vector<float>>& notes, float sampleRate) {
+    const auto frames = [sampleRate](float seconds) {
+        return static_cast<std::size_t>(seconds * sampleRate);
+    };
+    const std::size_t window = std::max<std::size_t>(1, frames(MATCH_WINDOW_SECONDS));
+    ToneMeasure tone;
+    std::vector<double> punches, levels;
+    int spectra = 0;
+    for (const auto& note : notes) {
+        const float* samples = note.data();
+        const std::size_t length = note.size();
+        double attackPeak = 0.0;
+        for (std::size_t first = 0; first + window <= std::min(length, frames(MATCH_ATTACK_SECONDS)); first += window) {
+            attackPeak = std::max(attackPeak, rms(samples, first, first + window));
+        }
+        const double body = rms(samples, std::min(length, frames(MATCH_BODY_SECONDS)), length);
+        if (body > 0.0) punches.push_back(attackPeak / body);
+        levels.push_back(rms(samples, 0, std::min(length, frames(MATCH_LEVEL_SECONDS))));
+
+        std::array<double, LeadAmp::TONE_BANDS> bands{};
+        double total = 0.0;
+        for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+            bands[band] = bandEnergy(samples, length, sampleRate, LeadAmp::toneHz(band));
+            total += bands[band];
+        }
+        if (!(total > 0.0)) continue;
+        for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+            tone.bands[band] += bands[band] / total;
+        }
+        ++spectra;
+    }
+    for (double& band : tone.bands) {
+        band /= std::max(spectra, 1);
+    }
+    tone.punch = median(std::move(punches));
+    tone.level = median(std::move(levels));
+    return tone;
+}
+
+std::vector<std::vector<float>> render(const std::vector<MatchNote>& notes, float sampleRate, const float* cabinet,
+    std::size_t cabinetFrames, float cabinetRate, float drive) {
+    const std::array<float, LeadAmp::TONE_BANDS> flat{};
+    std::vector<std::vector<float>> rendered;
+    rendered.reserve(notes.size());
+    for (const auto& note : notes) {
+        LeadAmp amp(1, sampleRate, cabinet, cabinetFrames, cabinetRate);
+        amp.setTone(drive, flat.data());
+        std::vector<float> samples(note.di, note.di + note.frames);
+        for (std::size_t first = 0; first < samples.size(); first += MATCH_RENDER_BLOCK) {
+            amp.process(samples.data() + first, std::min(MATCH_RENDER_BLOCK, samples.size() - first),
+                1.0f);
+        }
+        rendered.push_back(std::move(samples));
+    }
+    return rendered;
+}
+
+std::vector<std::vector<float>> equalize(std::vector<std::vector<float>> notes, float sampleRate,
+    const std::array<float, LeadAmp::TONE_BANDS>& bandsDb) {
+    for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+        const auto filter = LeadAmp::toneBand(sampleRate, band, bandsDb[band]);
+        for (auto& note : notes) {
+            float z1 = 0.0f, z2 = 0.0f;
+            for (float& sample : note) {
+                const float output = filter.b0 * sample + z1;
+                z1 = filter.b1 * sample - filter.a1 * output + z2;
+                z2 = filter.b2 * sample - filter.a2 * output;
+                sample = output;
+            }
+        }
+    }
+    return notes;
+}
+
+float fitDrive(double targetPunch, const std::array<double, std::size(MATCH_DRIVES)>& punches) {
+    const double target = std::log(targetPunch);
+    std::size_t nearest = 0;
+    for (std::size_t index = 0; index < punches.size(); ++index) {
+        if (std::abs(std::log(punches[index]) - target) < std::abs(std::log(punches[nearest]) - target)) {
+            nearest = index;
+        }
+    }
+    for (std::size_t index = 0; index + 1 < punches.size(); ++index) {
+        const double low = std::log(punches[index]);
+        const double high = std::log(punches[index + 1]);
+        if (low == high || (target - low) * (target - high) > 0.0) continue;
+        const double position = (target - low) / (high - low);
+        const double logDrive = std::log(MATCH_DRIVES[index])
+            + position * (std::log(MATCH_DRIVES[index + 1]) - std::log(MATCH_DRIVES[index]));
+        return static_cast<float>(std::exp(logDrive));
+    }
+    return MATCH_DRIVES[nearest];
+}
+
+void correct(std::array<float, LeadAmp::TONE_BANDS>& bandsDb, const ToneMeasure& stem, const ToneMeasure& amp) {
+    double weighted = 0.0, weight = 0.0;
+    for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+        if (stem.bands[band] > MATCH_BAND_FLOOR && amp.bands[band] > MATCH_BAND_FLOOR) {
+            bandsDb[band] += static_cast<float>(10.0 * std::log10(stem.bands[band] / amp.bands[band]));
+        }
+        weighted += stem.bands[band] * bandsDb[band];
+        weight += stem.bands[band];
+    }
+    const auto centre = static_cast<float>(weight > 0.0 ? weighted / weight : 0.0);
+    for (float& band : bandsDb) {
+        band = std::clamp(band - centre, -LeadAmp::MAX_TONE_DB, LeadAmp::MAX_TONE_DB);
+    }
+}
+
+}
+
+int leadAmpMatch(float sampleRate, const float* cabinet, std::size_t cabinetFrames, float cabinetRate,
+    const float* stem, const float* di, const std::uint32_t* noteFrames, std::size_t noteCount,
+    float* drive, float* bandsDb, std::size_t bandCount, float* levelGain) noexcept {
+    if (!drive || !bandsDb || !levelGain || bandCount != LeadAmp::TONE_BANDS) {
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    }
+    *drive = 1.0f;
+    *levelGain = 1.0f;
+    std::fill(bandsDb, bandsDb + bandCount, 0.0f);
+    if (!stem || !di || !noteFrames || !std::isfinite(sampleRate) || sampleRate <= 0.0f) {
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    }
+    if (cabinetFrames > 0 && (!cabinet || !std::isfinite(cabinetRate) || cabinetRate <= 0.0f)) {
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    }
+
+    try {
+        const auto minFrames = static_cast<std::size_t>(MATCH_MIN_NOTE_SECONDS * sampleRate);
+        const auto maxFrames = static_cast<std::size_t>(MATCH_MAX_NOTE_SECONDS * sampleRate);
+        std::vector<MatchNote> notes;
+        std::vector<std::vector<float>> stemNotes;
+        std::size_t offset = 0;
+        for (std::size_t index = 0; index < noteCount; ++index) {
+            if (noteFrames[index] >= minFrames) {
+                const std::size_t frames = std::min<std::size_t>(noteFrames[index], maxFrames);
+                notes.push_back({stem + offset, di + offset, frames});
+                stemNotes.emplace_back(stem + offset, stem + offset + frames);
+            }
+            offset += noteFrames[index];
+        }
+        if (notes.size() < MATCH_MIN_NOTES) return YARG_AUDIO_ERROR_INVALID_STATE;
+
+        const auto target = measure(stemNotes, sampleRate);
+        if (!(target.punch > 0.0)) return YARG_AUDIO_ERROR_INVALID_STATE;
+
+        std::array<float, LeadAmp::TONE_BANDS> tone{};
+        std::array<double, std::size(MATCH_DRIVES)> punches{};
+        double defaultLevel = 0.0;
+        for (std::size_t index = 0; index < punches.size(); ++index) {
+            const auto rendered = measure(render(notes, sampleRate, cabinet, cabinetFrames, cabinetRate,
+                MATCH_DRIVES[index]), sampleRate);
+            if (!(rendered.punch > 0.0)) return YARG_AUDIO_ERROR_INVALID_STATE;
+            punches[index] = rendered.punch;
+            if (MATCH_DRIVES[index] == 1.0f) defaultLevel = rendered.level;
+        }
+
+        const float fitted = std::clamp(fitDrive(target.punch, punches), LeadAmp::MIN_DRIVE, LeadAmp::MAX_DRIVE);
+        const auto amped = render(notes, sampleRate, cabinet, cabinetFrames, cabinetRate, fitted);
+        auto rendered = measure(amped, sampleRate);
+        for (int pass = 0; pass < MATCH_TONE_PASSES; ++pass) {
+            correct(tone, target, rendered);
+            rendered = measure(equalize(amped, sampleRate, tone), sampleRate);
+        }
+
+        *drive = fitted;
+        std::copy(tone.begin(), tone.end(), bandsDb);
+        *levelGain = rendered.level > 0.0 && defaultLevel > 0.0
+            ? static_cast<float>(defaultLevel / rendered.level)
+            : 1.0f;
+        return YARG_AUDIO_OK;
+    } catch (const std::bad_alloc&) {
+        return YARG_AUDIO_ERROR_INTERNAL;
+    }
+}
+
 bool leadAmpDspDestroy(yarg_lead_amp_dsp* dsp) noexcept {
     if (!dsp) return true;
     if (!dsp->bass.lockChannel(dsp->channel, true)) return false;
@@ -397,4 +693,5 @@ yarg_lead_amp_dsp::yarg_lead_amp_dsp(const yarg::audio::BassCoreBindings& bindin
     float cabinetRate)
     : bass(bindings), channel(channelHandle), channelCount(channels),
       gainBits(yarg::audio::bitCast<std::uint32_t>(gain)),
+      driveBits(yarg::audio::bitCast<std::uint32_t>(1.0f)),
       amp(channels, sampleRate, cabinet, cabinetFrames, cabinetRate) {}

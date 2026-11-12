@@ -16,11 +16,26 @@ public:
     static constexpr int MAX_CHANNELS = 8;
     static constexpr float MAX_GAIN = 16.0f;
     static constexpr int MAX_CABINET_FRAMES = 1024;
+    static constexpr int TONE_BANDS = YARG_LEAD_AMP_TONE_BANDS;
+    static constexpr float MIN_DRIVE = 0.125f;
+    static constexpr float MAX_DRIVE = 8.0f;
+    static constexpr float MAX_TONE_DB = 12.0f;
+    static constexpr float TONE_LOWEST_HZ = 62.5f;
 
     LeadAmp(int channels, float sampleRate, const float* cabinet = nullptr,
         std::size_t cabinetFrames = 0, float cabinetRate = 0.0f);
 
     void process(float* samples, std::size_t frames, float gain) noexcept;
+    void setTone(float drive, const float* bandsDb) noexcept;
+
+    struct Biquad {
+        float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+    };
+
+    static bool validTone(float drive, const float* bandsDb) noexcept;
+    static float toneHz(int band) noexcept;
+    static Biquad toneBand(float sampleRate, int band, float gainDb) noexcept;
+    static Biquad peak(float sampleRate, float hz, float gainDb, float q) noexcept;
 
 private:
     enum Filter {
@@ -37,11 +52,8 @@ private:
         CAB_HONK,
         CAB_LOW_PASS_1,
         CAB_LOW_PASS_2,
-        FILTER_COUNT,
-    };
-
-    struct Biquad {
-        float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+        TONE_FIRST,
+        FILTER_COUNT = TONE_FIRST + TONE_BANDS,
     };
 
     struct BiquadState {
@@ -71,6 +83,7 @@ private:
     static float shape(Shaper& shaper, float input, float bias, float offset) noexcept;
 
     int channels_;
+    float sampleRate_;
     std::array<Biquad, FILTER_COUNT> filters_{};
     float couplingCoefficient_;
     float interstageCoefficient_;
@@ -79,6 +92,8 @@ private:
     float firstOffset_;
     float secondOffset_;
     float gain_ = -1.0f;
+    float drive_ = -1.0f;
+    float targetDrive_ = 1.0f;
     int echoIndex_ = 0;
     int echoLength_ = 1;
     std::vector<float> cabinet_;
@@ -103,6 +118,10 @@ struct yarg_lead_amp_dsp {
     std::uint32_t dsp = 0;
     int channelCount;
     std::atomic<std::uint32_t> gainBits;
+    std::atomic<std::uint32_t> driveBits;
+    std::array<std::atomic<std::uint32_t>, yarg::audio::LeadAmp::TONE_BANDS> toneBits{};
+    std::atomic<std::uint32_t> toneVersion{0};
+    std::uint32_t appliedToneVersion = 0;
     yarg::audio::LeadAmp amp;
 };
 
@@ -115,6 +134,11 @@ int leadAmpDspAttach(const BassCoreBindings& bass, std::uint32_t channel, float 
     const float* cabinet, std::size_t cabinetFrames, float cabinetRate,
     int priority, yarg_lead_amp_dsp** dsp, int* bassError) noexcept;
 int leadAmpDspSetGain(yarg_lead_amp_dsp* dsp, float gain) noexcept;
+int leadAmpDspSetTone(yarg_lead_amp_dsp* dsp, float drive, const float* bandsDb, std::size_t bandCount) noexcept;
+
+int leadAmpMatch(float sampleRate, const float* cabinet, std::size_t cabinetFrames, float cabinetRate,
+    const float* stem, const float* di, const std::uint32_t* noteFrames, std::size_t noteCount,
+    float* drive, float* bandsDb, std::size_t bandCount, float* levelGain) noexcept;
 
 bool leadAmpDspDestroy(yarg_lead_amp_dsp* dsp) noexcept;
 
