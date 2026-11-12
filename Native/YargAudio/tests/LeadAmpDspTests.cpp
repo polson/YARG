@@ -261,15 +261,30 @@ void limit(std::vector<float>& samples) {
     }
 }
 
+std::vector<float> addTail(const std::vector<float>& dry, double level) {
+    const std::size_t taps[] = {SAMPLE_RATE / 5, SAMPLE_RATE / 4, 3 * SAMPLE_RATE / 10};
+    const double gains[] = {0.6, 0.4, 0.25};
+    std::vector<float> wet = dry;
+    for (std::size_t frame = 0; frame < dry.size(); ++frame) {
+        double sum = 0.0;
+        for (std::size_t tap = 0; tap < 3; ++tap) {
+            if (frame >= taps[tap]) sum += gains[tap] * dry[frame - taps[tap]];
+        }
+        wet[frame] = static_cast<float>(dry[frame] + level * sum);
+    }
+    return wet;
+}
+
 Matched match(float drive, const Tone& tone, int noteCount, float wahStartHz = 0.0f, float wahEndHz = 0.0f,
     double rumble = 0.0, const std::vector<std::vector<float>>& cabinets = {}, int stemCabinet = 0,
-    int noteFrames = SAMPLE_RATE * 2 / 5, bool limited = false, double stemLevel = 1.0) {
+    int noteFrames = SAMPLE_RATE * 2 / 5, bool limited = false, double stemLevel = 1.0, double tail = 0.0) {
     std::vector<float> stem, di;
     std::vector<std::uint32_t> frames;
     for (int note = 0; note < noteCount; ++note) {
         const auto played = pluck(196 * std::pow(2.0, note / 4.0), noteFrames);
         auto heard = monoRender(played, drive, tone, wahStartHz, wahEndHz,
             cabinets.empty() ? nullptr : &cabinets[stemCabinet]);
+        if (tail > 0.0) heard = addTail(heard, tail);
         for (std::size_t frame = 0; frame < heard.size(); ++frame) {
             heard[frame] += static_cast<float>(rumble * std::sin(2 * PI * 55 * frame / SAMPLE_RATE));
         }
@@ -471,6 +486,16 @@ void matchFindsDriveAndTone() {
     REQUIRE(std::isfinite(matched.levelGain) && matched.levelGain > 0.0f);
 }
 
+void matchIgnoresTheReverbTail() {
+    const auto dry = match(3.0f, {}, 8);
+    const auto wet = match(3.0f, {}, 8, 0.0f, 0.0f, 0.0, {}, 0, SAMPLE_RATE * 2 / 5, false, 1.0, 1.0);
+    REQUIRE(wet.result == YARG_AUDIO_OK);
+    REQUIRE(std::abs(std::log2(wet.drive / dry.drive)) < 0.1);
+    for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+        REQUIRE(std::abs(wet.tone[band] - dry.tone[band]) < 0.5f);
+    }
+}
+
 void matchFindsWah() {
     const auto matched = match(2.0f, {}, 8, 1800.0f, 500.0f);
     REQUIRE(matched.result == YARG_AUDIO_OK);
@@ -602,6 +627,7 @@ void runLeadAmpDspTests() {
     matchKeepsTheDefaultTone();
     matchReportsTheStemLevel();
     matchFindsDriveAndTone();
+    matchIgnoresTheReverbTail();
     matchNeedsEnoughNotes();
     matchIgnoresLowBleed();
     wahSweepsDownAfterThePick();

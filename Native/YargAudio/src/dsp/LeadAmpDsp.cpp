@@ -90,6 +90,7 @@ constexpr int MATCH_FADE_MIN_WINDOWS = 6;
 constexpr int MATCH_FADE_MIN_BANDS = 4;
 constexpr float MATCH_FALLBACK_DRIVE = 1.0f;
 constexpr float MATCH_LEVEL_SECONDS = 0.3f;
+constexpr float MATCH_ANALYSIS_SECONDS = 0.2f;
 constexpr float MATCH_MIN_NOTE_SECONDS = 0.1f;
 constexpr float MATCH_MAX_NOTE_SECONDS = 0.35f;
 constexpr int MATCH_MIN_NOTES = 3;
@@ -666,11 +667,13 @@ struct BandDecay {
 BandDecay bandDecay(const std::vector<float>& note, float sampleRate) {
     const auto window = std::max<std::size_t>(1, static_cast<std::size_t>(MATCH_FADE_WINDOW_SECONDS * sampleRate));
     const auto start = static_cast<std::size_t>(MATCH_FADE_START_SECONDS * sampleRate);
+    const auto length = std::min<std::size_t>(note.size(),
+        static_cast<std::size_t>(MATCH_ANALYSIS_SECONDS * sampleRate));
     BandDecay decay;
-    if (note.size() < start + window * MATCH_FADE_MIN_WINDOWS) return decay;
+    if (length < start + window * MATCH_FADE_MIN_WINDOWS) return decay;
 
     std::vector<double> times;
-    for (std::size_t first = start; first + window <= note.size(); first += window) {
+    for (std::size_t first = start; first + window <= length; first += window) {
         times.push_back(static_cast<double>(first) / sampleRate);
     }
     double total = 0.0;
@@ -763,8 +766,9 @@ ToneMeasure measure(const std::vector<std::vector<float>>& notes, float sampleRa
 
         std::array<double, LeadAmp::TONE_BANDS> bands{};
         double total = 0.0;
+        const auto spectrum = std::min(length, frames(MATCH_ANALYSIS_SECONDS));
         for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
-            bands[band] = bandEnergy(samples, length, sampleRate, LeadAmp::toneHz(band));
+            bands[band] = bandEnergy(samples, spectrum, sampleRate, LeadAmp::toneHz(band));
             total += bands[band];
         }
         if (!(total > 0.0)) continue;
