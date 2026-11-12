@@ -471,6 +471,42 @@ void matchWorksOnShortNotes() {
     REQUIRE(wah.wahStartHz == 0.0f && wah.wahEndHz == 0.0f);
 }
 
+void requireGentleTone(const Tone& tone) {
+    for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+        REQUIRE(tone[band] <= 6.0f + 1e-4f);
+        if (band > 0) REQUIRE(std::abs(tone[band] - tone[band - 1]) <= 6.0f + 1e-4f);
+    }
+}
+
+double heardLevel(const std::vector<float>& samples) {
+    double energy = 0;
+    const int frames = SAMPLE_RATE * 3 / 10;
+    for (int frame = 0; frame < frames; ++frame) energy += samples[frame] * samples[frame];
+    return std::sqrt(energy / frames);
+}
+
+void matchKeepsTheEqGentle() {
+    Tone harsh{};
+    for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) harsh[band] = band % 2 ? 12.0f : -12.0f;
+    requireGentleTone(match(1.0f, harsh, 8).tone);
+    requireGentleTone(match(1.0f, {}, 8, 0.0f, 0.0f, 0.3).tone);
+}
+
+void matchDoesNotBoostLowNotes() {
+    Tone bassy{};
+    for (int band = 0; band <= 7; ++band) bassy[band] = 12.0f;
+    for (int band = 9; band <= 14; ++band) bassy[band] = -12.0f;
+    const auto matched = match(1.0f, bassy, 8);
+    REQUIRE(matched.result == YARG_AUDIO_OK);
+    requireGentleTone(matched.tone);
+    for (double hz : {82.4, 110.0, 146.8}) {
+        const auto low = pluck(hz, SAMPLE_RATE * 2 / 5);
+        const double fitted = heardLevel(monoRender(low, matched.drive, matched.tone)) * matched.levelGain;
+        const double plain = heardLevel(monoRender(low, 1.0f, {}));
+        REQUIRE(20 * std::log10(fitted / plain) < 3.5);
+    }
+}
+
 void matchNeedsEnoughNotes() {
     const auto matched = match(1.0f, {}, 2);
     REQUIRE(matched.result == YARG_AUDIO_ERROR_INVALID_STATE);
@@ -509,4 +545,6 @@ void runLeadAmpDspTests() {
     echoFollowsTheTone();
     matchPicksTheCabinet();
     matchWorksOnShortNotes();
+    matchKeepsTheEqGentle();
+    matchDoesNotBoostLowNotes();
 }

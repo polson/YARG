@@ -92,6 +92,18 @@ constexpr int MATCH_MIN_NOTES = 3;
 constexpr int MATCH_TONE_PASSES = 24;
 constexpr double MATCH_BAND_FLOOR = 1e-5;
 constexpr double MATCH_TRUSTED_SHARE = 0.004;
+constexpr float MATCH_MAX_BOOST_DB = 6.0f;
+constexpr float MATCH_MAX_STEP_DB = 6.0f;
+constexpr float GUARD_MAX_RISE_DB = 3.0f;
+constexpr int GUARD_PASSES = 8;
+constexpr int GUARD_LOWEST_NOTE = 40;
+constexpr int GUARD_HIGHEST_NOTE = 88;
+constexpr int GUARD_NOTE_STEP = 4;
+constexpr double GUARD_PLUCK_LEVEL = 0.1;
+constexpr double GUARD_PLUCK_DECAY = 3.0;
+constexpr int GUARD_HARMONICS = 12;
+constexpr double GUARD_LOWEST_RATIO = 0.7;
+constexpr double GUARD_HIGHEST_RATIO = 4.0;
 constexpr std::size_t MATCH_RENDER_BLOCK = 512;
 constexpr int WAH_TRACK_BANDS = 11;
 constexpr double WAH_TRACK_BANDS_PER_OCTAVE = 3.0;
@@ -764,17 +776,69 @@ void correct(std::array<float, LeadAmp::TONE_BANDS>& bandsDb, const TrustedBands
     const auto centre = static_cast<float>(weight > 0.0 ? weighted / weight : 0.0);
     for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
         if (trusted[band]) {
-            bandsDb[band] = std::clamp(bandsDb[band] - centre, -LeadAmp::MAX_TONE_DB, LeadAmp::MAX_TONE_DB);
+            bandsDb[band] = std::clamp(bandsDb[band] - centre, -LeadAmp::MAX_TONE_DB, MATCH_MAX_BOOST_DB);
         }
+    }
+
+    int first = -1, last = -1;
+    for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+        if (!trusted[band]) continue;
+        if (first < 0) first = band;
+        last = band;
     }
     for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
         if (trusted[band]) continue;
-        int nearest = -1;
-        for (int other = 0; other < LeadAmp::TONE_BANDS; ++other) {
-            if (trusted[other] && (nearest < 0 || std::abs(other - band) < std::abs(nearest - band))) nearest = other;
+        if (first < 0) {
+            bandsDb[band] = 0.0f;
+        } else if (band < first) {
+            bandsDb[band] = band == first - 1 ? 0.5f * bandsDb[first] : 0.0f;
+        } else if (band > last) {
+            bandsDb[band] = band == last + 1 ? 0.5f * bandsDb[last] : 0.0f;
+        } else {
+            int below = band - 1, above = band + 1;
+            while (!trusted[below]) --below;
+            while (!trusted[above]) ++above;
+            const float position = static_cast<float>(band - below) / static_cast<float>(above - below);
+            bandsDb[band] = bandsDb[below] + position * (bandsDb[above] - bandsDb[below]);
         }
-        bandsDb[band] = nearest >= 0 ? bandsDb[nearest] : 0.0f;
     }
+
+    for (int band = 1; band < LeadAmp::TONE_BANDS; ++band) {
+        bandsDb[band] = std::clamp(bandsDb[band], bandsDb[band - 1] - MATCH_MAX_STEP_DB,
+            bandsDb[band - 1] + MATCH_MAX_STEP_DB);
+    }
+    for (int band = LeadAmp::TONE_BANDS - 2; band >= 0; --band) {
+        bandsDb[band] = std::clamp(bandsDb[band], bandsDb[band + 1] - MATCH_MAX_STEP_DB,
+            bandsDb[band + 1] + MATCH_MAX_STEP_DB);
+    }
+}
+
+std::vector<std::vector<float>> rangeNotes(float sampleRate) {
+    const auto frames = static_cast<std::size_t>(MATCH_MAX_NOTE_SECONDS * sampleRate);
+    std::vector<std::vector<float>> notes;
+    for (int note = GUARD_LOWEST_NOTE; note <= GUARD_HIGHEST_NOTE; note += GUARD_NOTE_STEP) {
+        const double hz = 440.0 * std::exp2((note - 69) / 12.0);
+        std::vector<float> samples(frames);
+        for (std::size_t frame = 0; frame < frames; ++frame) {
+            const double seconds = static_cast<double>(frame) / sampleRate;
+            double value = 0.0;
+            for (int harmonic = 1; harmonic <= GUARD_HARMONICS && hz * harmonic < 0.45 * sampleRate; ++harmonic) {
+                value += std::sin(2.0 * PI * hz * harmonic * seconds) / harmonic;
+            }
+            samples[frame] = static_cast<float>(GUARD_PLUCK_LEVEL * std::exp(-GUARD_PLUCK_DECAY * seconds) * value);
+        }
+        notes.push_back(std::move(samples));
+    }
+    return notes;
+}
+
+std::vector<double> noteLevels(const std::vector<std::vector<float>>& notes, float sampleRate) {
+    const auto frames = static_cast<std::size_t>(MATCH_LEVEL_SECONDS * sampleRate);
+    std::vector<double> levels;
+    for (const auto& note : notes) {
+        levels.push_back(rms(note.data(), 0, std::min(frames, note.size())));
+    }
+    return levels;
 }
 
 }
@@ -964,6 +1028,40 @@ int leadAmpMatch(float sampleRate, const Cabinet* cabinets, std::size_t cabinetC
         const auto trusted = trustedBands(rendered);
         for (int pass = 0; pass < MATCH_TONE_PASSES; ++pass) {
             correct(bands, trusted, target, rendered);
+            rendered = measure(equalize(amped, sampleRate, bands), sampleRate);
+        }
+
+        const auto range = rangeNotes(sampleRate);
+        std::vector<MatchNote> rangeMatch;
+        for (const auto& note : range) {
+            rangeMatch.push_back({note.data(), note.data(), note.size()});
+        }
+        const auto defaultLevels = noteLevels(render(rangeMatch, sampleRate, defaultCabinet, 1.0f), sampleRate);
+        const auto rangeAmped = render(rangeMatch, sampleRate, cabinet, fitted, wahStart, wahEnd);
+        for (int pass = 0; pass < GUARD_PASSES && rendered.level > 0.0 && defaultLevel > 0.0; ++pass) {
+            const double levelGain = defaultLevel / rendered.level;
+            const auto levels = noteLevels(equalize(rangeAmped, sampleRate, bands), sampleRate);
+            std::size_t worst = 0;
+            double worstRise = -HUGE_VAL;
+            for (std::size_t note = 0; note < levels.size(); ++note) {
+                if (!(levels[note] > 0.0) || !(defaultLevels[note] > 0.0)) continue;
+                const double rise = 20.0 * std::log10(levels[note] * levelGain / defaultLevels[note]);
+                if (rise > worstRise) {
+                    worstRise = rise;
+                    worst = note;
+                }
+            }
+            if (worstRise <= GUARD_MAX_RISE_DB) break;
+
+            const double hz = 440.0 * std::exp2((GUARD_LOWEST_NOTE + GUARD_NOTE_STEP * static_cast<int>(worst) - 69) / 12.0);
+            bool lowered = false;
+            for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+                const double bandHz = LeadAmp::toneHz(band);
+                if (bandHz < hz * GUARD_LOWEST_RATIO || bandHz > hz * GUARD_HIGHEST_RATIO || bands[band] <= 0.0f) continue;
+                bands[band] = std::max(0.0f, bands[band] - static_cast<float>(worstRise - GUARD_MAX_RISE_DB));
+                lowered = true;
+            }
+            if (!lowered) break;
             rendered = measure(equalize(amped, sampleRate, bands), sampleRate);
         }
 
