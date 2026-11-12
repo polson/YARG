@@ -244,6 +244,7 @@ struct Matched {
     float wahStartHz;
     float wahEndHz;
     float levelGain;
+    float stemGain;
     std::uint32_t cabinet;
 };
 
@@ -262,7 +263,7 @@ void limit(std::vector<float>& samples) {
 
 Matched match(float drive, const Tone& tone, int noteCount, float wahStartHz = 0.0f, float wahEndHz = 0.0f,
     double rumble = 0.0, const std::vector<std::vector<float>>& cabinets = {}, int stemCabinet = 0,
-    int noteFrames = SAMPLE_RATE * 2 / 5, bool limited = false) {
+    int noteFrames = SAMPLE_RATE * 2 / 5, bool limited = false, double stemLevel = 1.0) {
     std::vector<float> stem, di;
     std::vector<std::uint32_t> frames;
     for (int note = 0; note < noteCount; ++note) {
@@ -272,6 +273,7 @@ Matched match(float drive, const Tone& tone, int noteCount, float wahStartHz = 0
         for (std::size_t frame = 0; frame < heard.size(); ++frame) {
             heard[frame] += static_cast<float>(rumble * std::sin(2 * PI * 55 * frame / SAMPLE_RATE));
         }
+        for (float& sample : heard) sample = static_cast<float>(sample * stemLevel);
         if (limited) limit(heard);
         di.insert(di.end(), played.begin(), played.end());
         stem.insert(stem.end(), heard.begin(), heard.end());
@@ -290,6 +292,7 @@ Matched match(float drive, const Tone& tone, int noteCount, float wahStartHz = 0
     matched.wahStartHz = fitted.wah_start_hz;
     matched.wahEndHz = fitted.wah_end_hz;
     matched.levelGain = fitted.level_gain;
+    matched.stemGain = fitted.stem_gain;
     matched.cabinet = fitted.cabinet;
     return matched;
 }
@@ -443,7 +446,17 @@ void matchKeepsTheDefaultTone() {
         REQUIRE(std::abs(band) < 2.0f);
     }
     REQUIRE(std::abs(matched.levelGain - 1.0f) < 0.1f);
+    REQUIRE(std::abs(matched.stemGain - 1.0f) < 0.1f);
     REQUIRE(matched.wahStartHz == 0.0f && matched.wahEndHz == 0.0f);
+}
+
+void matchReportsTheStemLevel() {
+    const auto unity = match(1.0f, {}, 8);
+    REQUIRE(unity.stemGain > 0.0f);
+    REQUIRE(std::abs(unity.stemGain - 1.0f) < 0.1f);
+
+    const auto loud = match(1.0f, {}, 8, 0.0f, 0.0f, 0.0, {}, 0, SAMPLE_RATE * 2 / 5, false, 2.0);
+    REQUIRE(std::abs(loud.stemGain / unity.stemGain - 2.0f) < 0.2f);
 }
 
 void matchFindsDriveAndTone() {
@@ -587,6 +600,7 @@ void runLeadAmpDspTests() {
     toneBandBoostsItsFrequency();
     invalidToneIsRejected();
     matchKeepsTheDefaultTone();
+    matchReportsTheStemLevel();
     matchFindsDriveAndTone();
     matchNeedsEnoughNotes();
     matchIgnoresLowBleed();

@@ -136,6 +136,7 @@ namespace YARG.Audio.BASS.Effects
             public float EchoSeconds;
             public float EchoLevel;
             public float LevelGain;
+            public float StemGain;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -175,6 +176,7 @@ namespace YARG.Audio.BASS.Effects
         public readonly float   EchoSeconds;
         public readonly float   EchoLevel;
         public readonly float   LevelGain;
+        public readonly float   StemGain;
         public readonly float   ReverbWet;
         public readonly float   ReverbRoom;
         public readonly float   ReverbLevelGain;
@@ -192,6 +194,7 @@ namespace YARG.Audio.BASS.Effects
             EchoSeconds = tone.EchoSeconds;
             EchoLevel = tone.EchoLevel;
             LevelGain = tone.LevelGain;
+            StemGain = tone.StemGain;
             ReverbWet = reverbWet;
             ReverbRoom = reverbRoom;
             ReverbLevelGain = reverbLevelGain;
@@ -210,6 +213,7 @@ namespace YARG.Audio.BASS.Effects
                 EchoSeconds = EchoSeconds,
                 EchoLevel = EchoLevel,
                 LevelGain = LevelGain,
+                StemGain = StemGain,
             };
         }
 

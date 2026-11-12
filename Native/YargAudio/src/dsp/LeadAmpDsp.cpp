@@ -313,6 +313,7 @@ yarg_lead_amp_tone LeadAmp::defaultTone() noexcept {
     tone.echo_seconds = DEFAULT_ECHO_SECONDS;
     tone.echo_level = DEFAULT_ECHO_LEVEL;
     tone.level_gain = 1.0f;
+    tone.stem_gain = 0.0f;
     return tone;
 }
 
@@ -1189,12 +1190,17 @@ int leadAmpMatch(float sampleRate, const Cabinet* cabinets, std::size_t cabinetC
             if (excess > 0.0) levelGain *= std::pow(10.0, -excess / 20.0);
         }
 
+        const double stemGain = target.level > 0.0 && defaultLevel > 0.0
+            ? std::clamp(target.level / defaultLevel, 0.0, 1000.0)
+            : 0.0;
+
         tone->cabinet = static_cast<std::uint32_t>(chosen);
         tone->drive = fitted;
         tone->wah_start_hz = wahStart;
         tone->wah_end_hz = wahEnd;
         std::copy(bands.begin(), bands.end(), tone->bands_db);
         tone->level_gain = static_cast<float>(levelGain);
+        tone->stem_gain = static_cast<float>(stemGain);
         return YARG_AUDIO_OK;
     } catch (const std::bad_alloc&) {
         return YARG_AUDIO_ERROR_INTERNAL;

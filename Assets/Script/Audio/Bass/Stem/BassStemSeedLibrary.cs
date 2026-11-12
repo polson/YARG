@@ -1081,8 +1081,15 @@ namespace YARG.Audio.BASS
             double soloLevel = heard.Length > 0 ? heard[heard.Length / 2] : DEFAULT_SOLO_LEVEL;
             job.Tone = MatchSpace(job, MatchTone(clips, pitches));
             LogTone(job.Tone);
-            job.SynthGain = soloLevel / SYNTH_NOTE_LEVEL * job.Tone.LevelGain * job.Tone.ReverbLevelGain;
+            double stemGain = job.Tone.StemGain > 0 ? job.Tone.StemGain : soloLevel / SYNTH_NOTE_LEVEL;
+            job.SynthGain = stemGain * job.Tone.LevelGain * job.Tone.ReverbLevelGain;
             SetDecay(job, BassNoteDecay.Typical(decays));
+            int singles = clips.FindAll(clip => clip.SingleNote).Count;
+            YargLogger.LogFormatInfo(
+                "[SoloLevel] {0} notes ({1} single, {2} chord), stem gain {3}, tone gain {4}, reverb gain {5}, synth gain {6}, solo level {7}",
+                clips.Count, singles, clips.Count - singles, Math.Round(job.Tone.StemGain, 2),
+                Math.Round(job.Tone.LevelGain, 2), Math.Round(job.Tone.ReverbLevelGain, 2),
+                Math.Round(job.SynthGain, 4), Math.Round(soloLevel, 4));
             YargLogger.LogFormatInfo("[SoloSynth] {0} measured pitches, {1} chord anchors, tuning {2} cents, solo level {3}",
                 measured, anchors.Count - measured, Math.Round(tuningCents), Math.Round(soloLevel, 4));
         }

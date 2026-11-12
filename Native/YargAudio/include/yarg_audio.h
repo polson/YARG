@@ -18,7 +18,7 @@
 extern "C" {
 #endif
 
-#define YARG_AUDIO_ABI_VERSION 33u
+#define YARG_AUDIO_ABI_VERSION 34u
 #define YARG_LEAD_AMP_TONE_BANDS 25
 
 typedef struct yarg_stretch_stream yarg_stretch_stream;
@@ -55,7 +55,8 @@ typedef struct yarg_one_shot_config {
 } yarg_one_shot_config;
 /* Lead amp settings. cabinet indexes the cabinets given at attach. bands_db holds one correction gain
    per third-octave band starting at 62.5 Hz. Each pick sweeps the wah from wah_start_hz towards
-   wah_end_hz; both zero turns it off. level_gain is only written by yarg_lead_amp_match. */
+   wah_end_hz; both zero turns it off. level_gain and stem_gain are only written by
+   yarg_lead_amp_match. stem_gain scales the default tone up to the stem level. */
 typedef struct yarg_lead_amp_tone {
     uint32_t size;
     uint32_t cabinet;
@@ -66,6 +67,7 @@ typedef struct yarg_lead_amp_tone {
     float echo_seconds;
     float echo_level;
     float level_gain;
+    float stem_gain;
 } yarg_lead_amp_tone;
 /* Room a solo was recorded in: the amp echo and the Freeverb wet level and room size. level_gain is
    written by yarg_solo_space_match and scales the dry signal so it sounds as loud with the reverb
@@ -251,7 +253,8 @@ YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_set_tone(
 /* Fits cabinet, drive, wah and correction EQ so DI notes played through the amp sound like the
    paired stem notes. Cabinets are laid out as for attach. stem and di hold note_count mono notes back
    to back, note i being note_frames[i] long in both, each starting at its pick. Echo fields are left
-   at their defaults. level_gain scales the amp output back to the level it had at the default tone.
+   at their defaults. level_gain scales the fitted amp output back to the level it had at the default
+   tone. stem_gain is the factor from the default tone's level to the stem's measured level.
    Returns YARG_AUDIO_ERROR_INVALID_STATE when too few notes are long enough. */
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_lead_amp_match(
     float sample_rate, const float* cabinets, const uint32_t* cabinet_frames,
