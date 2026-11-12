@@ -2,6 +2,7 @@
 
 #include "dsp/FreeverbDsp.h"
 #include "dsp/LeadAmpDsp.h"
+#include "dsp/Loudness.h"
 
 #include <algorithm>
 #include <cmath>
@@ -46,6 +47,12 @@ constexpr double CALIBRATION_LOW_PASS_HZ = 3000.0;
 constexpr double CALIBRATION_LEVEL = 0.1;
 constexpr double PI = 3.14159265358979323846;
 constexpr double QUIET_RMS = 1e-6;
+constexpr int PHRASE_NOTES = 6;
+constexpr double PHRASE_NOTE_SECONDS = 0.2;
+constexpr double PHRASE_HEARD_SECONDS = 0.6;
+constexpr double PHRASE_LOWEST_HZ = 220.0;
+constexpr int PHRASE_HARMONICS = 12;
+constexpr double PHRASE_DECAY = 3.0;
 
 struct Release {
     int frame = -1;
@@ -191,102 +198,145 @@ void fitReverb(float sampleRate, double slope, double drop, double sustain, yarg
     space.reverb_room = room;
 }
 
+float reverbLevelGain(float sampleRate, float wet, float room) {
+    const auto noteFrames = static_cast<std::size_t>(PHRASE_NOTE_SECONDS * sampleRate);
+    const auto heardFrames = static_cast<std::size_t>(PHRASE_HEARD_SECONDS * sampleRate);
+    const std::size_t frames = noteFrames * PHRASE_NOTES;
+    std::vector<float> mono(frames, 0.0f);
+    for (int note = 0; note < PHRASE_NOTES; ++note) {
+        const double hz = PHRASE_LOWEST_HZ * std::exp2(static_cast<double>(note % 3) * 5.0 / 12.0);
+        for (std::size_t frame = 0; frame < noteFrames; ++frame) {
+            const double seconds = static_cast<double>(frame) / sampleRate;
+            double value = 0.0;
+            for (int harmonic = 1; harmonic <= PHRASE_HARMONICS; ++harmonic) {
+                value += std::sin(2.0 * PI * hz * harmonic * seconds) / harmonic;
+            }
+            mono[note * noteFrames + frame] = static_cast<float>(CALIBRATION_LEVEL * std::exp(-PHRASE_DECAY * seconds) * value);
+        }
+    }
+
+    std::vector<float> stereo(frames * 2);
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+        stereo[frame * 2] = stereo[frame * 2 + 1] = mono[frame];
+    }
+    if (!yarg::audio::freeverbRender(static_cast<std::uint32_t>(sampleRate), 2, 1.0f, wet, room, REVERB_DAMP,
+            REVERB_WIDTH, stereo.data(), frames)) {
+        return 1.0f;
+    }
+    std::vector<float> heard(frames);
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+        heard[frame] = 0.5f * (stereo[frame * 2] + stereo[frame * 2 + 1]);
+    }
+
+    const std::size_t first = frames - heardFrames;
+    const double dry = yarg::audio::kWeightedLevel(mono.data() + first, heardFrames, sampleRate);
+    const double reverberant = yarg::audio::kWeightedLevel(heard.data() + first, heardFrames, sampleRate);
+    return dry > 0.0 && reverberant > 0.0 ? static_cast<float>(dry / reverberant) : 1.0f;
+}
+
+int measureSpace(float sampleRate, const float* region, std::uint64_t frames, const double* pickSeconds,
+    std::size_t pickCount, yarg_solo_space* space) {
+    const auto frameLength = static_cast<std::size_t>(FRAME_SECONDS * sampleRate);
+    const double regionSeconds = static_cast<double>(frames) / sampleRate;
+    const int minLag = static_cast<int>(std::ceil(ECHO_SEARCH_SECONDS / FRAME_SECONDS));
+    const int maxLag = static_cast<int>(yarg::audio::LeadAmp::MAX_ECHO_SECONDS / FRAME_SECONDS);
+    std::vector<double> riseSums(maxLag + 1, 0.0);
+    std::vector<std::size_t> riseCounts(maxLag + 1, 0);
+    std::vector<std::vector<double>> gapLevels;
+    std::vector<double> attacks, slopes, drops, sustains;
+    for (std::size_t pick = 0; pick < pickCount; ++pick) {
+        const double start = pickSeconds[pick];
+        const double next = pick + 1 < pickCount ? pickSeconds[pick + 1] : regionSeconds;
+        const double gap = std::min(next, regionSeconds) - start;
+        if (start < 0.0 || gap < MIN_GAP_SECONDS) continue;
+
+        const auto first = static_cast<std::size_t>(start * sampleRate);
+        const auto length = static_cast<std::size_t>(std::min(gap, MAX_GAP_SECONDS) * sampleRate);
+        auto decibels = envelope(region + first, length, frameLength);
+        const int count = static_cast<int>(decibels.size());
+        double attack = decibels[0];
+        for (int frame = 1; frame < std::min(count, RELEASE_FRAMES); ++frame) {
+            attack = std::max(attack, decibels[frame]);
+        }
+        for (int lag = minLag; lag <= std::min(maxLag, count - 1); ++lag) {
+            if (decibels[lag] < attack - ECHO_FLOOR_DB) continue;
+            riseSums[lag] += std::clamp(decibels[lag] - decibels[lag - RISE_FRAMES], 0.0, MAX_RISE_DB);
+            ++riseCounts[lag];
+        }
+
+        Release release;
+        if (measureRelease(decibels, static_cast<int>(RELEASE_SEARCH_SECONDS / FRAME_SECONDS), release)) {
+            slopes.push_back(release.slope);
+            drops.push_back(release.drop);
+            sustains.push_back(release.sustain);
+        }
+        attacks.push_back(attack);
+        gapLevels.push_back(std::move(decibels));
+    }
+    if (gapLevels.size() < MIN_GAPS) return YARG_AUDIO_ERROR_INVALID_STATE;
+
+    int echoLag = -1;
+    double echoScore = 0.0;
+    for (int lag = minLag; lag <= maxLag; ++lag) {
+        if (riseCounts[lag] < MIN_GAPS) continue;
+        const double rise = riseSums[lag] / riseCounts[lag];
+        if (rise < MIN_ECHO_RISE_DB) continue;
+        double spread = 0.0;
+        int spreadCount = 0;
+        for (int other = std::max(minLag, lag - ECHO_LOCAL_FRAMES);
+             other <= std::min(maxLag, lag + ECHO_LOCAL_FRAMES); ++other) {
+            if (riseCounts[other] < MIN_GAPS || std::abs(other - lag) <= ECHO_NEIGHBOUR_FRAMES) continue;
+            const double nearby = riseSums[other] / riseCounts[other];
+            spread += nearby * nearby;
+            ++spreadCount;
+        }
+        spread = spreadCount > 0 ? std::sqrt(spread / spreadCount) : 0.0;
+        const double score = spread > 0.0 ? rise / spread : HUGE_VAL;
+        if (score > echoScore) {
+            echoLag = lag;
+            echoScore = score;
+        }
+    }
+
+    if (echoLag >= 0 && echoScore >= ECHO_PROMINENCE) {
+        double added = 0.0;
+        int heardGaps = 0;
+        for (std::size_t gap = 0; gap < gapLevels.size(); ++gap) {
+            const auto& decibels = gapLevels[gap];
+            if (echoLag >= static_cast<int>(decibels.size())) continue;
+            added += (std::pow(10.0, decibels[echoLag] / 10.0) - std::pow(10.0, decibels[echoLag - RISE_FRAMES] / 10.0))
+                / std::pow(10.0, attacks[gap] / 10.0);
+            ++heardGaps;
+        }
+        space->echo_seconds = static_cast<float>(echoLag * FRAME_SECONDS);
+        space->echo_level = heardGaps > 0
+            ? std::clamp(static_cast<float>(std::sqrt(std::max(0.0, added / heardGaps))), 0.0f, 1.0f)
+            : 0.0f;
+    } else {
+        space->echo_level = 0.0f;
+    }
+
+    if (slopes.size() >= MIN_GAPS) {
+        fitReverb(sampleRate, median(slopes), median(drops), median(sustains), *space);
+    }
+    return YARG_AUDIO_OK;
+}
+
 }
 
 namespace yarg::audio {
 
 int soloSpaceMatch(float sampleRate, const float* region, std::uint64_t frames,
     const double* pickSeconds, std::size_t pickCount, yarg_solo_space* space) noexcept {
-    if (!space || space->size < sizeof(yarg_solo_space) || !region || !pickSeconds
+    if (!space || space->size < sizeof(yarg_solo_space) || (frames > 0 && !region) || (pickCount > 0 && !pickSeconds)
         || !std::isfinite(sampleRate) || sampleRate <= 0.0f) {
         return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
     }
 
     try {
-        const auto frameLength = static_cast<std::size_t>(FRAME_SECONDS * sampleRate);
-        const double regionSeconds = static_cast<double>(frames) / sampleRate;
-        const int minLag = static_cast<int>(std::ceil(ECHO_SEARCH_SECONDS / FRAME_SECONDS));
-        const int maxLag = static_cast<int>(LeadAmp::MAX_ECHO_SECONDS / FRAME_SECONDS);
-        std::vector<double> riseSums(maxLag + 1, 0.0);
-        std::vector<std::size_t> riseCounts(maxLag + 1, 0);
-        std::vector<std::vector<double>> gapLevels;
-        std::vector<double> attacks, slopes, drops, sustains;
-        for (std::size_t pick = 0; pick < pickCount; ++pick) {
-            const double start = pickSeconds[pick];
-            const double next = pick + 1 < pickCount ? pickSeconds[pick + 1] : regionSeconds;
-            const double gap = std::min(next, regionSeconds) - start;
-            if (start < 0.0 || gap < MIN_GAP_SECONDS) continue;
-
-            const auto first = static_cast<std::size_t>(start * sampleRate);
-            const auto length = static_cast<std::size_t>(std::min(gap, MAX_GAP_SECONDS) * sampleRate);
-            auto decibels = envelope(region + first, length, frameLength);
-            const int count = static_cast<int>(decibels.size());
-            double attack = decibels[0];
-            for (int frame = 1; frame < std::min(count, RELEASE_FRAMES); ++frame) {
-                attack = std::max(attack, decibels[frame]);
-            }
-            for (int lag = minLag; lag <= std::min(maxLag, count - 1); ++lag) {
-                if (decibels[lag] < attack - ECHO_FLOOR_DB) continue;
-                riseSums[lag] += std::clamp(decibels[lag] - decibels[lag - RISE_FRAMES], 0.0, MAX_RISE_DB);
-                ++riseCounts[lag];
-            }
-
-            Release release;
-            if (measureRelease(decibels, static_cast<int>(RELEASE_SEARCH_SECONDS / FRAME_SECONDS), release)) {
-                slopes.push_back(release.slope);
-                drops.push_back(release.drop);
-                sustains.push_back(release.sustain);
-            }
-            attacks.push_back(attack);
-            gapLevels.push_back(std::move(decibels));
-        }
-        if (gapLevels.size() < MIN_GAPS) return YARG_AUDIO_ERROR_INVALID_STATE;
-
-        int echoLag = -1;
-        double echoScore = 0.0;
-        for (int lag = minLag; lag <= maxLag; ++lag) {
-            if (riseCounts[lag] < MIN_GAPS) continue;
-            const double rise = riseSums[lag] / riseCounts[lag];
-            if (rise < MIN_ECHO_RISE_DB) continue;
-            double spread = 0.0;
-            int spreadCount = 0;
-            for (int other = std::max(minLag, lag - ECHO_LOCAL_FRAMES);
-                 other <= std::min(maxLag, lag + ECHO_LOCAL_FRAMES); ++other) {
-                if (riseCounts[other] < MIN_GAPS || std::abs(other - lag) <= ECHO_NEIGHBOUR_FRAMES) continue;
-                const double nearby = riseSums[other] / riseCounts[other];
-                spread += nearby * nearby;
-                ++spreadCount;
-            }
-            spread = spreadCount > 0 ? std::sqrt(spread / spreadCount) : 0.0;
-            const double score = spread > 0.0 ? rise / spread : HUGE_VAL;
-            if (score > echoScore) {
-                echoLag = lag;
-                echoScore = score;
-            }
-        }
-
-        if (echoLag >= 0 && echoScore >= ECHO_PROMINENCE) {
-            double added = 0.0;
-            int heardGaps = 0;
-            for (std::size_t gap = 0; gap < gapLevels.size(); ++gap) {
-                const auto& decibels = gapLevels[gap];
-                if (echoLag >= static_cast<int>(decibels.size())) continue;
-                added += (std::pow(10.0, decibels[echoLag] / 10.0) - std::pow(10.0, decibels[echoLag - RISE_FRAMES] / 10.0))
-                    / std::pow(10.0, attacks[gap] / 10.0);
-                ++heardGaps;
-            }
-            space->echo_seconds = static_cast<float>(echoLag * FRAME_SECONDS);
-            space->echo_level = heardGaps > 0
-                ? std::clamp(static_cast<float>(std::sqrt(std::max(0.0, added / heardGaps))), 0.0f, 1.0f)
-                : 0.0f;
-        } else {
-            space->echo_level = 0.0f;
-        }
-
-        if (slopes.size() >= MIN_GAPS) {
-            fitReverb(sampleRate, median(slopes), median(drops), median(sustains), *space);
-        }
-        return YARG_AUDIO_OK;
+        const int result = measureSpace(sampleRate, region, frames, pickSeconds, pickCount, space);
+        space->level_gain = reverbLevelGain(sampleRate, space->reverb_wet, space->reverb_room);
+        return result;
     } catch (const std::bad_alloc&) {
         return YARG_AUDIO_ERROR_INTERNAL;
     }

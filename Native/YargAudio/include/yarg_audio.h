@@ -18,7 +18,7 @@
 extern "C" {
 #endif
 
-#define YARG_AUDIO_ABI_VERSION 32u
+#define YARG_AUDIO_ABI_VERSION 33u
 #define YARG_LEAD_AMP_TONE_BANDS 25
 
 typedef struct yarg_stretch_stream yarg_stretch_stream;
@@ -67,13 +67,16 @@ typedef struct yarg_lead_amp_tone {
     float echo_level;
     float level_gain;
 } yarg_lead_amp_tone;
-/* Room a solo was recorded in: the amp echo and the Freeverb wet level and room size. */
+/* Room a solo was recorded in: the amp echo and the Freeverb wet level and room size. level_gain is
+   written by yarg_solo_space_match and scales the dry signal so it sounds as loud with the reverb
+   as it did without. */
 typedef struct yarg_solo_space {
     uint32_t size;
     float echo_seconds;
     float echo_level;
     float reverb_wet;
     float reverb_room;
+    float level_gain;
 } yarg_solo_space;
 /* One segment of a tone schedule, in song seconds and MIDI pitch. A segment with equal start
    and end pitch is held; unequal pitches are interpolated linearly across the segment. */
@@ -256,8 +259,9 @@ YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_lead_amp_match(
     const float* stem, const float* di, const uint32_t* note_frames, uint32_t note_count,
     yarg_lead_amp_tone* tone);
 /* Measures echo and reverb from the gaps after picks in a mono solo recording. pick_seconds holds the
-   chart pick times from the start of region, in order. Returns YARG_AUDIO_ERROR_INVALID_STATE when
-   the solo has too few gaps to measure. */
+   chart pick times from the start of region, in order. Fields it cannot measure keep the values passed
+   in. level_gain is always written for the resulting reverb. Returns YARG_AUDIO_ERROR_INVALID_STATE
+   when the solo has too few gaps to measure. */
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_solo_space_match(
     float sample_rate, const float* region, uint64_t frames,
     const double* pick_seconds, uint32_t pick_count, yarg_solo_space* space);

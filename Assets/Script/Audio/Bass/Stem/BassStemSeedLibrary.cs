@@ -1081,7 +1081,7 @@ namespace YARG.Audio.BASS
             double soloLevel = heard.Length > 0 ? heard[heard.Length / 2] : DEFAULT_SOLO_LEVEL;
             job.Tone = MatchSpace(job, MatchTone(clips, pitches));
             LogTone(job.Tone);
-            job.SynthGain = soloLevel / SYNTH_NOTE_LEVEL * job.Tone.LevelGain;
+            job.SynthGain = soloLevel / SYNTH_NOTE_LEVEL * job.Tone.LevelGain * job.Tone.ReverbLevelGain;
             SetDecay(job, BassNoteDecay.Typical(decays));
             YargLogger.LogFormatInfo("[SoloSynth] {0} measured pitches, {1} chord anchors, tuning {2} cents, solo level {3}",
                 measured, anchors.Count - measured, Math.Round(tuningCents), Math.Round(soloLevel, 4));
@@ -1150,7 +1150,7 @@ namespace YARG.Audio.BASS
         {
             if (!job.HasRegion)
             {
-                return tone;
+                return BassLeadAmpDsp.MatchSpace(tone, _format.Frequency, null, Array.Empty<double>());
             }
 
             int channels = _format.Channels;
@@ -1190,12 +1190,13 @@ namespace YARG.Audio.BASS
 
             string cabinet = cabinets != null && tone.Cabinet < cabinets.Count ? cabinets.Names[tone.Cabinet] : "none";
             YargLogger.LogFormatInfo(
-                "[SoloTone] cabinet {0}, drive {1}, bands {2} dB, wah {3}, echo {4}, reverb wet {5} room {6}, level gain {7}",
+                "[SoloTone] cabinet {0}, drive {1}, bands {2} dB, wah {3}, echo {4}, reverb wet {5} room {6}, level gain {7}, reverb level gain {8}",
                 cabinet, Math.Round(tone.Drive, 2),
                 string.Join(" ", Array.ConvertAll(tone.BandsDb, band => Math.Round(band, 1))),
                 tone.HasWah ? $"{Math.Round(tone.WahStartHz)} to {Math.Round(tone.WahEndHz)} Hz" : "off",
                 tone.EchoLevel > 0 ? $"{Math.Round(tone.EchoSeconds, 2)} s at {Math.Round(tone.EchoLevel, 2)}" : "off",
-                Math.Round(tone.ReverbWet, 2), Math.Round(tone.ReverbRoom, 2), Math.Round(tone.LevelGain, 2));
+                Math.Round(tone.ReverbWet, 2), Math.Round(tone.ReverbRoom, 2), Math.Round(tone.LevelGain, 2),
+                Math.Round(tone.ReverbLevelGain, 2));
         }
 
         private void AddChordAnchors(List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,

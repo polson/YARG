@@ -8,7 +8,8 @@ namespace YARG.Audio.BASS.Effects
 {
     internal sealed class BassLeadAmpDsp : NativeDspHandle
     {
-        private const string EFFECT_NAME = "native lead amp DSP";
+        private const string EFFECT_NAME   = "native lead amp DSP";
+        private const int    INVALID_STATE = -2;
 
         private BassLeadAmpDsp()
         {
@@ -49,7 +50,7 @@ namespace YARG.Audio.BASS.Effects
                     return null;
                 }
 
-                return new BassLeadAmpTone(tone, BassLeadAmpTone.DEFAULT_REVERB_WET, BassLeadAmpTone.DEFAULT_REVERB_ROOM);
+                return new BassLeadAmpTone(tone, BassLeadAmpTone.DEFAULT_REVERB_WET, BassLeadAmpTone.DEFAULT_REVERB_ROOM, 1);
             }
             catch (Exception exception) when (exception is DllNotFoundException or
                 EntryPointNotFoundException or BadImageFormatException)
@@ -59,7 +60,7 @@ namespace YARG.Audio.BASS.Effects
             }
         }
 
-        internal static BassLeadAmpTone MatchSpace(BassLeadAmpTone tone, int sampleRate, float[] region,
+        internal static BassLeadAmpTone MatchSpace(BassLeadAmpTone tone, int sampleRate, float[]? region,
             double[] pickSeconds)
         {
             try
@@ -76,12 +77,18 @@ namespace YARG.Audio.BASS.Effects
                     EchoLevel = tone.EchoLevel,
                     ReverbWet = tone.ReverbWet,
                     ReverbRoom = tone.ReverbRoom,
+                    LevelGain = 1,
                 };
-                int result = YargAudioBindings.SoloSpaceMatch(sampleRate, region, (ulong) region.Length, pickSeconds,
-                    pickSeconds.Length, ref space);
-                if (result != 0)
+                int result = YargAudioBindings.SoloSpaceMatch(sampleRate, region, (ulong) (region?.Length ?? 0),
+                    pickSeconds, pickSeconds.Length, ref space);
+                if (result == INVALID_STATE)
                 {
-                    YargLogger.LogFormatInfo("Solo space match skipped for {0} picks: result {1}",
+                    YargLogger.LogFormatInfo("Solo space kept its defaults: {0} picks had too few gaps",
+                        pickSeconds.Length);
+                }
+                else if (result != 0)
+                {
+                    YargLogger.LogFormatInfo("Solo space match failed for {0} picks: result {1}",
                         pickSeconds.Length, result);
                     return tone;
                 }
@@ -139,6 +146,7 @@ namespace YARG.Audio.BASS.Effects
             public float EchoLevel;
             public float ReverbWet;
             public float ReverbRoom;
+            public float LevelGain;
         }
     }
 
@@ -147,8 +155,8 @@ namespace YARG.Audio.BASS.Effects
         internal const int   BAND_COUNT           = 25;
         internal const float DEFAULT_ECHO_SECONDS = 0.37f;
         internal const float DEFAULT_ECHO_LEVEL   = 0.35f;
-        internal const float DEFAULT_REVERB_WET   = 0.47f;
-        internal const float DEFAULT_REVERB_ROOM  = 0.75f;
+        internal const float DEFAULT_REVERB_WET   = 0.25f;
+        internal const float DEFAULT_REVERB_ROOM  = 0.55f;
 
         internal static readonly BassLeadAmpTone Default = new(new BassLeadAmpDsp.LeadAmpToneParams
         {
@@ -157,7 +165,7 @@ namespace YARG.Audio.BASS.Effects
             EchoSeconds = DEFAULT_ECHO_SECONDS,
             EchoLevel = DEFAULT_ECHO_LEVEL,
             LevelGain = 1,
-        }, DEFAULT_REVERB_WET, DEFAULT_REVERB_ROOM);
+        }, DEFAULT_REVERB_WET, DEFAULT_REVERB_ROOM, 1);
 
         public readonly int     Cabinet;
         public readonly float   Drive;
@@ -169,10 +177,12 @@ namespace YARG.Audio.BASS.Effects
         public readonly float   LevelGain;
         public readonly float   ReverbWet;
         public readonly float   ReverbRoom;
+        public readonly float   ReverbLevelGain;
 
         public bool HasWah => WahStartHz > 0;
 
-        internal BassLeadAmpTone(BassLeadAmpDsp.LeadAmpToneParams tone, float reverbWet, float reverbRoom)
+        internal BassLeadAmpTone(BassLeadAmpDsp.LeadAmpToneParams tone, float reverbWet, float reverbRoom,
+            float reverbLevelGain)
         {
             Cabinet = (int) tone.Cabinet;
             Drive = tone.Drive;
@@ -184,6 +194,7 @@ namespace YARG.Audio.BASS.Effects
             LevelGain = tone.LevelGain;
             ReverbWet = reverbWet;
             ReverbRoom = reverbRoom;
+            ReverbLevelGain = reverbLevelGain;
         }
 
         internal BassLeadAmpDsp.LeadAmpToneParams ToNative()
@@ -207,7 +218,7 @@ namespace YARG.Audio.BASS.Effects
             var native = ToNative();
             native.EchoSeconds = space.EchoSeconds;
             native.EchoLevel = space.EchoLevel;
-            return new BassLeadAmpTone(native, space.ReverbWet, space.ReverbRoom);
+            return new BassLeadAmpTone(native, space.ReverbWet, space.ReverbRoom, space.LevelGain);
         }
     }
 }

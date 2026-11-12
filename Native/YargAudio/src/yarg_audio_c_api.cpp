@@ -27,7 +27,7 @@ static_assert(sizeof(yarg_read_ahead_stats) == 104);
 static_assert(sizeof(yarg_read_ahead_position_snapshot) == 24);
 static_assert(sizeof(yarg_one_shot_config) == 24);
 static_assert(sizeof(yarg_lead_amp_tone) == 132);
-static_assert(sizeof(yarg_solo_space) == 20);
+static_assert(sizeof(yarg_solo_space) == 24);
 static_assert(sizeof(yarg_freeverb_params) == 24);
 static_assert(sizeof(yarg_dattorro_reverb_params) == 24);
 static_assert(sizeof(yarg_noise_gate_params) == 24);

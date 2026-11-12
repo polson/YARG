@@ -1,6 +1,7 @@
 #include "dsp/LeadAmpDsp.h"
 
 #include "BitCastCompat.h"
+#include "dsp/Loudness.h"
 
 #include <algorithm>
 #include <array>
@@ -661,7 +662,7 @@ ToneMeasure measure(const std::vector<std::vector<float>>& notes, float sampleRa
         }
         const double body = rms(samples, std::min(length, frames(MATCH_BODY_SECONDS)), length);
         if (body > 0.0) punches.push_back(attackPeak / body);
-        levels.push_back(rms(samples, 0, std::min(length, frames(MATCH_LEVEL_SECONDS))));
+        levels.push_back(kWeightedLevel(samples, std::min(length, frames(MATCH_LEVEL_SECONDS)), sampleRate));
 
         std::array<double, LeadAmp::TONE_BANDS> bands{};
         double total = 0.0;
@@ -836,7 +837,7 @@ std::vector<double> noteLevels(const std::vector<std::vector<float>>& notes, flo
     const auto frames = static_cast<std::size_t>(MATCH_LEVEL_SECONDS * sampleRate);
     std::vector<double> levels;
     for (const auto& note : notes) {
-        levels.push_back(rms(note.data(), 0, std::min(frames, note.size())));
+        levels.push_back(kWeightedLevel(note.data(), std::min(frames, note.size()), sampleRate));
     }
     return levels;
 }

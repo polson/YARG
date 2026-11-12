@@ -198,7 +198,7 @@ namespace YARG.Audio.BASS.Native
             EnsureBound(ref _leadAmpMatch, "yarg_lead_amp_match")(sampleRate, cabinets, cabinetFrames, cabinetRates,
                 cabinetCount, stem, di, noteFrames, noteCount, ref tone);
 
-        internal static int SoloSpaceMatch(float sampleRate, float[] region, ulong frames, double[] pickSeconds,
+        internal static int SoloSpaceMatch(float sampleRate, float[]? region, ulong frames, double[] pickSeconds,
             int pickCount, ref BassLeadAmpDsp.SoloSpaceParams space) =>
             EnsureBound(ref _soloSpaceMatch, "yarg_solo_space_match")(sampleRate, region, frames, pickSeconds, pickCount,
                 ref space);
@@ -548,7 +548,7 @@ namespace YARG.Audio.BASS.Native
             ref BassLeadAmpDsp.LeadAmpToneParams tone);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        private delegate int SoloSpaceMatchDelegate(float sampleRate, float[] region, ulong frames, double[] pickSeconds,
+        private delegate int SoloSpaceMatchDelegate(float sampleRate, float[]? region, ulong frames, double[] pickSeconds,
             int pickCount, ref BassLeadAmpDsp.SoloSpaceParams space);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
