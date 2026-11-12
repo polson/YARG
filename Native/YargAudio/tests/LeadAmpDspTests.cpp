@@ -194,13 +194,16 @@ void humPlaysUnderNotesAndFadesAfter() {
     REQUIRE(rms(output, 0, SAMPLE_RATE * 4, frames) < 1e-4);
 }
 
-std::vector<float> pluck(double frequency, int frames) {
+constexpr double STRING_DAMPING = 2.0;
+
+std::vector<float> pluck(double frequency, int frames, double damping = STRING_DAMPING) {
     std::vector<float> samples(static_cast<std::size_t>(frames));
     for (int frame = 0; frame < frames; ++frame) {
         const double time = static_cast<double>(frame) / SAMPLE_RATE;
         double value = 0;
         for (int harmonic = 1; harmonic <= 12; ++harmonic) {
-            value += std::sin(2 * PI * frequency * harmonic * time) / harmonic;
+            value += std::sin(2 * PI * frequency * harmonic * time) / harmonic
+                * std::exp(-damping * (harmonic - 1) * time);
         }
         samples[frame] = static_cast<float>(0.1 * std::exp(-4 * time) * value);
     }
@@ -244,9 +247,22 @@ struct Matched {
     std::uint32_t cabinet;
 };
 
+void limit(std::vector<float>& samples) {
+    double peak = 0;
+    for (float sample : samples) peak = std::max(peak, static_cast<double>(std::abs(sample)));
+    const double ceiling = 0.25 * peak;
+    double envelope = 0, gain = 1;
+    for (float& sample : samples) {
+        envelope = std::max(static_cast<double>(std::abs(sample)), envelope * 0.9995);
+        const double wanted = envelope > ceiling ? std::pow(ceiling / envelope, 0.8) : 1.0;
+        gain += (wanted - gain) * (wanted < gain ? 0.3 : 0.0005);
+        sample = static_cast<float>(sample * gain);
+    }
+}
+
 Matched match(float drive, const Tone& tone, int noteCount, float wahStartHz = 0.0f, float wahEndHz = 0.0f,
     double rumble = 0.0, const std::vector<std::vector<float>>& cabinets = {}, int stemCabinet = 0,
-    int noteFrames = SAMPLE_RATE * 2 / 5) {
+    int noteFrames = SAMPLE_RATE * 2 / 5, bool limited = false) {
     std::vector<float> stem, di;
     std::vector<std::uint32_t> frames;
     for (int note = 0; note < noteCount; ++note) {
@@ -256,6 +272,7 @@ Matched match(float drive, const Tone& tone, int noteCount, float wahStartHz = 0
         for (std::size_t frame = 0; frame < heard.size(); ++frame) {
             heard[frame] += static_cast<float>(rumble * std::sin(2 * PI * 55 * frame / SAMPLE_RATE));
         }
+        if (limited) limit(heard);
         di.insert(di.end(), played.begin(), played.end());
         stem.insert(stem.end(), heard.begin(), heard.end());
         frames.push_back(static_cast<std::uint32_t>(played.size()));
@@ -385,7 +402,7 @@ void matchPicksTheCabinet() {
 }
 
 std::vector<float> stereoPluck(double frequency, int frames, int secondPickFrame = -1) {
-    const auto mono = pluck(frequency, frames);
+    const auto mono = pluck(frequency, frames, 0.0);
     std::vector<float> samples(static_cast<std::size_t>(frames) * CHANNELS);
     for (int frame = 0; frame < frames; ++frame) {
         const float value = secondPickFrame >= 0 && frame >= secondPickFrame
@@ -507,6 +524,41 @@ void matchDoesNotBoostLowNotes() {
     }
 }
 
+void matchIgnoresALimiter() {
+    for (float drive : {0.5f, 3.0f}) {
+        const auto matched = match(drive, {}, 8, 0.0f, 0.0f, 0.0, {}, 0, SAMPLE_RATE * 2 / 5, true);
+        REQUIRE(matched.result == YARG_AUDIO_OK);
+        REQUIRE(std::abs(std::log2(matched.drive / drive)) < 0.5);
+    }
+}
+
+void matchFindsDriveThroughEachCabinet() {
+    const std::vector<std::vector<float>> cabinets{resonantCabinet(500), resonantCabinet(2500)};
+    for (int stemCabinet = 0; stemCabinet < 2; ++stemCabinet) {
+        const auto matched = match(3.0f, {}, 8, 0.0f, 0.0f, 0.0, cabinets, stemCabinet);
+        REQUIRE(matched.result == YARG_AUDIO_OK);
+        REQUIRE(matched.cabinet == static_cast<std::uint32_t>(stemCabinet));
+        REQUIRE(std::abs(std::log2(matched.drive / 3.0f)) < 0.5);
+    }
+}
+
+void matchFallsBackWhenTheFadeMakesNoSense() {
+    std::vector<float> stem, di;
+    std::vector<std::uint32_t> frames;
+    for (int note = 0; note < 8; ++note) {
+        const auto played = pluck(196 * std::pow(2.0, note / 4.0), SAMPLE_RATE * 2 / 5);
+        auto heard = monoRender(played, 1.0f, {});
+        std::reverse(heard.begin(), heard.end());
+        di.insert(di.end(), played.begin(), played.end());
+        stem.insert(stem.end(), heard.begin(), heard.end());
+        frames.push_back(static_cast<std::uint32_t>(played.size()));
+    }
+    auto fitted = LeadAmp::defaultTone();
+    REQUIRE(yarg::audio::leadAmpMatch(SAMPLE_RATE, nullptr, 0, stem.data(), di.data(), frames.data(), frames.size(),
+        &fitted) == YARG_AUDIO_OK);
+    REQUIRE(fitted.drive == 1.0f);
+}
+
 void matchNeedsEnoughNotes() {
     const auto matched = match(1.0f, {}, 2);
     REQUIRE(matched.result == YARG_AUDIO_ERROR_INVALID_STATE);
@@ -547,4 +599,7 @@ void runLeadAmpDspTests() {
     matchWorksOnShortNotes();
     matchKeepsTheEqGentle();
     matchDoesNotBoostLowNotes();
+    matchIgnoresALimiter();
+    matchFindsDriveThroughEachCabinet();
+    matchFallsBackWhenTheFadeMakesNoSense();
 }

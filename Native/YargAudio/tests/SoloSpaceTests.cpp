@@ -134,6 +134,25 @@ void tooFewGapsLeaveDefaults() {
     auto space = defaults();
     REQUIRE(measure(solo(0, 0, 0, 0, 2), space) == YARG_AUDIO_ERROR_INVALID_STATE);
     REQUIRE(space.echo_level == 0.35f && space.reverb_wet == 0.47f && space.reverb_room == 0.75f);
+    REQUIRE(space.level_gain > 0.0f && space.level_gain < 1.0f);
+}
+
+float levelGainFor(float wet, float room) {
+    auto space = defaults();
+    space.reverb_wet = wet;
+    space.reverb_room = room;
+    REQUIRE(yarg::audio::soloSpaceMatch(SAMPLE_RATE, nullptr, 0, nullptr, 0, &space)
+        == YARG_AUDIO_ERROR_INVALID_STATE);
+    return space.level_gain;
+}
+
+void reverbTurnsTheDrySignalDown() {
+    const float dry = levelGainFor(0.0f, 0.5f);
+    const float light = levelGainFor(0.25f, 0.55f);
+    const float heavy = levelGainFor(0.47f, 0.75f);
+    REQUIRE(std::abs(dry - 1.0f) < 0.01f);
+    REQUIRE(light < dry && heavy < light);
+    REQUIRE(heavy > 0.3f);
 }
 
 }
@@ -143,4 +162,5 @@ void runSoloSpaceTests() {
     echoIsFound();
     reverbIsFound();
     tooFewGapsLeaveDefaults();
+    reverbTurnsTheDrySignalDown();
 }
