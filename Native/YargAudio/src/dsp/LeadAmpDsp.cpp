@@ -9,6 +9,7 @@
 #include <cstring>
 #include <iterator>
 #include <new>
+#include <optional>
 #include <vector>
 
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
@@ -83,9 +84,11 @@ constexpr float WAH_PICK_FLOOR = 0.005f;
 constexpr float WAH_REFRACTORY_SECONDS = 0.08f;
 constexpr int WAH_CONTROL_FRAMES = 16;
 constexpr float MATCH_DRIVES[] = {0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f};
-constexpr float MATCH_ATTACK_SECONDS = 0.05f;
-constexpr float MATCH_WINDOW_SECONDS = 0.005f;
-constexpr float MATCH_BODY_SECONDS = 0.08f;
+constexpr float MATCH_FADE_START_SECONDS = 0.02f;
+constexpr float MATCH_FADE_WINDOW_SECONDS = 0.01f;
+constexpr int MATCH_FADE_MIN_WINDOWS = 6;
+constexpr int MATCH_FADE_MIN_BANDS = 4;
+constexpr float MATCH_FALLBACK_DRIVE = 1.0f;
 constexpr float MATCH_LEVEL_SECONDS = 0.3f;
 constexpr float MATCH_MIN_NOTE_SECONDS = 0.1f;
 constexpr float MATCH_MAX_NOTE_SECONDS = 0.35f;
@@ -603,24 +606,16 @@ struct MatchNote {
 
 struct ToneMeasure {
     std::array<double, LeadAmp::TONE_BANDS> bands{};
-    double punch = 0.0;
     double level = 0.0;
 };
+
+using BandMask = std::array<bool, LeadAmp::TONE_BANDS>;
 
 double median(std::vector<double> values) {
     if (values.empty()) return 0.0;
     const auto middle = values.begin() + static_cast<std::ptrdiff_t>(values.size() / 2);
     std::nth_element(values.begin(), middle, values.end());
     return *middle;
-}
-
-double rms(const float* samples, std::size_t first, std::size_t end) {
-    if (end <= first) return 0.0;
-    double energy = 0.0;
-    for (std::size_t frame = first; frame < end; ++frame) {
-        energy += static_cast<double>(samples[frame]) * samples[frame];
-    }
-    return std::sqrt(energy / static_cast<double>(end - first));
 }
 
 double bandEnergy(const float* samples, std::size_t frames, float sampleRate, float hz) {
@@ -645,23 +640,124 @@ double bandEnergy(const float* samples, std::size_t frames, float sampleRate, fl
     return energy;
 }
 
+double slope(const std::vector<double>& x, const std::vector<double>& y) {
+    double meanX = 0.0, meanY = 0.0;
+    for (std::size_t index = 0; index < x.size(); ++index) {
+        meanX += x[index];
+        meanY += y[index];
+    }
+    meanX /= static_cast<double>(x.size());
+    meanY /= static_cast<double>(y.size());
+    double covariance = 0.0, variance = 0.0;
+    for (std::size_t index = 0; index < x.size(); ++index) {
+        covariance += (x[index] - meanX) * (y[index] - meanY);
+        variance += (x[index] - meanX) * (x[index] - meanX);
+    }
+    return variance > 0.0 ? covariance / variance : 0.0;
+}
+
+struct BandDecay {
+    std::array<double, LeadAmp::TONE_BANDS> slopes{};
+    std::array<double, LeadAmp::TONE_BANDS> shares{};
+    bool valid = false;
+};
+
+BandDecay bandDecay(const std::vector<float>& note, float sampleRate) {
+    const auto window = std::max<std::size_t>(1, static_cast<std::size_t>(MATCH_FADE_WINDOW_SECONDS * sampleRate));
+    const auto start = static_cast<std::size_t>(MATCH_FADE_START_SECONDS * sampleRate);
+    BandDecay decay;
+    if (note.size() < start + window * MATCH_FADE_MIN_WINDOWS) return decay;
+
+    std::vector<double> times;
+    for (std::size_t first = start; first + window <= note.size(); first += window) {
+        times.push_back(static_cast<double>(first) / sampleRate);
+    }
+    double total = 0.0;
+    for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+        const double w0 = 2.0 * PI * std::min(LeadAmp::toneHz(band), 0.45f * sampleRate) / sampleRate;
+        const double alpha = std::sin(w0) / (2.0 * TONE_Q);
+        const double a0 = 1.0 + alpha;
+        const double b0 = alpha / a0;
+        const double a1 = -2.0 * std::cos(w0) / a0;
+        const double a2 = (1.0 - alpha) / a0;
+        std::array<double, 2> z1{}, z2{};
+        std::vector<double> levels;
+        double energy = 0.0, windowEnergy = 0.0;
+        for (std::size_t frame = 0; frame < start + times.size() * window; ++frame) {
+            double signal = note[frame];
+            for (std::size_t stage = 0; stage < z1.size(); ++stage) {
+                const double output = b0 * signal + z1[stage];
+                z1[stage] = -a1 * output + z2[stage];
+                z2[stage] = -b0 * signal - a2 * output;
+                signal = output;
+            }
+            energy += signal * signal;
+            if (frame < start) continue;
+            windowEnergy += signal * signal;
+            if ((frame - start + 1) % window == 0) {
+                levels.push_back(10.0 * std::log10(windowEnergy + MATCH_BAND_FLOOR * MATCH_BAND_FLOOR));
+                windowEnergy = 0.0;
+            }
+        }
+        decay.slopes[band] = slope(times, levels);
+        decay.shares[band] = energy;
+        total += energy;
+    }
+    if (!(total > 0.0)) return decay;
+    for (double& share : decay.shares) {
+        share /= total;
+    }
+    decay.valid = true;
+    return decay;
+}
+
+std::vector<BandMask> fadeMasks(const std::vector<std::vector<float>>& notes, float sampleRate) {
+    std::vector<BandMask> masks;
+    for (const auto& note : notes) {
+        const auto decay = bandDecay(note, sampleRate);
+        BandMask mask{};
+        for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+            mask[band] = decay.valid && decay.shares[band] > MATCH_TRUSTED_SHARE;
+        }
+        masks.push_back(mask);
+    }
+    return masks;
+}
+
+std::optional<double> typicalFade(const std::vector<std::vector<float>>& notes, const std::vector<BandMask>& masks,
+    float sampleRate) {
+    std::vector<double> fades;
+    for (std::size_t index = 0; index < notes.size(); ++index) {
+        const auto decay = bandDecay(notes[index], sampleRate);
+        if (!decay.valid) continue;
+        std::vector<double> octaves, slopes;
+        for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+            if (!masks[index][band]) continue;
+            octaves.push_back(band / 3.0);
+            slopes.push_back(decay.slopes[band]);
+        }
+        if (octaves.size() >= MATCH_FADE_MIN_BANDS) fades.push_back(slope(octaves, slopes));
+    }
+    if (fades.size() < MATCH_MIN_NOTES) return std::nullopt;
+    std::sort(fades.begin(), fades.end());
+    const std::size_t trim = fades.size() / 4;
+    double sum = 0.0;
+    for (std::size_t index = trim; index < fades.size() - trim; ++index) {
+        sum += fades[index];
+    }
+    return sum / static_cast<double>(fades.size() - 2 * trim);
+}
+
 ToneMeasure measure(const std::vector<std::vector<float>>& notes, float sampleRate) {
     const auto frames = [sampleRate](float seconds) {
         return static_cast<std::size_t>(seconds * sampleRate);
     };
-    const std::size_t window = std::max<std::size_t>(1, frames(MATCH_WINDOW_SECONDS));
     ToneMeasure tone;
-    std::vector<double> punches, levels;
+    std::vector<double> levels;
     int spectra = 0;
     for (const auto& note : notes) {
         const float* samples = note.data();
         const std::size_t length = note.size();
-        double attackPeak = 0.0;
-        for (std::size_t first = 0; first + window <= std::min(length, frames(MATCH_ATTACK_SECONDS)); first += window) {
-            attackPeak = std::max(attackPeak, rms(samples, first, first + window));
-        }
-        const double body = rms(samples, std::min(length, frames(MATCH_BODY_SECONDS)), length);
-        if (body > 0.0) punches.push_back(attackPeak / body);
         levels.push_back(kWeightedLevel(samples, std::min(length, frames(MATCH_LEVEL_SECONDS)), sampleRate));
 
         std::array<double, LeadAmp::TONE_BANDS> bands{};
@@ -679,7 +775,6 @@ ToneMeasure measure(const std::vector<std::vector<float>>& notes, float sampleRa
     for (double& band : tone.bands) {
         band /= std::max(spectra, 1);
     }
-    tone.punch = median(std::move(punches));
     tone.level = median(std::move(levels));
     return tone;
 }
@@ -723,24 +818,23 @@ std::vector<std::vector<float>> equalize(std::vector<std::vector<float>> notes, 
     return notes;
 }
 
-float fitDrive(double targetPunch, const std::array<double, std::size(MATCH_DRIVES)>& punches) {
-    const double target = std::log(targetPunch);
-    std::size_t nearest = 0;
-    for (std::size_t index = 0; index < punches.size(); ++index) {
-        if (std::abs(std::log(punches[index]) - target) < std::abs(std::log(punches[nearest]) - target)) {
-            nearest = index;
-        }
-    }
-    for (std::size_t index = 0; index + 1 < punches.size(); ++index) {
-        const double low = std::log(punches[index]);
-        const double high = std::log(punches[index + 1]);
+std::optional<float> fitDrive(double target, const std::array<double, std::size(MATCH_DRIVES)>& fades) {
+    for (std::size_t index = 0; index + 1 < fades.size(); ++index) {
+        const double low = fades[index];
+        const double high = fades[index + 1];
         if (low == high || (target - low) * (target - high) > 0.0) continue;
         const double position = (target - low) / (high - low);
         const double logDrive = std::log(MATCH_DRIVES[index])
             + position * (std::log(MATCH_DRIVES[index + 1]) - std::log(MATCH_DRIVES[index]));
         return static_cast<float>(std::exp(logDrive));
     }
-    return MATCH_DRIVES[nearest];
+    const std::size_t last = fades.size() - 1;
+    for (const auto [edge, inner] : {std::pair{std::size_t{0}, std::size_t{1}}, std::pair{last, last - 1}}) {
+        const double step = fades[edge] - fades[inner];
+        const double beyond = target - fades[edge];
+        if (beyond * step >= 0.0 && std::abs(beyond) <= std::abs(step)) return MATCH_DRIVES[edge];
+    }
+    return std::nullopt;
 }
 
 using TrustedBands = std::array<bool, LeadAmp::TONE_BANDS>;
@@ -974,27 +1068,45 @@ int leadAmpMatch(float sampleRate, const Cabinet* cabinets, std::size_t cabinetC
         if (notes.size() < MATCH_MIN_NOTES) return YARG_AUDIO_ERROR_INVALID_STATE;
 
         const auto target = measure(stemNotes, sampleRate);
-        if (!(target.punch > 0.0)) return YARG_AUDIO_ERROR_INVALID_STATE;
-
         const Cabinet* defaultCabinet = cabinetCount > 0 ? &cabinets[0] : nullptr;
-        std::array<double, std::size(MATCH_DRIVES)> punches{};
-        double defaultLevel = 0.0;
-        for (std::size_t index = 0; index < punches.size(); ++index) {
-            const auto rendered = measure(render(notes, sampleRate, defaultCabinet, MATCH_DRIVES[index]), sampleRate);
-            if (!(rendered.punch > 0.0)) return YARG_AUDIO_ERROR_INVALID_STATE;
-            punches[index] = rendered.punch;
-            if (MATCH_DRIVES[index] == 1.0f) defaultLevel = rendered.level;
-        }
-        const float fitted = std::clamp(fitDrive(target.punch, punches), LeadAmp::MIN_DRIVE, LeadAmp::MAX_DRIVE);
+        const double defaultLevel = measure(render(notes, sampleRate, defaultCabinet, 1.0f), sampleRate).level;
 
-        std::size_t chosen = 0;
-        double closest = HUGE_VAL;
-        for (std::size_t index = 0; index < cabinetCount; ++index) {
-            const double distance = toneDistance(target, measure(render(notes, sampleRate, &cabinets[index], fitted),
-                sampleRate));
-            if (distance < closest) {
-                closest = distance;
-                chosen = index;
+        const auto masks = fadeMasks(stemNotes, sampleRate);
+        const auto targetFade = typicalFade(stemNotes, masks, sampleRate);
+        const auto fitDriveOn = [&](const Cabinet* cabinet, float wahStart, float wahEnd) {
+            if (!targetFade) return MATCH_FALLBACK_DRIVE;
+            std::array<double, std::size(MATCH_DRIVES)> fades{};
+            for (std::size_t index = 0; index < fades.size(); ++index) {
+                const auto heard = typicalFade(render(notes, sampleRate, cabinet, MATCH_DRIVES[index], wahStart,
+                    wahEnd), masks, sampleRate);
+                if (!heard) return MATCH_FALLBACK_DRIVE;
+                fades[index] = *heard;
+            }
+            return std::clamp(fitDrive(*targetFade, fades).value_or(MATCH_FALLBACK_DRIVE), LeadAmp::MIN_DRIVE,
+                LeadAmp::MAX_DRIVE);
+        };
+        const auto closestCabinet = [&](float drive) {
+            std::size_t chosen = 0;
+            double closest = HUGE_VAL;
+            for (std::size_t index = 0; index < cabinetCount; ++index) {
+                const double distance = toneDistance(target, measure(render(notes, sampleRate, &cabinets[index], drive),
+                    sampleRate));
+                if (distance < closest) {
+                    closest = distance;
+                    chosen = index;
+                }
+            }
+            return chosen;
+        };
+
+        float fitted = fitDriveOn(defaultCabinet, 0.0f, 0.0f);
+        std::size_t chosen = closestCabinet(fitted);
+        if (chosen != 0) {
+            fitted = fitDriveOn(&cabinets[chosen], 0.0f, 0.0f);
+            const std::size_t rechosen = closestCabinet(fitted);
+            if (rechosen != chosen) {
+                chosen = rechosen;
+                fitted = fitDriveOn(&cabinets[chosen], 0.0f, 0.0f);
             }
         }
         const Cabinet* cabinet = cabinetCount > 0 ? &cabinets[chosen] : nullptr;
@@ -1021,6 +1133,7 @@ int leadAmpMatch(float sampleRate, const Cabinet* cabinets, std::size_t cabinetC
                 wahStart = wahHz(std::log2(wahStart) + wanted.early - heard.early);
                 wahEnd = wahHz(std::log2(wahEnd) + wanted.late - heard.late);
             }
+            fitted = fitDriveOn(cabinet, wahStart, wahEnd);
         }
 
         std::array<float, LeadAmp::TONE_BANDS> bands{};
@@ -1039,8 +1152,7 @@ int leadAmpMatch(float sampleRate, const Cabinet* cabinets, std::size_t cabinetC
         }
         const auto defaultLevels = noteLevels(render(rangeMatch, sampleRate, defaultCabinet, 1.0f), sampleRate);
         const auto rangeAmped = render(rangeMatch, sampleRate, cabinet, fitted, wahStart, wahEnd);
-        for (int pass = 0; pass < GUARD_PASSES && rendered.level > 0.0 && defaultLevel > 0.0; ++pass) {
-            const double levelGain = defaultLevel / rendered.level;
+        const auto loudest = [&](double levelGain) {
             const auto levels = noteLevels(equalize(rangeAmped, sampleRate, bands), sampleRate);
             std::size_t worst = 0;
             double worstRise = -HUGE_VAL;
@@ -1052,6 +1164,11 @@ int leadAmpMatch(float sampleRate, const Cabinet* cabinets, std::size_t cabinetC
                     worst = note;
                 }
             }
+            return std::pair{worst, worstRise};
+        };
+        const bool leveled = rendered.level > 0.0 && defaultLevel > 0.0;
+        for (int pass = 0; pass < GUARD_PASSES && leveled; ++pass) {
+            const auto [worst, worstRise] = loudest(defaultLevel / rendered.level);
             if (worstRise <= GUARD_MAX_RISE_DB) break;
 
             const double hz = 440.0 * std::exp2((GUARD_LOWEST_NOTE + GUARD_NOTE_STEP * static_cast<int>(worst) - 69) / 12.0);
@@ -1066,14 +1183,18 @@ int leadAmpMatch(float sampleRate, const Cabinet* cabinets, std::size_t cabinetC
             rendered = measure(equalize(amped, sampleRate, bands), sampleRate);
         }
 
+        double levelGain = leveled ? defaultLevel / rendered.level : 1.0;
+        if (leveled) {
+            const double excess = loudest(levelGain).second - GUARD_MAX_RISE_DB;
+            if (excess > 0.0) levelGain *= std::pow(10.0, -excess / 20.0);
+        }
+
         tone->cabinet = static_cast<std::uint32_t>(chosen);
         tone->drive = fitted;
         tone->wah_start_hz = wahStart;
         tone->wah_end_hz = wahEnd;
         std::copy(bands.begin(), bands.end(), tone->bands_db);
-        tone->level_gain = rendered.level > 0.0 && defaultLevel > 0.0
-            ? static_cast<float>(defaultLevel / rendered.level)
-            : 1.0f;
+        tone->level_gain = static_cast<float>(levelGain);
         return YARG_AUDIO_OK;
     } catch (const std::bad_alloc&) {
         return YARG_AUDIO_ERROR_INTERNAL;
