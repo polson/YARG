@@ -41,7 +41,8 @@ namespace YARG.Audio.BASS.Effects
 
                 var bands = new float[BassLeadAmpTone.BAND_COUNT];
                 int result = YargAudioBindings.LeadAmpMatch(sampleRate, cabinet, cabinet?.Length ?? 0, cabinetRate, stem,
-                    di, noteFrames, noteFrames.Length, out float drive, bands, bands.Length, out float levelGain);
+                    di, noteFrames, noteFrames.Length, out float drive, bands, bands.Length, out float wahStartHz,
+                    out float wahEndHz, out float levelGain);
                 if (result != 0)
                 {
                     YargLogger.LogFormatInfo("Lead amp tone match skipped for {0} notes: result {1}",
@@ -49,7 +50,7 @@ namespace YARG.Audio.BASS.Effects
                     return null;
                 }
 
-                return new BassLeadAmpTone(drive, bands, levelGain);
+                return new BassLeadAmpTone(drive, bands, wahStartHz, wahEndHz, levelGain);
             }
             catch (Exception exception) when (exception is DllNotFoundException or
                 EntryPointNotFoundException or BadImageFormatException)
@@ -62,7 +63,8 @@ namespace YARG.Audio.BASS.Effects
         internal bool SetTone(BassLeadAmpTone tone)
         {
             return YargAudioNative.TryInvoke(this,
-                handle => YargAudioBindings.LeadAmpDspSetTone(handle, tone.Drive, tone.BandsDb, tone.BandsDb.Length));
+                handle => YargAudioBindings.LeadAmpDspSetTone(handle, tone.Drive, tone.BandsDb, tone.BandsDb.Length,
+                    tone.WahStartHz, tone.WahEndHz));
         }
 
         internal bool SetGain(float gain)
@@ -84,16 +86,22 @@ namespace YARG.Audio.BASS.Effects
     {
         internal const int BAND_COUNT = 9;
 
-        internal static readonly BassLeadAmpTone Default = new(1, new float[BAND_COUNT], 1);
+        internal static readonly BassLeadAmpTone Default = new(1, new float[BAND_COUNT], 0, 0, 1);
 
         public readonly float   Drive;
         public readonly float[] BandsDb;
+        public readonly float   WahStartHz;
+        public readonly float   WahEndHz;
         public readonly float   LevelGain;
 
-        internal BassLeadAmpTone(float drive, float[] bandsDb, float levelGain)
+        public bool HasWah => WahStartHz > 0;
+
+        internal BassLeadAmpTone(float drive, float[] bandsDb, float wahStartHz, float wahEndHz, float levelGain)
         {
             Drive = drive;
             BandsDb = bandsDb;
+            WahStartHz = wahStartHz;
+            WahEndHz = wahEndHz;
             LevelGain = levelGain;
         }
     }

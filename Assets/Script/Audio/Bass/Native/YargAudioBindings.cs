@@ -188,14 +188,16 @@ namespace YARG.Audio.BASS.Native
         internal static int LeadAmpDspSetGain(BassLeadAmpDsp dsp, float gain) =>
             EnsureBound(ref _leadAmpDspSetGain, "yarg_lead_amp_dsp_set_gain")(dsp, gain);
 
-        internal static int LeadAmpDspSetTone(BassLeadAmpDsp dsp, float drive, float[] bandsDb, int bandCount) =>
-            EnsureBound(ref _leadAmpDspSetTone, "yarg_lead_amp_dsp_set_tone")(dsp, drive, bandsDb, bandCount);
+        internal static int LeadAmpDspSetTone(BassLeadAmpDsp dsp, float drive, float[] bandsDb, int bandCount,
+            float wahStartHz, float wahEndHz) =>
+            EnsureBound(ref _leadAmpDspSetTone, "yarg_lead_amp_dsp_set_tone")(dsp, drive, bandsDb, bandCount, wahStartHz,
+                wahEndHz);
 
         internal static int LeadAmpMatch(float sampleRate, float[]? cabinet, int cabinetFrames, float cabinetRate,
             float[] stem, float[] di, uint[] noteFrames, int noteCount, out float drive, float[] bandsDb, int bandCount,
-            out float levelGain) =>
+            out float wahStartHz, out float wahEndHz, out float levelGain) =>
             EnsureBound(ref _leadAmpMatch, "yarg_lead_amp_match")(sampleRate, cabinet, cabinetFrames, cabinetRate, stem,
-                di, noteFrames, noteCount, out drive, bandsDb, bandCount, out levelGain);
+                di, noteFrames, noteCount, out drive, bandsDb, bandCount, out wahStartHz, out wahEndHz, out levelGain);
 
         internal static void LeadAmpDspDestroy(IntPtr dsp) =>
             EnsureBound(ref _leadAmpDspDestroy, "yarg_lead_amp_dsp_destroy")(dsp);
@@ -533,12 +535,13 @@ namespace YARG.Audio.BASS.Native
         private delegate int LeadAmpDspSetGainDelegate(BassLeadAmpDsp dsp, float gain);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        private delegate int LeadAmpDspSetToneDelegate(BassLeadAmpDsp dsp, float drive, float[] bandsDb, int bandCount);
+        private delegate int LeadAmpDspSetToneDelegate(BassLeadAmpDsp dsp, float drive, float[] bandsDb, int bandCount,
+            float wahStartHz, float wahEndHz);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int LeadAmpMatchDelegate(float sampleRate, float[]? cabinet, int cabinetFrames, float cabinetRate,
             float[] stem, float[] di, uint[] noteFrames, int noteCount, out float drive, [Out] float[] bandsDb,
-            int bandCount, out float levelGain);
+            int bandCount, out float wahStartHz, out float wahEndHz, out float levelGain);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate void LeadAmpDspDestroyDelegate(IntPtr dsp);

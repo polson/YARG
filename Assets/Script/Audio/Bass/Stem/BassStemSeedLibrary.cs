@@ -1145,9 +1145,10 @@ namespace YARG.Audio.BASS
                 return BassLeadAmpTone.Default;
             }
 
-            YargLogger.LogFormatInfo("[SoloTone] {0} notes, drive {1}, bands {2} dB, level gain {3}",
+            YargLogger.LogFormatInfo("[SoloTone] {0} notes, drive {1}, bands {2} dB, wah {3}, level gain {4}",
                 picked.Count, Math.Round(tone.Drive, 2),
                 string.Join(" ", Array.ConvertAll(tone.BandsDb, band => Math.Round(band, 1))),
+                tone.HasWah ? $"{Math.Round(tone.WahStartHz)} to {Math.Round(tone.WahEndHz)} Hz" : "off",
                 Math.Round(tone.LevelGain, 2));
             return tone;
         }

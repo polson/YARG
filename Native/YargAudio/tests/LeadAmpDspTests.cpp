@@ -46,9 +46,9 @@ double tonePower(const std::vector<float>& samples, int firstFrame, int frames, 
 }
 
 std::vector<float> run(std::vector<float> samples, float gain, const std::vector<float>& cabinet = {},
-    float drive = 1.0f, const Tone& tone = {}) {
+    float drive = 1.0f, const Tone& tone = {}, float wahStartHz = 0.0f, float wahEndHz = 0.0f) {
     LeadAmp amp(CHANNELS, SAMPLE_RATE, cabinet.data(), cabinet.size(), SAMPLE_RATE);
-    amp.setTone(drive, tone.data());
+    amp.setTone(drive, tone.data(), wahStartHz, wahEndHz);
     const std::size_t frames = samples.size() / CHANNELS;
     const std::size_t block = 512;
     for (std::size_t first = 0; first < frames; first += block) {
@@ -196,9 +196,10 @@ std::vector<float> pluck(double frequency, int frames) {
     return samples;
 }
 
-std::vector<float> monoRender(const std::vector<float>& input, float drive, const Tone& tone) {
+std::vector<float> monoRender(const std::vector<float>& input, float drive, const Tone& tone,
+    float wahStartHz = 0.0f, float wahEndHz = 0.0f) {
     LeadAmp amp(1, SAMPLE_RATE);
-    amp.setTone(drive, tone.data());
+    amp.setTone(drive, tone.data(), wahStartHz, wahEndHz);
     auto samples = input;
     for (std::size_t first = 0; first < samples.size(); first += 512) {
         amp.process(samples.data() + first, std::min<std::size_t>(512, samples.size() - first), 1.0f);
@@ -223,22 +224,29 @@ struct Matched {
     int result;
     float drive;
     Tone tone;
+    float wahStartHz;
+    float wahEndHz;
     float levelGain;
 };
 
-Matched match(float drive, const Tone& tone, int noteCount) {
+Matched match(float drive, const Tone& tone, int noteCount, float wahStartHz = 0.0f, float wahEndHz = 0.0f,
+    double rumble = 0.0) {
     std::vector<float> stem, di;
     std::vector<std::uint32_t> frames;
     for (int note = 0; note < noteCount; ++note) {
         const auto played = pluck(196 * std::pow(2.0, note / 4.0), SAMPLE_RATE * 2 / 5);
-        const auto heard = monoRender(played, drive, tone);
+        auto heard = monoRender(played, drive, tone, wahStartHz, wahEndHz);
+        for (std::size_t frame = 0; frame < heard.size(); ++frame) {
+            heard[frame] += static_cast<float>(rumble * std::sin(2 * PI * 55 * frame / SAMPLE_RATE));
+        }
         di.insert(di.end(), played.begin(), played.end());
         stem.insert(stem.end(), heard.begin(), heard.end());
         frames.push_back(static_cast<std::uint32_t>(played.size()));
     }
     Matched matched{};
     matched.result = yarg::audio::leadAmpMatch(SAMPLE_RATE, nullptr, 0, 0, stem.data(), di.data(), frames.data(),
-        frames.size(), &matched.drive, matched.tone.data(), matched.tone.size(), &matched.levelGain);
+        frames.size(), &matched.drive, matched.tone.data(), matched.tone.size(), &matched.wahStartHz,
+        &matched.wahEndHz, &matched.levelGain);
     return matched;
 }
 
@@ -272,9 +280,46 @@ void invalidToneIsRejected() {
     Tone tone{};
     REQUIRE(LeadAmp::validTone(1.0f, tone.data()));
     REQUIRE(!LeadAmp::validTone(LeadAmp::MAX_DRIVE * 2, tone.data()));
+    REQUIRE(LeadAmp::validTone(1.0f, tone.data(), 500.0f, 1500.0f));
+    REQUIRE(!LeadAmp::validTone(1.0f, tone.data(), 1000.0f, 0.0f));
+    REQUIRE(!LeadAmp::validTone(1.0f, tone.data(), 200.0f, 1000.0f));
     tone[0] = LeadAmp::MAX_TONE_DB + 1;
     REQUIRE(!LeadAmp::validTone(1.0f, tone.data()));
     REQUIRE(!LeadAmp::validTone(1.0f, nullptr));
+}
+
+std::vector<float> stereoPluck(double frequency, int frames, int secondPickFrame = -1) {
+    const auto mono = pluck(frequency, frames);
+    std::vector<float> samples(static_cast<std::size_t>(frames) * CHANNELS);
+    for (int frame = 0; frame < frames; ++frame) {
+        const float value = secondPickFrame >= 0 && frame >= secondPickFrame
+            ? mono[frame - secondPickFrame]
+            : mono[frame];
+        samples[frame * CHANNELS] = value;
+        samples[frame * CHANNELS + 1] = value;
+    }
+    return samples;
+}
+
+double brightness(const std::vector<float>& samples, int firstFrame) {
+    const int frames = SAMPLE_RATE / 20;
+    return tonePower(samples, firstFrame, frames, 1980) / tonePower(samples, firstFrame, frames, 495);
+}
+
+void wahSweepsDownAfterThePick() {
+    const auto input = stereoPluck(165, SAMPLE_RATE / 2);
+    const auto plain = run(input, 1.0f);
+    const auto wah = run(input, 1.0f, {}, 1.0f, {}, 2000.0f, 450.0f);
+    const int early = SAMPLE_RATE / 100;
+    const int late = SAMPLE_RATE / 4;
+    REQUIRE(brightness(wah, early) / brightness(wah, late) > 4 * brightness(plain, early) / brightness(plain, late));
+}
+
+void wahRestartsOnTheNextPick() {
+    const int secondPick = SAMPLE_RATE / 2;
+    const auto input = stereoPluck(165, SAMPLE_RATE, secondPick);
+    const auto wah = run(input, 1.0f, {}, 1.0f, {}, 2000.0f, 450.0f);
+    REQUIRE(brightness(wah, secondPick + SAMPLE_RATE / 100) > 4 * brightness(wah, secondPick - SAMPLE_RATE / 10));
 }
 
 void matchKeepsTheDefaultTone() {
@@ -285,6 +330,7 @@ void matchKeepsTheDefaultTone() {
         REQUIRE(std::abs(band) < 2.0f);
     }
     REQUIRE(std::abs(matched.levelGain - 1.0f) < 0.1f);
+    REQUIRE(matched.wahStartHz == 0.0f && matched.wahEndHz == 0.0f);
 }
 
 void matchFindsDriveAndTone() {
@@ -295,7 +341,24 @@ void matchFindsDriveAndTone() {
     REQUIRE(matched.result == YARG_AUDIO_OK);
     REQUIRE(std::abs(std::log2(matched.drive / 3.0f)) < 0.6);
     REQUIRE(matched.tone[5] - matched.tone[2] > 8.0f);
+    REQUIRE(matched.wahStartHz == 0.0f && matched.wahEndHz == 0.0f);
     REQUIRE(std::isfinite(matched.levelGain) && matched.levelGain > 0.0f);
+}
+
+void matchFindsWah() {
+    const auto matched = match(2.0f, {}, 8, 1800.0f, 500.0f);
+    REQUIRE(matched.result == YARG_AUDIO_OK);
+    REQUIRE(std::abs(std::log2(matched.wahStartHz / 1800.0f)) < 0.7);
+    REQUIRE(std::abs(std::log2(matched.wahEndHz / 500.0f)) < 0.7);
+    REQUIRE(std::abs(std::log2(matched.drive / 2.0f)) < 0.6);
+}
+
+void matchIgnoresLowBleed() {
+    const auto matched = match(1.0f, {}, 8, 0.0f, 0.0f, 0.3);
+    REQUIRE(matched.result == YARG_AUDIO_OK);
+    for (float band : matched.tone) {
+        REQUIRE(std::abs(band) < 3.0f);
+    }
 }
 
 void matchNeedsEnoughNotes() {
@@ -328,4 +391,8 @@ void runLeadAmpDspTests() {
     matchKeepsTheDefaultTone();
     matchFindsDriveAndTone();
     matchNeedsEnoughNotes();
+    matchIgnoresLowBleed();
+    wahSweepsDownAfterThePick();
+    wahRestartsOnTheNextPick();
+    matchFindsWah();
 }

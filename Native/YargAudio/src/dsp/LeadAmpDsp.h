@@ -21,18 +21,20 @@ public:
     static constexpr float MAX_DRIVE = 8.0f;
     static constexpr float MAX_TONE_DB = 12.0f;
     static constexpr float TONE_LOWEST_HZ = 62.5f;
+    static constexpr float WAH_MIN_HZ = 300.0f;
+    static constexpr float WAH_MAX_HZ = 3000.0f;
 
     LeadAmp(int channels, float sampleRate, const float* cabinet = nullptr,
         std::size_t cabinetFrames = 0, float cabinetRate = 0.0f);
 
     void process(float* samples, std::size_t frames, float gain) noexcept;
-    void setTone(float drive, const float* bandsDb) noexcept;
+    void setTone(float drive, const float* bandsDb, float wahStartHz = 0.0f, float wahEndHz = 0.0f) noexcept;
 
     struct Biquad {
         float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
     };
 
-    static bool validTone(float drive, const float* bandsDb) noexcept;
+    static bool validTone(float drive, const float* bandsDb, float wahStartHz = 0.0f, float wahEndHz = 0.0f) noexcept;
     static float toneHz(int band) noexcept;
     static Biquad toneBand(float sampleRate, int band, float gainDb) noexcept;
     static Biquad peak(float sampleRate, float hz, float gainDb, float q) noexcept;
@@ -74,11 +76,14 @@ private:
         std::vector<float> echo;
         int echoFrames = 1;
         std::vector<float> cabinetHistory;
+        float wahBand = 0, wahLow = 0;
     };
 
     float run(int filter, ChannelState& state, float input) const noexcept;
     float convolve(ChannelState& state, float input) const noexcept;
     float noise(const float* frame) noexcept;
+    void sweepWah(const float* frame) noexcept;
+    float wah(ChannelState& state, float input) const noexcept;
     void loadCabinet(const float* cabinet, std::size_t frames, float cabinetRate, float sampleRate);
     static float shape(Shaper& shaper, float input, float bias, float offset) noexcept;
 
@@ -103,6 +108,19 @@ private:
     std::uint32_t hissState_ = 0x9E3779B9u;
     float noiseEnvelope_ = 0.0f;
     float noiseReleaseCoefficient_;
+    bool wahOn_ = false;
+    float wahStartOctaves_ = 0.0f;
+    float wahEndOctaves_ = 0.0f;
+    float wahFast_ = 0.0f;
+    float wahSlow_ = 0.0f;
+    float wahFastRelease_;
+    float wahSlowCoefficient_;
+    float wahSweepCoefficient_;
+    float wahSweep_ = 0.0f;
+    std::size_t wahSincePick_ = 0;
+    std::size_t wahRefractoryFrames_;
+    int wahControlFrame_ = 0;
+    float wahA1_ = 1.0f, wahA2_ = 0.0f, wahA3_ = 0.0f;
     std::array<ChannelState, MAX_CHANNELS> states_{};
 };
 
@@ -120,6 +138,8 @@ struct yarg_lead_amp_dsp {
     std::atomic<std::uint32_t> gainBits;
     std::atomic<std::uint32_t> driveBits;
     std::array<std::atomic<std::uint32_t>, yarg::audio::LeadAmp::TONE_BANDS> toneBits{};
+    std::atomic<std::uint32_t> wahStartBits{0};
+    std::atomic<std::uint32_t> wahEndBits{0};
     std::atomic<std::uint32_t> toneVersion{0};
     std::uint32_t appliedToneVersion = 0;
     yarg::audio::LeadAmp amp;
@@ -134,11 +154,13 @@ int leadAmpDspAttach(const BassCoreBindings& bass, std::uint32_t channel, float 
     const float* cabinet, std::size_t cabinetFrames, float cabinetRate,
     int priority, yarg_lead_amp_dsp** dsp, int* bassError) noexcept;
 int leadAmpDspSetGain(yarg_lead_amp_dsp* dsp, float gain) noexcept;
-int leadAmpDspSetTone(yarg_lead_amp_dsp* dsp, float drive, const float* bandsDb, std::size_t bandCount) noexcept;
+int leadAmpDspSetTone(yarg_lead_amp_dsp* dsp, float drive, const float* bandsDb, std::size_t bandCount,
+    float wahStartHz, float wahEndHz) noexcept;
 
 int leadAmpMatch(float sampleRate, const float* cabinet, std::size_t cabinetFrames, float cabinetRate,
     const float* stem, const float* di, const std::uint32_t* noteFrames, std::size_t noteCount,
-    float* drive, float* bandsDb, std::size_t bandCount, float* levelGain) noexcept;
+    float* drive, float* bandsDb, std::size_t bandCount, float* wahStartHz, float* wahEndHz,
+    float* levelGain) noexcept;
 
 bool leadAmpDspDestroy(yarg_lead_amp_dsp* dsp) noexcept;
 

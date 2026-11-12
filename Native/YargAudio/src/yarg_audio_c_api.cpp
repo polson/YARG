@@ -356,15 +356,16 @@ int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_set_gain(yarg_lead_amp_dsp* dsp, float
 }
 
 int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_set_tone(yarg_lead_amp_dsp* dsp, float drive, const float* bands_db,
-    uint32_t band_count) {
-    return yarg::audio::leadAmpDspSetTone(dsp, drive, bands_db, band_count);
+    uint32_t band_count, float wah_start_hz, float wah_end_hz) {
+    return yarg::audio::leadAmpDspSetTone(dsp, drive, bands_db, band_count, wah_start_hz, wah_end_hz);
 }
 
 int32_t YARG_AUDIO_CALL yarg_lead_amp_match(float sample_rate, const float* cabinet, uint32_t cabinet_frames,
     float cabinet_rate, const float* stem, const float* di, const uint32_t* note_frames, uint32_t note_count,
-    float* drive, float* bands_db, uint32_t band_count, float* level_gain) {
+    float* drive, float* bands_db, uint32_t band_count, float* wah_start_hz, float* wah_end_hz,
+    float* level_gain) {
     return yarg::audio::leadAmpMatch(sample_rate, cabinet, cabinet_frames, cabinet_rate, stem, di, note_frames,
-        note_count, drive, bands_db, band_count, level_gain);
+        note_count, drive, bands_db, band_count, wah_start_hz, wah_end_hz, level_gain);
 }
 
 void YARG_AUDIO_CALL yarg_lead_amp_dsp_destroy(yarg_lead_amp_dsp* dsp) {
