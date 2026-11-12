@@ -34,6 +34,10 @@ namespace YARG.Audio.BASS
         public double  PickStrength;
         public double  DecayDbPerSecond;
         public BassStemClip[] Takes = Array.Empty<BassStemClip>();
+        public BassStemClip[] Layers = Array.Empty<BassStemClip>();
+        public BassStemClip[] Releases = Array.Empty<BassStemClip>();
+        public double  PlaybackRate = 1;
+        public bool    IsSynth;
 
         public bool HasLoop => LoopEndFrame > LoopStartFrame;
 
@@ -306,6 +310,28 @@ namespace YARG.Audio.BASS
             };
             looped.SetLoop(bodyStart: bodyStart, loopEnd: looped.FrameCount, fadeFrames: fadeFrames, format: format);
             return looped;
+        }
+
+        public BassStemClip PlayedAt(int note, double playbackRate)
+        {
+            return new BassStemClip
+            {
+                SongSeconds = SongSeconds,
+                StartFrame = StartFrame,
+                Samples = Samples,
+                FrameCount = FrameCount,
+                IsSustain = IsSustain,
+                AttackEndFrame = AttackEndFrame,
+                PitchHz = PitchHz * playbackRate,
+                Note = note,
+                LoopStartFrame = LoopStartFrame,
+                LoopEndFrame = LoopEndFrame,
+                LoopFadeFrames = LoopFadeFrames,
+                LoopTail = LoopTail,
+                PickStrength = PickStrength,
+                PlaybackRate = playbackRate,
+                IsSynth = IsSynth,
+            };
         }
 
         public int NextLoopSegment(int pushedFrames, int remaining, out bool fromTail, out int sourceFrame)

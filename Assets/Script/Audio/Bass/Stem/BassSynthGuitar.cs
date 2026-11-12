@@ -1,0 +1,258 @@
+#nullable enable
+using System;
+using System.Collections.Generic;
+
+namespace YARG.Audio.BASS
+{
+    internal sealed class BassSynthGuitar
+    {
+        internal static bool Enabled = true;
+
+        internal const int LOWEST_NOTE  = 50;
+        internal const int HIGHEST_NOTE = 86;
+
+        private const double SAMPLE_SECONDS       = 2.5;
+        private const double BODY_START_SECONDS   = 0.05;
+        private const double BODY_END_SECONDS     = 0.4;
+        private const double DI_LEVEL             = 0.1;
+        private const double RELEASE_LEVEL        = 0.5;
+        private const double ATTACK_SECONDS       = 0.025;
+        private const double LOWER_SAMPLE_PENALTY = 0.1;
+
+        private sealed class Sample
+        {
+            public readonly int Note;
+            public readonly SortedDictionary<int, List<(BassStemClip Clip, float Gain)>> Layers = new();
+            public readonly List<BassStemClip> Releases = new();
+
+            public Sample(int note)
+            {
+                Note = note;
+            }
+
+            public float MiddleGain
+            {
+                get
+                {
+                    int middle = Layers.Count / 2;
+                    foreach (var takes in Layers.Values)
+                    {
+                        if (middle-- == 0)
+                        {
+                            return takes[0].Gain;
+                        }
+                    }
+
+                    return 0;
+                }
+            }
+        }
+
+        private readonly List<Sample> _samples;
+
+        private BassSynthGuitar(List<Sample> samples)
+        {
+            _samples = samples;
+        }
+
+        internal static BassSynthGuitar? Create(IReadOnlyList<(int Note, int Layer, float[] Mono, int Frequency)> recordings,
+            IReadOnlyList<(int Note, float[] Mono, int Frequency)> releases, BassStemFormat format)
+        {
+            var samples = new List<Sample>();
+            foreach (var (note, layer, mono, frequency) in recordings)
+            {
+                var clip = Clip(note, mono, frequency, format, out float gain);
+                if (clip == null)
+                {
+                    continue;
+                }
+
+                var sample = samples.Find(candidate => candidate.Note == note);
+                if (sample == null)
+                {
+                    sample = new Sample(note);
+                    samples.Add(sample);
+                }
+
+                if (!sample.Layers.TryGetValue(layer, out var takes))
+                {
+                    takes = new List<(BassStemClip Clip, float Gain)>();
+                    sample.Layers[layer] = takes;
+                }
+
+                takes.Add((clip, gain));
+            }
+
+            foreach (var (note, mono, frequency) in releases)
+            {
+                var sample = samples.Find(candidate => candidate.Note == note);
+                if (sample != null)
+                {
+                    sample.Releases.Add(Release(note, mono, frequency, (float) (sample.MiddleGain * RELEASE_LEVEL), format));
+                }
+            }
+
+            samples.Sort((left, right) => left.Note.CompareTo(right.Note));
+            return samples.Count > 0 ? new BassSynthGuitar(samples) : null;
+        }
+
+        internal List<BassStemClip> Ladder(double tuningCents)
+        {
+            var ladder = new List<BassStemClip>(HIGHEST_NOTE - LOWEST_NOTE + 1);
+            for (int note = LOWEST_NOTE; note <= HIGHEST_NOTE; note++)
+            {
+                var sample = Nearest(note);
+                double rate = Math.Pow(2, (note - sample.Note + tuningCents / 100) / 12);
+                var layers = new BassStemClip[sample.Layers.Count];
+                int index = 0;
+                foreach (var takes in sample.Layers.Values)
+                {
+                    layers[index++] = PlayedAt(takes, note, rate);
+                }
+
+                var releases = new BassStemClip[sample.Releases.Count];
+                for (int release = 0; release < releases.Length; release++)
+                {
+                    releases[release] = sample.Releases[release].PlayedAt(note, rate);
+                }
+
+                foreach (var layer in layers)
+                {
+                    layer.Layers = layers;
+                    layer.Releases = releases;
+                    foreach (var take in layer.Takes)
+                    {
+                        take.Layers = layers;
+                        take.Releases = releases;
+                    }
+                }
+
+                ladder.Add(layers[layers.Length / 2]);
+            }
+
+            return ladder;
+        }
+
+        private static BassStemClip PlayedAt(List<(BassStemClip Clip, float Gain)> takes, int note, double rate)
+        {
+            var clip = takes[0].Clip.PlayedAt(note, rate);
+            clip.Takes = new BassStemClip[takes.Count - 1];
+            for (int take = 1; take < takes.Count; take++)
+            {
+                clip.Takes[take - 1] = takes[take].Clip.PlayedAt(note, rate);
+            }
+
+            return clip;
+        }
+
+        private Sample Nearest(int note)
+        {
+            var nearest = _samples[0];
+            double nearestDistance = double.MaxValue;
+            foreach (var sample in _samples)
+            {
+                double distance = Math.Abs(sample.Note - note) + (sample.Note < note ? LOWER_SAMPLE_PENALTY : 0);
+                if (distance < nearestDistance)
+                {
+                    nearest = sample;
+                    nearestDistance = distance;
+                }
+            }
+
+            return nearest;
+        }
+
+        private static BassStemClip? Clip(int note, float[] mono, int frequency, BassStemFormat format, out float gain)
+        {
+            gain = 0;
+            var resampled = Resample(mono, frequency, format.Frequency, format.FramesFor(SAMPLE_SECONDS));
+            int bodyStart = format.FramesFor(BODY_START_SECONDS);
+            int bodyEnd = Math.Min(format.FramesFor(BODY_END_SECONDS), resampled.Length);
+            if (bodyEnd <= bodyStart)
+            {
+                return null;
+            }
+
+            double energy = 0;
+            for (int frame = bodyStart; frame < bodyEnd; frame++)
+            {
+                energy += (double) resampled[frame] * resampled[frame];
+            }
+
+            double level = Math.Sqrt(energy / (bodyEnd - bodyStart));
+            if (level <= 0)
+            {
+                return null;
+            }
+
+            gain = (float) (DI_LEVEL / level);
+            var clip = new BassStemClip
+            {
+                Samples = Interleaved(resampled, gain, format.Channels),
+                FrameCount = resampled.Length,
+                IsSustain = true,
+                AttackEndFrame = format.FramesFor(ATTACK_SECONDS),
+                PitchHz = NoteHz(note),
+                Note = note,
+                IsSynth = true,
+            };
+            clip.LoopStretchedBody(clip.AttackEndFrame, format);
+            return clip;
+        }
+
+        private static BassStemClip Release(int note, float[] mono, int frequency, float gain, BassStemFormat format)
+        {
+            var resampled = Resample(mono, frequency, format.Frequency, int.MaxValue);
+            return new BassStemClip
+            {
+                Samples = Interleaved(resampled, gain, format.Channels),
+                FrameCount = resampled.Length,
+                PitchHz = NoteHz(note),
+                Note = note,
+                IsSynth = true,
+            };
+        }
+
+        private static double NoteHz(int note)
+        {
+            return 440 * Math.Pow(2, (note - 69) / 12.0);
+        }
+
+        private static float[] Interleaved(float[] mono, float gain, int channels)
+        {
+            var samples = new float[mono.Length * channels];
+            for (int frame = 0; frame < mono.Length; frame++)
+            {
+                for (int channel = 0; channel < channels; channel++)
+                {
+                    samples[frame * channels + channel] = mono[frame] * gain;
+                }
+            }
+
+            return samples;
+        }
+
+        private static float[] Resample(float[] source, int fromFrequency, int toFrequency, int maxFrames)
+        {
+            double step = fromFrequency / (double) toFrequency;
+            int frames = Math.Min(maxFrames, (int) ((source.Length - 2) / step));
+            var output = new float[Math.Max(0, frames)];
+            for (int frame = 0; frame < output.Length; frame++)
+            {
+                double position = frame * step;
+                int index = (int) position;
+                float fraction = (float) (position - index);
+                float y0 = source[Math.Max(index - 1, 0)];
+                float y1 = source[index];
+                float y2 = source[index + 1];
+                float y3 = source[Math.Min(index + 2, source.Length - 1)];
+                float c1 = 0.5f * (y2 - y0);
+                float c2 = y0 - 2.5f * y1 + 2 * y2 - 0.5f * y3;
+                float c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+                output[frame] = ((c3 * fraction + c2) * fraction + c1) * fraction + y1;
+            }
+
+            return output;
+        }
+    }
+}

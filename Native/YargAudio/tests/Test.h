@@ -20,6 +20,7 @@ void runFreeverbDspTests();
 void runDattorroReverbDspTests();
 void runNoiseGateDspTests();
 void runOverdriveDspTests();
+void runLeadAmpDspTests();
 void runNoiseMorphTests();
 void runYargStretchTests();
 void runSineSynthDspTests();

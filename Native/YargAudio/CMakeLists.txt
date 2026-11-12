@@ -17,6 +17,7 @@ set(YARG_AUDIO_SOURCES
     src/dsp/DattorroReverbDsp.cpp
     src/dsp/GainDsp.cpp
     src/dsp/FreeverbDsp.cpp
+    src/dsp/LeadAmpDsp.cpp
     src/dsp/NoiseGateDsp.cpp
     src/dsp/OverdriveDsp.cpp
     src/dsp/SineSynthDsp.cpp
@@ -97,6 +98,7 @@ if(YARG_AUDIO_BUILD_TESTS)
         tests/DattorroReverbDspTests.cpp
         tests/NoiseGateDspTests.cpp
         tests/OverdriveDspTests.cpp
+        tests/LeadAmpDspTests.cpp
         tests/NoiseMorphTests.cpp
         tests/YargStretchTests.cpp
         tests/SineSynthDspTests.cpp
@@ -112,6 +114,7 @@ if(YARG_AUDIO_BUILD_TESTS)
         src/dsp/DattorroReverbDsp.cpp
         src/dsp/GainDsp.cpp
         src/dsp/FreeverbDsp.cpp
+        src/dsp/LeadAmpDsp.cpp
         src/dsp/NoiseGateDsp.cpp
         src/dsp/OverdriveDsp.cpp
         src/dsp/SineSynthDsp.cpp

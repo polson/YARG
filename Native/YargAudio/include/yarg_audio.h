@@ -29,6 +29,7 @@ typedef struct yarg_freeverb_dsp yarg_freeverb_dsp;
 typedef struct yarg_dattorro_reverb_dsp yarg_dattorro_reverb_dsp;
 typedef struct yarg_noise_gate_dsp yarg_noise_gate_dsp;
 typedef struct yarg_overdrive_dsp yarg_overdrive_dsp;
+typedef struct yarg_lead_amp_dsp yarg_lead_amp_dsp;
 typedef struct yarg_one_shot_stream yarg_one_shot_stream;
 typedef struct yarg_sine_synth_dsp yarg_sine_synth_dsp;
 
@@ -212,6 +213,11 @@ YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_overdrive_dsp_attach(
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_overdrive_dsp_set(
     yarg_overdrive_dsp* dsp, float mix, float drive);
 YARG_AUDIO_API void YARG_AUDIO_CALL yarg_overdrive_dsp_destroy(yarg_overdrive_dsp* dsp);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_attach(
+    uint32_t channel, float gain, const float* cabinet, uint32_t cabinet_frames, float cabinet_rate,
+    int32_t priority, yarg_lead_amp_dsp** dsp, int32_t* bass_error);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_set_gain(yarg_lead_amp_dsp* dsp, float gain);
+YARG_AUDIO_API void YARG_AUDIO_CALL yarg_lead_amp_dsp_destroy(yarg_lead_amp_dsp* dsp);
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_one_shot_stream_create(
     const yarg_one_shot_config* config,
     const float* pcm, uint64_t pcm_sample_count,

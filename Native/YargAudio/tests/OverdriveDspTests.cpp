@@ -147,6 +147,20 @@ void onsetsDoNotPop() {
     }
 }
 
+void chordsIntermodulate() {
+    std::vector<float> input(static_cast<std::size_t>(SAMPLE_RATE) * CHANNELS);
+    for (int frame = 0; frame < SAMPLE_RATE; ++frame) {
+        const double seconds = static_cast<double>(frame) / SAMPLE_RATE;
+        const auto value = static_cast<float>(0.12 * std::sin(2 * PI * 110 * seconds) + 0.12 * std::sin(2 * PI * 165 * seconds));
+        input[frame * CHANNELS] = value;
+        input[frame * CHANNELS + 1] = value;
+    }
+    const auto output = run(input, 1.0f, 15.0f);
+    const int first = SAMPLE_RATE / 2;
+    const int frames = 16384;
+    REQUIRE(tonePower(output, first, frames, 275) > 0.01 * tonePower(output, first, frames, 110));
+}
+
 void silenceStaysSilent() {
     const std::vector<float> input(static_cast<std::size_t>(SAMPLE_RATE / 4) * CHANNELS, 0.0f);
     const auto output = run(input, 1.0f, 4.0f);
@@ -164,5 +178,6 @@ void runOverdriveDspTests() {
     addsHarmonics();
     attackIsNotLouderThanClean();
     onsetsDoNotPop();
+    chordsIntermodulate();
     silenceStaysSilent();
 }

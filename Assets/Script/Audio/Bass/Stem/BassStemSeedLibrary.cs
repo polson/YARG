@@ -47,6 +47,10 @@ namespace YARG.Audio.BASS
         private const int    MAX_TAKES                      = 3;
         private const int    TAKE_EXTRA_SHIFT               = 1;
         private const float  TAKE_MIN_SCORE_RATIO           = 0.5f;
+        private const int    MIN_SYNTH_ANCHORS              = 8;
+        private const int    CHORD_ANCHOR_NOTE              = 60;
+        private const double SYNTH_NOTE_LEVEL               = 1.32;
+        private const double DEFAULT_SOLO_LEVEL             = 0.1;
 
 
 
@@ -60,6 +64,8 @@ namespace YARG.Audio.BASS
         private          BassStemSoloSeeds?      _selected;
         private          BassChordTrack?         _chords;
         private          double                  _requestedSoloTime;
+        private          Func<BassSynthGuitar?>? _loadSynth;
+        private          BassSynthGuitar?        _synth;
 
         public BassStemSeedLibrary(BassStemFormat format)
         {
@@ -115,6 +121,25 @@ namespace YARG.Audio.BASS
             lock (_lock)
             {
                 return _selected?.WhammyBend(clip) ?? 0;
+            }
+        }
+
+        public void UseSynth(Func<BassSynthGuitar?> load)
+        {
+            lock (_lock)
+            {
+                _loadSynth = load;
+            }
+        }
+
+        public double SynthGain
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _selected?.SynthGain ?? 0;
+                }
             }
         }
 
@@ -231,12 +256,22 @@ namespace YARG.Audio.BASS
         public void Publish(CancellationToken token)
         {
             List<BassStemSoloSeeds> pending;
+            Func<BassSynthGuitar?>? loadSynth;
             lock (_lock)
             {
                 pending = _pending;
                 _pending = new List<BassStemSoloSeeds>();
                 _published.Clear();
                 _selected = null;
+                loadSynth = _loadSynth;
+            }
+
+            if (loadSynth != null && _synth == null)
+            {
+                var stopwatch = Stopwatch.StartNew();
+                _synth = loadSynth();
+                YargLogger.LogFormatInfo("[SoloSynth] guitar samples {0} in {1} ms",
+                    _synth != null ? "loaded" : "failed to load", stopwatch.ElapsedMilliseconds);
             }
 
             while (pending.Count > 0)
@@ -273,7 +308,7 @@ namespace YARG.Audio.BASS
                     AddNoteSeed(job, note, jobs);
                 }
 
-                if (stretchAvailable)
+                if (stretchAvailable && _loadSynth == null)
                 {
                     AddRegionJob(job, jobs);
                 }
@@ -401,6 +436,12 @@ namespace YARG.Audio.BASS
 
             var seedClips = clips.ConvertAll(entry => entry.Clip);
             LogAttacks(seedClips, onsetOffsets);
+            if (_synth != null)
+            {
+                PrepareSynth(job, clips, pitches, levels, decays);
+                return true;
+            }
+
             if (!HasReadablePitches(clips, pitches))
             {
                 job.ByKey.Clear();
@@ -931,6 +972,19 @@ namespace YARG.Audio.BASS
 
             MatchLevels(leveled, soloLevel);
 
+            SetWindows(job, anchors);
+
+            YargLogger.LogFormatInfo("[SoloPitch] ladder MIDI notes {0}, {1} pitch-locked loops, {2} window moves",
+                string.Join(", ", rungs.ConvertAll(rung => rung.Note)), locked, job.Windows.Count - 1);
+
+            if (job.CanStretch)
+            {
+                BakeSustainBodies(job, options);
+            }
+        }
+
+        private static void SetWindows(BassStemSoloSeeds job, List<(double SongSeconds, int Note, int Fret)> anchors)
+        {
             anchors.Sort((left, right) => left.SongSeconds.CompareTo(right.SongSeconds));
             foreach (var anchor in anchors)
             {
@@ -968,13 +1022,67 @@ namespace YARG.Audio.BASS
 
                 job.Windows.Add((anchor.SongSeconds, anchor.Note, fret));
             }
+        }
 
-            YargLogger.LogFormatInfo("[SoloPitch] ladder MIDI notes {0}, {1} pitch-locked loops, {2} window moves",
-                string.Join(", ", rungs.ConvertAll(rung => rung.Note)), locked, job.Windows.Count - 1);
-
-            if (job.CanStretch)
+        private void PrepareSynth(BassStemSoloSeeds job, List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,
+            (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)?[] pitches, double[] levels,
+            double[] decays)
+        {
+            var anchors = new List<(double SongSeconds, int Note, int Fret)>();
+            var tunings = new List<double>();
+            for (int index = 0; index < clips.Count; index++)
             {
-                BakeSustainBodies(job, options);
+                if (pitches[index] is not { } pitch || pitch.Bent || pitch.Voiced < ANCHOR_MIN_VOICED
+                    || pitch.Note < BassSynthGuitar.LOWEST_NOTE || pitch.Note > BassSynthGuitar.HIGHEST_NOTE)
+                {
+                    continue;
+                }
+
+                anchors.Add((clips[index].Clip.SongSeconds, pitch.Note, clips[index].Fret));
+                tunings.Add(1200 * Math.Log(pitch.Hz / NoteHz(pitch.Note), 2));
+            }
+
+            int measured = anchors.Count;
+            if (measured < MIN_SYNTH_ANCHORS)
+            {
+                AddChordAnchors(clips, anchors);
+            }
+
+            tunings.Sort();
+            double tuningCents = tunings.Count > 0 ? tunings[tunings.Count / 2] : 0;
+            job.Ladder.AddRange(_synth!.Ladder(tuningCents));
+            SetWindows(job, anchors);
+
+            var heard = Array.FindAll(levels, level => level > 0);
+            Array.Sort(heard);
+            double soloLevel = heard.Length > 0 ? heard[heard.Length / 2] : DEFAULT_SOLO_LEVEL;
+            job.SynthGain = soloLevel / SYNTH_NOTE_LEVEL;
+            SetDecay(job, BassNoteDecay.Typical(decays));
+            YargLogger.LogFormatInfo("[SoloSynth] {0} measured pitches, {1} chord anchors, tuning {2} cents, solo level {3}",
+                measured, anchors.Count - measured, Math.Round(tuningCents), Math.Round(soloLevel, 4));
+        }
+
+        private void AddChordAnchors(List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,
+            List<(double SongSeconds, int Note, int Fret)> anchors)
+        {
+            BassChordTrack? chords;
+            lock (_lock)
+            {
+                chords = _chords;
+            }
+
+            if (chords == null)
+            {
+                return;
+            }
+
+            foreach (var (clip, singleNote, fret) in clips)
+            {
+                int root = singleNote ? chords.RootAt(clip.SongSeconds) : -1;
+                if (root >= 0)
+                {
+                    anchors.Add((clip.SongSeconds, CHORD_ANCHOR_NOTE + root, fret));
+                }
             }
         }
 

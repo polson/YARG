@@ -14,20 +14,55 @@ constexpr std::uint32_t BassSampleFloat = 0x100;
 constexpr std::uint32_t BassConfigFloatDsp = 9;
 
 constexpr double PI = 3.14159265358979323846;
+constexpr float FILTER_Q = 0.7071f;
 constexpr float HIGH_PASS_HZ = 90.0f;
 constexpr float MID_BOOST_HZ = 600.0f;
 constexpr float MID_BOOST_DB = 5.0f;
 constexpr float MID_BOOST_Q = 0.7f;
 constexpr float COUPLING_HZ = 200.0f;
-constexpr float LOW_PASS_HZ = 4500.0f;
-constexpr float BODY_HZ = 120.0f;
-constexpr float BODY_DB = 4.0f;
-constexpr float BODY_Q = 1.0f;
-constexpr float FILTER_Q = 0.7071f;
+constexpr float SCOOP_HZ = 450.0f;
+constexpr float SCOOP_DB = -3.0f;
+constexpr float SCOOP_Q = 0.7f;
+constexpr float TREBLE_HZ = 2500.0f;
+constexpr float TREBLE_DB = 2.0f;
+constexpr float TREBLE_Q = 0.8f;
+constexpr float PRESENCE_HZ = 4000.0f;
+constexpr float PRESENCE_DB = 2.0f;
+constexpr float PRESENCE_Q = 0.8f;
+constexpr float CAB_HIGH_PASS_HZ = 75.0f;
+constexpr float CAB_BODY_HZ = 110.0f;
+constexpr float CAB_BODY_DB = 4.0f;
+constexpr float CAB_BODY_Q = 1.2f;
+constexpr float CAB_BOX_HZ = 400.0f;
+constexpr float CAB_BOX_DB = -2.5f;
+constexpr float CAB_BOX_Q = 1.0f;
+constexpr float CAB_PRESENCE_HZ = 2200.0f;
+constexpr float CAB_PRESENCE_DB = 4.0f;
+constexpr float CAB_PRESENCE_Q = 1.4f;
+constexpr float CAB_BITE_HZ = 3500.0f;
+constexpr float CAB_BITE_DB = 2.0f;
+constexpr float CAB_BITE_Q = 2.0f;
+constexpr float CAB_NOTCH_HZ = 4700.0f;
+constexpr float CAB_NOTCH_DB = -6.0f;
+constexpr float CAB_NOTCH_Q = 3.0f;
+constexpr float CAB_LOW_PASS_HZ = 5500.0f;
+constexpr float CAB_LOW_PASS_Q1 = 0.5412f;
+constexpr float CAB_LOW_PASS_Q2 = 1.3066f;
+constexpr float CABINET_DELAYS_MS[] = {0.8f, 1.9f};
+constexpr float CABINET_GAINS[] = {0.22f, -0.14f};
+constexpr float ROOM_DELAYS_MS[] = {7.1f, 11.3f, 16.9f, 23.7f, 31.3f};
+constexpr float ROOM_GAINS[] = {0.30f, -0.24f, 0.20f, -0.15f, 0.11f};
+constexpr float ROOM_STEREO_OFFSET_MS = 0.6f;
+constexpr float ROOM_TONE_HZ = 3500.0f;
+constexpr float ROOM_LEVEL = 0.35f;
 constexpr float DC_BLOCK_HZ = 10.0f;
 constexpr float FIRST_BIAS = 0.3f;
 constexpr float SECOND_BIAS = -0.1f;
 constexpr float SECOND_STAGE_GAIN = 10.0f;
+constexpr float POWER_GAIN = 2.5f;
+constexpr float SAG_AMOUNT = 1.5f;
+constexpr float SAG_ATTACK_MS = 5.0f;
+constexpr float SAG_RELEASE_MS = 120.0f;
 constexpr float MIX_SMOOTHING_MS = 10.0f;
 constexpr float LEVEL_SMOOTHING_MS = 20.0f;
 constexpr float LOUDNESS_SMOOTHING_MS = 10.0f;
@@ -39,6 +74,10 @@ constexpr float MAX_MAKEUP = 2.0f;
 constexpr float POWER_FLOOR = 1e-8f;
 constexpr float BYPASS_MIX = 1e-5f;
 constexpr float ADAA_MIN_STEP = 1e-4f;
+
+int delayFrames(float milliseconds, float sampleRate, int maxFrames) noexcept {
+    return std::clamp(static_cast<int>(std::lround(milliseconds * 0.001f * sampleRate)), 1, maxFrames - 1);
+}
 
 float smoothingCoefficient(float milliseconds, float sampleRate) noexcept {
     return static_cast<float>(1.0 - std::exp(-1.0 / (milliseconds * 0.001 * sampleRate)));
@@ -65,6 +104,10 @@ namespace yarg::audio {
 
 Overdrive::Overdrive(int channels, float sampleRate) noexcept
     : channels_(std::clamp(channels, 1, MAX_CHANNELS)),
+      stereoOffset_(delayFrames(ROOM_STEREO_OFFSET_MS, sampleRate, MAX_DELAY_FRAMES)),
+      roomToneCoefficient_(static_cast<float>(1.0 - std::exp(-2.0 * PI * ROOM_TONE_HZ / sampleRate))),
+      sagAttack_(smoothingCoefficient(SAG_ATTACK_MS, sampleRate)),
+      sagRelease_(smoothingCoefficient(SAG_RELEASE_MS, sampleRate)),
       dcCoefficient_(static_cast<float>(std::exp(-2.0 * PI * DC_BLOCK_HZ / sampleRate))),
       mixCoefficient_(smoothingCoefficient(MIX_SMOOTHING_MS, sampleRate)),
       levelCoefficient_(smoothingCoefficient(LEVEL_SMOOTHING_MS, sampleRate)),
@@ -77,10 +120,10 @@ Overdrive::Overdrive(int channels, float sampleRate) noexcept
     const auto angle = [sampleRate](float hz) {
         return 2.0 * PI * std::min(hz, 0.45f * sampleRate) / sampleRate;
     };
-    const auto pass = [&angle](float hz, bool highPass) {
+    const auto pass = [&angle](float hz, bool highPass, float q) {
         const double w0 = angle(hz);
         const double cosine = std::cos(w0);
-        const double alpha = std::sin(w0) / (2.0 * FILTER_Q);
+        const double alpha = std::sin(w0) / (2.0 * q);
         const double a0 = 1.0 + alpha;
         const double edge = highPass ? (1.0 + cosine) / 2.0 : (1.0 - cosine) / 2.0;
         Biquad biquad;
@@ -105,22 +148,49 @@ Overdrive::Overdrive(int channels, float sampleRate) noexcept
         biquad.a2 = static_cast<float>((1.0 - alpha / amplitude) / a0);
         return biquad;
     };
-    highPass_ = pass(HIGH_PASS_HZ, true);
-    mid_ = peak(MID_BOOST_HZ, MID_BOOST_DB, MID_BOOST_Q);
-    coupling_ = pass(COUPLING_HZ, true);
-    lowPass_ = pass(LOW_PASS_HZ, false);
-    body_ = peak(BODY_HZ, BODY_DB, BODY_Q);
+    filters_[HIGH_PASS] = pass(HIGH_PASS_HZ, true, FILTER_Q);
+    filters_[MID_BOOST] = peak(MID_BOOST_HZ, MID_BOOST_DB, MID_BOOST_Q);
+    filters_[COUPLING] = pass(COUPLING_HZ, true, FILTER_Q);
+    filters_[SCOOP] = peak(SCOOP_HZ, SCOOP_DB, SCOOP_Q);
+    filters_[TREBLE] = peak(TREBLE_HZ, TREBLE_DB, TREBLE_Q);
+    filters_[PRESENCE] = peak(PRESENCE_HZ, PRESENCE_DB, PRESENCE_Q);
+    filters_[CAB_HIGH_PASS] = pass(CAB_HIGH_PASS_HZ, true, FILTER_Q);
+    filters_[CAB_BODY] = peak(CAB_BODY_HZ, CAB_BODY_DB, CAB_BODY_Q);
+    filters_[CAB_BOX] = peak(CAB_BOX_HZ, CAB_BOX_DB, CAB_BOX_Q);
+    filters_[CAB_PRESENCE] = peak(CAB_PRESENCE_HZ, CAB_PRESENCE_DB, CAB_PRESENCE_Q);
+    filters_[CAB_BITE] = peak(CAB_BITE_HZ, CAB_BITE_DB, CAB_BITE_Q);
+    filters_[CAB_NOTCH] = peak(CAB_NOTCH_HZ, CAB_NOTCH_DB, CAB_NOTCH_Q);
+    filters_[CAB_LOW_PASS_1] = pass(CAB_LOW_PASS_HZ, false, CAB_LOW_PASS_Q1);
+    filters_[CAB_LOW_PASS_2] = pass(CAB_LOW_PASS_HZ, false, CAB_LOW_PASS_Q2);
+    for (std::size_t index = 0; index < cabinetDelays_.size(); ++index) {
+        cabinetDelays_[index] = delayFrames(CABINET_DELAYS_MS[index], sampleRate, MAX_DELAY_FRAMES);
+    }
+    for (std::size_t index = 0; index < roomDelays_.size(); ++index) {
+        roomDelays_[index] = delayFrames(ROOM_DELAYS_MS[index], sampleRate, MAX_DELAY_FRAMES - stereoOffset_);
+    }
 }
 
 void Overdrive::reset() noexcept {
     states_.fill(ChannelState{});
+    for (auto& history : history_) {
+        history.fill(0.0f);
+    }
+    historyIndex_ = 0;
 }
 
-float Overdrive::filter(const Biquad& biquad, float& z1, float& z2, float input) noexcept {
-    const float output = biquad.b0 * input + z1;
-    z1 = biquad.b1 * input - biquad.a1 * output + z2;
-    z2 = biquad.b2 * input - biquad.a2 * output;
+float Overdrive::run(int filter, ChannelState& state, float input) const noexcept {
+    const auto& biquad = filters_[filter];
+    auto& memory = state.filters[filter];
+    const float output = biquad.b0 * input + memory.z1;
+    memory.z1 = biquad.b1 * input - biquad.a1 * output + memory.z2;
+    memory.z2 = biquad.b2 * input - biquad.a2 * output;
     return output;
+}
+
+float Overdrive::delayed(int channel, int frames) const noexcept {
+    int index = historyIndex_ - frames;
+    if (index < 0) index += MAX_DELAY_FRAMES;
+    return history_[channel][index];
 }
 
 float Overdrive::shape(Shaper& shaper, float input, float bias, float offset) noexcept {
@@ -155,13 +225,35 @@ void Overdrive::process(float* samples, std::size_t frames, float mix, float dri
             const float dry = sample;
             state.peak = std::max(std::abs(dry), state.peak * peakRelease_);
 
-            const float tight = filter(highPass_, state.highPass1, state.highPass2, dry);
-            const float voiced = filter(mid_, state.mid1, state.mid2, tight);
+            const float tight = run(HIGH_PASS, state, dry);
+            const float voiced = run(MID_BOOST, state, tight);
             const float first = shape(state.first, voiced * drive, FIRST_BIAS, firstOffset_);
-            const float coupled = filter(coupling_, state.coupling1, state.coupling2, first);
+            const float coupled = run(COUPLING, state, first);
             const float second = shape(state.second, coupled * SECOND_STAGE_GAIN, SECOND_BIAS, secondOffset_);
-            const float filtered = filter(lowPass_, state.lowPass1, state.lowPass2, second);
-            const float toned = filter(body_, state.body1, state.body2, filtered);
+            const float stacked = run(TREBLE, state, run(SCOOP, state, second));
+
+            const float level = std::abs(stacked);
+            state.sag += (level - state.sag) * (level > state.sag ? sagAttack_ : sagRelease_);
+            const float power = shape(state.power, stacked * POWER_GAIN / (1.0f + SAG_AMOUNT * state.sag), 0.0f, 0.0f);
+            float cabinet = run(PRESENCE, state, power);
+            for (int filter = CAB_HIGH_PASS; filter <= CAB_LOW_PASS_2; ++filter) {
+                cabinet = run(filter, state, cabinet);
+            }
+
+            history_[channel][historyIndex_] = cabinet;
+            float boxed = cabinet;
+            for (std::size_t tap = 0; tap < cabinetDelays_.size(); ++tap) {
+                boxed += CABINET_GAINS[tap] * delayed(channel, cabinetDelays_[tap]);
+            }
+
+            float room = 0;
+            const int roomOffset = channel % 2 == 1 ? stereoOffset_ : 0;
+            for (std::size_t tap = 0; tap < roomDelays_.size(); ++tap) {
+                room += ROOM_GAINS[tap] * delayed(channel, roomDelays_[tap] + roomOffset);
+            }
+            state.roomTone += (room - state.roomTone) * roomToneCoefficient_;
+
+            const float toned = boxed + ROOM_LEVEL * state.roomTone;
             const float wet = toned - state.dcInput + dcCoefficient_ * state.dcOutput;
             state.dcInput = toned;
             state.dcOutput = wet;
@@ -182,6 +274,8 @@ void Overdrive::process(float* samples, std::size_t frames, float mix, float dri
 
             sample = softLimit(mixed * state.ceilingGain, state.peak);
         }
+
+        historyIndex_ = (historyIndex_ + 1) % MAX_DELAY_FRAMES;
     }
 }
 

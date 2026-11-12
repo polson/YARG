@@ -10,6 +10,7 @@ int main() {
     runDattorroReverbDspTests();
     runNoiseGateDspTests();
     runOverdriveDspTests();
+    runLeadAmpDspTests();
     runNoiseMorphTests();
     runYargStretchTests();
     runSineSynthDspTests();

@@ -4,6 +4,7 @@
 #include "dsp/DattorroReverbDsp.h"
 #include "dsp/FreeverbDsp.h"
 #include "dsp/GainDsp.h"
+#include "dsp/LeadAmpDsp.h"
 #include "dsp/NoiseGateDsp.h"
 #include "dsp/OverdriveDsp.h"
 #include "dsp/SineSynthDsp.h"
@@ -341,6 +342,21 @@ int32_t YARG_AUDIO_CALL yarg_overdrive_dsp_set(yarg_overdrive_dsp* dsp, float mi
 
 void YARG_AUDIO_CALL yarg_overdrive_dsp_destroy(yarg_overdrive_dsp* dsp) {
     (void) yarg::audio::overdriveDspDestroy(dsp);
+}
+
+int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_attach(uint32_t channel, float gain,
+    const float* cabinet, uint32_t cabinet_frames, float cabinet_rate,
+    int32_t priority, yarg_lead_amp_dsp** dsp, int32_t* bass_error) {
+    return yarg::audio::leadAmpDspAttach(coreBassBindings(), channel, gain, cabinet, cabinet_frames, cabinet_rate,
+        priority, dsp, bass_error);
+}
+
+int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_set_gain(yarg_lead_amp_dsp* dsp, float gain) {
+    return yarg::audio::leadAmpDspSetGain(dsp, gain);
+}
+
+void YARG_AUDIO_CALL yarg_lead_amp_dsp_destroy(yarg_lead_amp_dsp* dsp) {
+    (void) yarg::audio::leadAmpDspDestroy(dsp);
 }
 
 int32_t YARG_AUDIO_CALL yarg_one_shot_stream_create(

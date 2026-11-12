@@ -16,6 +16,7 @@ namespace YARG.Audio.BASS
     internal sealed class BassStemSoundboard : IDisposable
     {
         private const int    VOICE_COUNT                         = 12;
+        private const int    RELEASE_KEY                         = 1 << 8;
         private const int    FLOAT_BYTES                         = sizeof(float);
         private const double VOICE_FADE_SECONDS                  = 0.08;
         private const double FREESTYLE_RELEASE_SECONDS           = 0.08;
@@ -28,7 +29,6 @@ namespace YARG.Audio.BASS
         private const float  WHAMMY_IDLE_PERCENT                 = 0.05f;
         private const float  WHAMMY_FULL_BEND_PERCENT            = 0.9f;
         private const double PITCH_GLIDE_SECONDS                 = 0.02;
-        private const float  CHORD_OVERDRIVE_MIX                 = 1f;
         private const float  CHORD_OVERDRIVE_DRIVE               = 15f;
         private const double VIBRATO_DELAY_SECONDS               = 0.3;
         private const double VIBRATO_RAMP_SECONDS                = 0.15;
@@ -39,18 +39,28 @@ namespace YARG.Audio.BASS
         private const double VIBRATO_WANDER_HZ                   = 0.3;
         private const double VIBRATO_DEPTH_SPREAD                = 0.15;
         private const double DRIFT_DEPTH_CENTS                   = 6;
-        private const double PICK_VELOCITY_DB                    = 1.5;
+        private const double ATTACK_SHARP_CENTS                  = 10;
+        private const double ATTACK_SETTLE_SECONDS               = 0.03;
+        private const double TUNING_SPREAD_CENTS                 = 5;
+        private const double PICK_VELOCITY_DB                    = 3;
         private const double PICK_BRIGHTNESS_SPREAD              = 0.25;
         private const double FAST_NOTE_SECONDS                   = 0.15;
         private const double FAST_SOFTEN_DB                      = 1.5;
         private const double FAST_DULLING                        = 0.3;
         private const double PICK_SHAPE_SECONDS                  = 0.02;
         private const double PICK_HIGH_PASS_HZ                   = 2000;
+        private const double SCRAPE_LEVEL                        = 0.03;
+        private const double SCRAPE_DECAY_SECONDS                = 0.004;
         private const double MAX_DECAY_DB                        = 15;
         private const double DECAY_STEP_DB                       = 0.25;
         private const double DECAY_SLIDE_SECONDS                 = 0.05;
         private const double STRUM_MIN_SPREAD_SECONDS            = 0.008;
         private const double STRUM_MAX_SPREAD_SECONDS            = 0.015;
+        private const int    SYNTH_AMP_PRIORITY                  = 1;
+        private const float  SYNTH_REVERB_WET                    = 0.47f;
+        private const float  SYNTH_REVERB_ROOM                   = 0.75f;
+        private const float  SYNTH_REVERB_DAMP                   = 0.5f;
+        private const float  MAX_SYNTH_GAIN                      = 16f;
 
         private static readonly double[] CHORD_NOTE_GAINS = { 1, 0.8, 0.65 };
 
@@ -66,9 +76,9 @@ namespace YARG.Audio.BASS
             public int        BentPushedFrames;
             public double     Gain;
             public double     BentShare;
-            public BassOverdriveDsp? Overdrive;
-            public BassOverdriveDsp? BentOverdrive;
-            public bool       IsDistorted;
+            public BassMixerBus? Bus;
+            public bool       IsSynth;
+            public double     PlaybackRate = 1;
             public float      Frequency;
             public int        Key;
             public bool       IsSustain;
@@ -83,14 +93,14 @@ namespace YARG.Audio.BASS
             public double     DecayDbPerSecond;
             public double     DecayStartSeconds;
             public double     DecayDb;
+            public double     AttackCents;
+            public double     TuningCents;
             public float[]    PickBuffer = Array.Empty<float>();
 
             public Voice(PushStream stream, PushStream bentStream)
             {
                 Stream = stream;
                 BentStream = bentStream;
-                Overdrive = BassOverdriveDsp.Attach(stream.Handle, 0, CHORD_OVERDRIVE_DRIVE);
-                BentOverdrive = BassOverdriveDsp.Attach(bentStream.Handle, 0, CHORD_OVERDRIVE_DRIVE);
             }
 
             public bool IsAttached => Key != 0;
@@ -123,7 +133,14 @@ namespace YARG.Audio.BASS
         private          float[]                      _silence = Array.Empty<float>();
         private          long                         _playCount;
         private          long                         _lastVoiceStart = Stopwatch.GetTimestamp();
+        private          int                          _lastLayerTake;
         private          bool                         _disposed;
+        private readonly BassMixerBus?                _cleanBus;
+        private readonly BassMixerBus?                _ampBus;
+        private readonly BassOverdriveDsp?            _amp;
+        private readonly BassMixerBus?                _synthBus;
+        private readonly BassLeadAmpDsp?              _synthAmp;
+        private readonly BassFreeverbDsp?             _synthReverb;
 
         internal BassStemSoundboard(object stemLock, AudioManager manager, BassStemFormat format,
             Func<double> volume)
@@ -133,12 +150,64 @@ namespace YARG.Audio.BASS
             _volume = volume;
             _seeds = new BassStemSeedLibrary(format);
 
+            if (manager is BassAudioManager bassManager)
+            {
+                _cleanBus = bassManager.CreateMixerBus(format.Frequency, format.Channels);
+                _ampBus = bassManager.CreateMixerBus(format.Frequency, format.Channels);
+                if (_cleanBus == null || _ampBus == null)
+                {
+                    _cleanBus?.Dispose();
+                    _ampBus?.Dispose();
+                    _cleanBus = null;
+                    _ampBus = null;
+                }
+                else
+                {
+                    _amp = BassOverdriveDsp.Attach(_ampBus.SourceHandle, 1, CHORD_OVERDRIVE_DRIVE);
+                    if (BassSynthGuitar.Enabled)
+                    {
+                        _synthBus = bassManager.CreateMixerBus(format.Frequency, format.Channels);
+                        var cabinet = BassGuitarSamples.LoadCabinet(out int cabinetRate);
+                        _synthAmp = _synthBus != null
+                            ? BassLeadAmpDsp.Attach(_synthBus.SourceHandle, 0, cabinet, cabinetRate, SYNTH_AMP_PRIORITY)
+                            : null;
+                        if (_synthBus != null && _synthAmp != null)
+                        {
+                            _synthReverb = BassFreeverbDsp.Create(_synthBus.SourceHandle, 1, SYNTH_REVERB_WET,
+                                SYNTH_REVERB_ROOM, SYNTH_REVERB_DAMP);
+                        }
+                        else
+                        {
+                            _synthBus?.Dispose();
+                            _synthBus = null;
+                        }
+                    }
+                }
+            }
+
             for (int index = 0; index < VOICE_COUNT; index++)
             {
-                var stream = manager.CreatePushStream(sampleRate: format.Frequency, channelCount: format.Channels);
-                var bentStream = manager.CreatePushStream(sampleRate: format.Frequency, channelCount: format.Channels);
-                _voices[index] = new Voice(stream: stream, bentStream: bentStream);
+                _voices[index] = new Voice(stream: CreateVoiceStream(manager), bentStream: CreateVoiceStream(manager));
+                _voices[index].Bus = _cleanBus;
             }
+
+            if (_synthBus != null)
+            {
+                _seeds.UseSynth(() => BassGuitarSamples.Load(format));
+            }
+        }
+
+        private PushStream CreateVoiceStream(AudioManager manager)
+        {
+            if (_cleanBus == null)
+            {
+                return manager.CreatePushStream(sampleRate: _format.Frequency, channelCount: _format.Channels);
+            }
+
+            var stream = BassPushStream.Create(_format.Frequency, _format.Channels)
+                ?? throw new InvalidOperationException($"Failed to create BASS push stream: {Bass.LastError}");
+            _cleanBus.Take(stream.Handle);
+            return stream;
         }
 
         private int LoopBufferFrames => _format.FramesFor(LOOP_BUFFER_SECONDS);
@@ -175,7 +244,7 @@ namespace YARG.Audio.BASS
 
                 var pick = NextPick();
                 FadePreviousVoices(FREESTYLE_MIN_TRANSITION_SECONDS);
-                Start(clip, key: key, gain: pick.Gain, firstFrame: 0, brightness: pick.Brightness);
+                Start(Layered(clip, pick.Force), key: key, gain: pick.Gain, firstFrame: 0, brightness: pick.Brightness);
             }
         }
 
@@ -225,7 +294,7 @@ namespace YARG.Audio.BASS
                         continue;
                     }
 
-                    Start(clip, key: fret, gain: fretGain, firstFrame: 0, brightness: pick.Brightness);
+                    Start(Layered(clip, pick.Force), key: fret, gain: fretGain, firstFrame: 0, brightness: pick.Brightness);
                 }
             }
         }
@@ -285,6 +354,7 @@ namespace YARG.Audio.BASS
                 {
                     if (voice.IsPlainSustainFor(fretMask))
                     {
+                        PlayRelease(voice);
                         FadeOut(voice);
                     }
                 }
@@ -305,6 +375,7 @@ namespace YARG.Audio.BASS
                 {
                     if (voice.IsLooping && voice.IsReleasedBy(fretMask))
                     {
+                        PlayRelease(voice);
                         FadeOut(voice);
                     }
                 }
@@ -421,11 +492,16 @@ namespace YARG.Audio.BASS
                 _seeds.Forget();
                 foreach (var voice in _voices)
                 {
-                    voice.Overdrive?.Dispose();
-                    voice.BentOverdrive?.Dispose();
                     voice.Stream.Dispose();
                     voice.BentStream.Dispose();
                 }
+
+                _amp?.Dispose();
+                _synthReverb?.Dispose();
+                _synthAmp?.Dispose();
+                _cleanBus?.Dispose();
+                _ampBus?.Dispose();
+                _synthBus?.Dispose();
             }
         }
 
@@ -443,21 +519,47 @@ namespace YARG.Audio.BASS
             return count;
         }
 
-        private (double Gain, double Brightness) NextPick()
+        private (double Gain, double Brightness, double Force) NextPick()
         {
             double interval = (Stopwatch.GetTimestamp() - _lastVoiceStart) / (double) Stopwatch.Frequency;
             double fastness = Math.Max(0, 1 - interval / FAST_NOTE_SECONDS);
             double force = _random.NextDouble() - _random.NextDouble();
             double decibels = PICK_VELOCITY_DB * force - FAST_SOFTEN_DB * fastness;
             double brightness = 1 + PICK_BRIGHTNESS_SPREAD * force - FAST_DULLING * fastness;
-            return (Math.Pow(10, decibels / 20), brightness);
+            return (Math.Pow(10, decibels / 20), brightness, force);
+        }
+
+        private BassStemClip Layered(BassStemClip clip, double force)
+        {
+            var layers = clip.Layers;
+            if (layers.Length == 0)
+            {
+                return clip;
+            }
+
+            int layer = Math.Clamp((int) ((force + 1) / 2 * layers.Length), 0, layers.Length - 1);
+            var chosen = layers[layer];
+            int count = chosen.Takes.Length + 1;
+            _lastLayerTake = count > 1 ? (_lastLayerTake + 1 + _random.Next(count - 1)) % count : 0;
+            return _lastLayerTake == 0 ? chosen : chosen.Takes[_lastLayerTake - 1];
+        }
+
+        private void PlayRelease(Voice voice)
+        {
+            var releases = voice.Clip?.Releases;
+            if (!voice.IsSynth || releases == null || releases.Length == 0)
+            {
+                return;
+            }
+
+            Start(releases[_random.Next(releases.Length)], key: RELEASE_KEY, gain: voice.Gain, firstFrame: 0);
         }
 
         private Voice Start(BassStemClip clip, int key, double gain, int firstFrame, double fadeInSeconds = 0,
             bool distorted = false, double brightness = 1, int delayFrames = 0)
         {
             var voice = PickVoice(key);
-            SetDistorted(voice, distorted);
+            Route(voice, clip.IsSynth, distorted);
             voice.Stream.Clear();
             voice.BentStream.Clear();
             if (delayFrames > 0)
@@ -473,6 +575,13 @@ namespace YARG.Audio.BASS
             voice.BentPushedFrames = firstFrame;
             voice.WhammySemitones = clip.Bent != null ? clip.BendSemitones : clip.Note >= 0 ? _seeds.WhammyBend(clip) : 0;
             voice.Gain = gain;
+            voice.IsSynth = clip.IsSynth && _synthBus != null;
+            voice.PlaybackRate = clip.PlaybackRate;
+            if (voice.IsSynth)
+            {
+                _synthAmp?.SetGain((float) Math.Clamp(_volume() * _seeds.SynthGain, 0, MAX_SYNTH_GAIN));
+            }
+
             voice.DecayDbPerSecond = clip.DecayDbPerSecond;
             voice.DecayStartSeconds = Math.Max(0, clip.LoopStartFrame - firstFrame) / (double) _format.Frequency;
             voice.DecayDb = 0;
@@ -486,7 +595,6 @@ namespace YARG.Audio.BASS
                 SetVoiceVolume(voice, VoiceVolume(voice));
             }
 
-            SetPitch(voice, glide: false);
             voice.StartOrder = ++_playCount;
             voice.StartTimestamp = Stopwatch.GetTimestamp();
             for (int index = 0; index < voice.DriftPhases.Length; index++)
@@ -497,10 +605,18 @@ namespace YARG.Audio.BASS
             voice.VibratoRateHz = VIBRATO_RATE_HZ * (1 + VIBRATO_RATE_SPREAD * (2 * _random.NextDouble() - 1));
             voice.VibratoWanderPhase = _random.NextDouble() * 2 * Math.PI;
             voice.VibratoSeed = _random.Next();
+            voice.AttackCents = voice.IsSynth && clip.IsSustain && firstFrame == 0
+                ? ATTACK_SHARP_CENTS * gain * (0.5 + _random.NextDouble())
+                : 0;
+            voice.TuningCents = voice.IsSynth
+                ? TUNING_SPREAD_CENTS * (_random.NextDouble() - _random.NextDouble())
+                : 0;
+            SetPitch(voice, glide: false);
 
-            if (firstFrame == 0 && brightness != 1)
+            bool picked = voice.IsSynth && clip.IsSustain;
+            if (firstFrame == 0 && (brightness != 1 || picked))
             {
-                ShapePick(voice, clip, brightness);
+                ShapePick(voice, clip, brightness, picked ? SCRAPE_LEVEL * gain : 0);
             }
 
             Feed(voice);
@@ -519,7 +635,7 @@ namespace YARG.Audio.BASS
             Push(voice.BentStream, _silence, firstFrame: 0, frameCount: frames);
         }
 
-        private void ShapePick(Voice voice, BassStemClip clip, double brightness)
+        private void ShapePick(Voice voice, BassStemClip clip, double brightness, double scrape)
         {
             int channels = _format.Channels;
             int lastFrame = clip.HasLoop ? clip.LoopEndFrame - clip.LoopFadeFrames : clip.FrameCount;
@@ -536,7 +652,23 @@ namespace YARG.Audio.BASS
 
             float smoothing = (float) Math.Exp(-2 * Math.PI * PICK_HIGH_PASS_HZ / _format.Frequency);
             float extra = (float) (brightness - 1);
+            float scrapeDecay = (float) Math.Exp(-1 / (SCRAPE_DECAY_SECONDS * _format.Frequency));
             int fadeFrames = frames / 2;
+            float scrapeLow = 0;
+            float scrapeLevel = (float) scrape;
+            for (int frame = 0; frame < frames; frame++)
+            {
+                float noise = scrape > 0 ? (float) (_random.NextDouble() * 2 - 1) : 0;
+                scrapeLow = smoothing * scrapeLow + (1 - smoothing) * noise;
+                float scraped = scrapeLevel * (noise - scrapeLow);
+                scrapeLevel *= scrapeDecay;
+                for (int channel = 0; channel < channels; channel++)
+                {
+                    int index = frame * channels + channel;
+                    voice.PickBuffer[index] = clip.Samples[index] + scraped;
+                }
+            }
+
             for (int channel = 0; channel < channels; channel++)
             {
                 float low = clip.Samples[channel];
@@ -547,7 +679,7 @@ namespace YARG.Audio.BASS
                     low = smoothing * low + (1 - smoothing) * sample;
                     int fromEnd = frames - frame;
                     float fade = fromEnd < fadeFrames ? (float) (0.5 - 0.5 * Math.Cos(Math.PI * fromEnd / fadeFrames)) : 1;
-                    voice.PickBuffer[index] = sample + extra * fade * (sample - low);
+                    voice.PickBuffer[index] += extra * fade * (sample - low);
                 }
             }
 
@@ -555,17 +687,17 @@ namespace YARG.Audio.BASS
             voice.PushedFrames = frames;
         }
 
-        private static void SetDistorted(Voice voice, bool distorted)
+        private void Route(Voice voice, bool synth, bool distorted)
         {
-            if (voice.IsDistorted == distorted)
+            var bus = synth && _synthBus != null ? _synthBus : distorted ? _ampBus : _cleanBus;
+            if (bus == null || voice.Bus == bus)
             {
                 return;
             }
 
-            voice.IsDistorted = distorted;
-            float mix = distorted ? CHORD_OVERDRIVE_MIX : 0;
-            voice.Overdrive?.Set(mix, CHORD_OVERDRIVE_DRIVE);
-            voice.BentOverdrive?.Set(mix, CHORD_OVERDRIVE_DRIVE);
+            voice.Bus = bus;
+            bus.Take(voice.Stream.Handle);
+            bus.Take(voice.BentStream.Handle);
         }
 
         private void FadePreviousVoices(double minSeconds)
@@ -716,7 +848,7 @@ namespace YARG.Audio.BASS
 
         private void SetPitch(Voice voice, bool glide)
         {
-            float freq = _format.Frequency;
+            float freq = (float) (_format.Frequency * voice.PlaybackRate);
             if (voice.IsLooping)
             {
                 double semitones = 0;
@@ -728,12 +860,12 @@ namespace YARG.Audio.BASS
                         : -GlobalAudioHandler.WhammyPitchShiftAmount * _whammyPercent;
                 }
 
-                semitones += DriftCents(voice) / 100;
+                semitones += (DriftCents(voice) + HumanCents(voice)) / 100;
                 if (IsWhammyIdle)
                 {
                     semitones += VibratoCents(voice) / 100;
                 }
-                freq = (float) (_format.Frequency * Math.Pow(2, semitones / 12));
+                freq = (float) (_format.Frequency * voice.PlaybackRate * Math.Pow(2, semitones / 12));
             }
 
             if (glide && freq == voice.Frequency)
@@ -776,7 +908,8 @@ namespace YARG.Audio.BASS
 
         private double VoiceVolume(Voice voice)
         {
-            return _volume() * voice.Gain * Math.Pow(10, -voice.DecayDb / 20);
+            double level = voice.IsSynth ? 1 : _volume();
+            return level * voice.Gain * Math.Pow(10, -voice.DecayDb / 20);
         }
 
         private void SetVoiceVolume(Voice voice, double volume)
@@ -828,6 +961,12 @@ namespace YARG.Audio.BASS
             return cents * DRIFT_DEPTH_CENTS / DRIFT_RATES_HZ.Length;
         }
 
+        private static double HumanCents(Voice voice)
+        {
+            double held = (Stopwatch.GetTimestamp() - voice.StartTimestamp) / (double) Stopwatch.Frequency;
+            return voice.TuningCents + voice.AttackCents * Math.Exp(-held / ATTACK_SETTLE_SECONDS);
+        }
+
         private static double VibratoCents(Voice voice)
         {
             double held = (Stopwatch.GetTimestamp() - voice.StartTimestamp) / (double) Stopwatch.Frequency;
@@ -843,7 +982,7 @@ namespace YARG.Audio.BASS
             double cycles = voice.VibratoRateHz * (vibrating + wander);
             double depth = VIBRATO_DEPTH_CENTS * Math.Min(1, vibrating / VIBRATO_RAMP_SECONDS)
                 * (1 + VIBRATO_DEPTH_SPREAD * CycleRandom(voice.VibratoSeed, (int) cycles));
-            return depth * 0.5 * Math.Sin(2 * Math.PI * cycles);
+            return depth * 0.5 * (1 - Math.Cos(2 * Math.PI * cycles));
         }
 
         private static double CycleRandom(int seed, int cycle)

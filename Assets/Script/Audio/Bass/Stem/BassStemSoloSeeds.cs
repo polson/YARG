@@ -38,6 +38,7 @@ namespace YARG.Audio.BASS
         public          float[]                                                  Region = Array.Empty<float>();
         public          long                                                     RegionStartFrame;
         public          bool                                                     CanStretch;
+        public          double                                                   SynthGain;
 
         private const double PHRASE_RESET_SECONDS = 0.6;
 

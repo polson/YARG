@@ -38,6 +38,9 @@ namespace YARG.Audio.BASS.Native
         private static OverdriveDspAttachDelegate? _overdriveDspAttach;
         private static OverdriveDspSetDelegate? _overdriveDspSet;
         private static OverdriveDspDestroyDelegate? _overdriveDspDestroy;
+        private static LeadAmpDspAttachDelegate? _leadAmpDspAttach;
+        private static LeadAmpDspSetGainDelegate? _leadAmpDspSetGain;
+        private static LeadAmpDspDestroyDelegate? _leadAmpDspDestroy;
         private static FreeverbDspAttachDelegate? _freeverbDspAttach;
         private static FreeverbDspResetDelegate? _freeverbDspReset;
         private static FreeverbDspSetParamsDelegate? _freeverbDspSetParams;
@@ -176,6 +179,15 @@ namespace YARG.Audio.BASS.Native
 
         internal static void OverdriveDspDestroy(IntPtr dsp) =>
             EnsureBound(ref _overdriveDspDestroy, "yarg_overdrive_dsp_destroy")(dsp);
+
+        internal static int LeadAmpDspAttach(int channel, float gain, float[]? cabinet, int cabinetFrames, float cabinetRate, int priority, out BassLeadAmpDsp dsp, out int bassError) =>
+            EnsureBound(ref _leadAmpDspAttach, "yarg_lead_amp_dsp_attach")(channel, gain, cabinet, cabinetFrames, cabinetRate, priority, out dsp, out bassError);
+
+        internal static int LeadAmpDspSetGain(BassLeadAmpDsp dsp, float gain) =>
+            EnsureBound(ref _leadAmpDspSetGain, "yarg_lead_amp_dsp_set_gain")(dsp, gain);
+
+        internal static void LeadAmpDspDestroy(IntPtr dsp) =>
+            EnsureBound(ref _leadAmpDspDestroy, "yarg_lead_amp_dsp_destroy")(dsp);
 
         internal static int FreeverbDspAttach(int channel, float dryMix, float wetMix, float roomSize, float damp, float width, int priority, out BassFreeverbDsp dsp, out int bassError) =>
             EnsureBound(ref _freeverbDspAttach, "yarg_freeverb_dsp_attach")(channel, dryMix, wetMix, roomSize, damp, width, priority, out dsp, out bassError);
@@ -321,6 +333,9 @@ namespace YARG.Audio.BASS.Native
             _overdriveDspAttach = GetFunction<OverdriveDspAttachDelegate>(handle, "yarg_overdrive_dsp_attach");
             _overdriveDspSet = GetFunction<OverdriveDspSetDelegate>(handle, "yarg_overdrive_dsp_set");
             _overdriveDspDestroy = GetFunction<OverdriveDspDestroyDelegate>(handle, "yarg_overdrive_dsp_destroy");
+            _leadAmpDspAttach = GetFunction<LeadAmpDspAttachDelegate>(handle, "yarg_lead_amp_dsp_attach");
+            _leadAmpDspSetGain = GetFunction<LeadAmpDspSetGainDelegate>(handle, "yarg_lead_amp_dsp_set_gain");
+            _leadAmpDspDestroy = GetFunction<LeadAmpDspDestroyDelegate>(handle, "yarg_lead_amp_dsp_destroy");
             _freeverbDspAttach = GetFunction<FreeverbDspAttachDelegate>(handle, "yarg_freeverb_dsp_attach");
             _freeverbDspReset = GetFunction<FreeverbDspResetDelegate>(handle, "yarg_freeverb_dsp_reset");
             _freeverbDspSetParams = GetFunction<FreeverbDspSetParamsDelegate>(handle, "yarg_freeverb_dsp_set_params");
@@ -497,6 +512,15 @@ namespace YARG.Audio.BASS.Native
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate void OverdriveDspDestroyDelegate(IntPtr dsp);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int LeadAmpDspAttachDelegate(int channel, float gain, float[]? cabinet, int cabinetFrames, float cabinetRate, int priority, out BassLeadAmpDsp dsp, out int bassError);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int LeadAmpDspSetGainDelegate(BassLeadAmpDsp dsp, float gain);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void LeadAmpDspDestroyDelegate(IntPtr dsp);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int FreeverbDspAttachDelegate(int channel, float dryMix, float wetMix, float roomSize, float damp, float width, int priority, out BassFreeverbDsp dsp, out int bassError);
