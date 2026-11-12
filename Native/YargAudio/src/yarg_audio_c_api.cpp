@@ -8,6 +8,7 @@
 #include "dsp/NoiseGateDsp.h"
 #include "dsp/OverdriveDsp.h"
 #include "dsp/SineSynthDsp.h"
+#include "dsp/SoloSpace.h"
 #include "one_shot/NativeOneShotStream.h"
 #include "stretch/StretchRender.h"
 #include "stretch/StretchTempoStream.h"
@@ -18,11 +19,15 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <new>
+#include <vector>
 
 static_assert(sizeof(yarg_read_ahead_config) == 32);
 static_assert(sizeof(yarg_read_ahead_stats) == 104);
 static_assert(sizeof(yarg_read_ahead_position_snapshot) == 24);
 static_assert(sizeof(yarg_one_shot_config) == 24);
+static_assert(sizeof(yarg_lead_amp_tone) == 132);
+static_assert(sizeof(yarg_solo_space) == 20);
 static_assert(sizeof(yarg_freeverb_params) == 24);
 static_assert(sizeof(yarg_dattorro_reverb_params) == 24);
 static_assert(sizeof(yarg_noise_gate_params) == 24);
@@ -344,28 +349,49 @@ void YARG_AUDIO_CALL yarg_overdrive_dsp_destroy(yarg_overdrive_dsp* dsp) {
     (void) yarg::audio::overdriveDspDestroy(dsp);
 }
 
-int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_attach(uint32_t channel, float gain,
-    const float* cabinet, uint32_t cabinet_frames, float cabinet_rate,
+int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_attach(uint32_t channel, float gain, const float* cabinets,
+    const uint32_t* cabinet_frames, const float* cabinet_rates, uint32_t cabinet_count,
     int32_t priority, yarg_lead_amp_dsp** dsp, int32_t* bass_error) {
-    return yarg::audio::leadAmpDspAttach(coreBassBindings(), channel, gain, cabinet, cabinet_frames, cabinet_rate,
-        priority, dsp, bass_error);
+    if (dsp) *dsp = nullptr;
+    if (bass_error) *bass_error = 0;
+    try {
+        std::vector<yarg::audio::Cabinet> list;
+        if (!yarg::audio::cabinetList(cabinets, cabinet_frames, cabinet_rates, cabinet_count, list)) {
+            return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+        }
+        return yarg::audio::leadAmpDspAttach(coreBassBindings(), channel, gain, list.data(), list.size(), priority,
+            dsp, bass_error);
+    } catch (const std::bad_alloc&) {
+        return YARG_AUDIO_ERROR_INTERNAL;
+    }
 }
 
 int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_set_gain(yarg_lead_amp_dsp* dsp, float gain) {
     return yarg::audio::leadAmpDspSetGain(dsp, gain);
 }
 
-int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_set_tone(yarg_lead_amp_dsp* dsp, float drive, const float* bands_db,
-    uint32_t band_count, float wah_start_hz, float wah_end_hz) {
-    return yarg::audio::leadAmpDspSetTone(dsp, drive, bands_db, band_count, wah_start_hz, wah_end_hz);
+int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_set_tone(yarg_lead_amp_dsp* dsp, const yarg_lead_amp_tone* tone) {
+    return yarg::audio::leadAmpDspSetTone(dsp, tone);
 }
 
-int32_t YARG_AUDIO_CALL yarg_lead_amp_match(float sample_rate, const float* cabinet, uint32_t cabinet_frames,
-    float cabinet_rate, const float* stem, const float* di, const uint32_t* note_frames, uint32_t note_count,
-    float* drive, float* bands_db, uint32_t band_count, float* wah_start_hz, float* wah_end_hz,
-    float* level_gain) {
-    return yarg::audio::leadAmpMatch(sample_rate, cabinet, cabinet_frames, cabinet_rate, stem, di, note_frames,
-        note_count, drive, bands_db, band_count, wah_start_hz, wah_end_hz, level_gain);
+int32_t YARG_AUDIO_CALL yarg_lead_amp_match(float sample_rate, const float* cabinets, const uint32_t* cabinet_frames,
+    const float* cabinet_rates, uint32_t cabinet_count, const float* stem, const float* di,
+    const uint32_t* note_frames, uint32_t note_count, yarg_lead_amp_tone* tone) {
+    try {
+        std::vector<yarg::audio::Cabinet> list;
+        if (!yarg::audio::cabinetList(cabinets, cabinet_frames, cabinet_rates, cabinet_count, list)) {
+            return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+        }
+        return yarg::audio::leadAmpMatch(sample_rate, list.data(), list.size(), stem, di, note_frames, note_count,
+            tone);
+    } catch (const std::bad_alloc&) {
+        return YARG_AUDIO_ERROR_INTERNAL;
+    }
+}
+
+int32_t YARG_AUDIO_CALL yarg_solo_space_match(float sample_rate, const float* region, uint64_t frames,
+    const double* pick_seconds, uint32_t pick_count, yarg_solo_space* space) {
+    return yarg::audio::soloSpaceMatch(sample_rate, region, frames, pick_seconds, pick_count, space);
 }
 
 void YARG_AUDIO_CALL yarg_lead_amp_dsp_destroy(yarg_lead_amp_dsp* dsp) {

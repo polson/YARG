@@ -21,6 +21,7 @@ set(YARG_AUDIO_SOURCES
     src/dsp/NoiseGateDsp.cpp
     src/dsp/OverdriveDsp.cpp
     src/dsp/SineSynthDsp.cpp
+    src/dsp/SoloSpace.cpp
     src/one_shot/ScheduledSampleSource.cpp
     src/one_shot/NativeOneShotStream.cpp
     src/PlatformDynamicLibrary.cpp
@@ -102,6 +103,7 @@ if(YARG_AUDIO_BUILD_TESTS)
         tests/NoiseMorphTests.cpp
         tests/YargStretchTests.cpp
         tests/SineSynthDspTests.cpp
+        tests/SoloSpaceTests.cpp
         tests/RenderAheadMixerTests.cpp
         tests/ScheduledSampleSourceTests.cpp
         tests/NativeOneShotStreamTests.cpp
@@ -118,6 +120,7 @@ if(YARG_AUDIO_BUILD_TESTS)
         src/dsp/NoiseGateDsp.cpp
         src/dsp/OverdriveDsp.cpp
         src/dsp/SineSynthDsp.cpp
+        src/dsp/SoloSpace.cpp
         src/one_shot/ScheduledSampleSource.cpp
         src/one_shot/NativeOneShotStream.cpp
         src/PlatformDynamicLibrary.cpp

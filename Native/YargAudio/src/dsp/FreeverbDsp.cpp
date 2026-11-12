@@ -401,6 +401,17 @@ int freeverbDspAttach(const BassCoreBindings& bass, std::uint32_t channel,
     return YARG_AUDIO_OK;
 }
 
+bool freeverbRender(std::uint32_t sampleRate, std::uint32_t channels, float dryMix, float wetMix,
+    float roomSize, float damp, float width, float* samples, std::size_t frames) noexcept {
+    static const BassCoreBindings unbound;
+    if (!samples || channels == 0) return false;
+    auto* state = allocateState(unbound, 0, channels, sampleRate, dryMix, wetMix, roomSize, damp, width);
+    if (!state) return false;
+    process(state, samples, frames * channels);
+    freeState(state);
+    return true;
+}
+
 int freeverbDspRequestReset(yarg_freeverb_dsp* dsp) noexcept {
     if (!dsp) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
     dsp->resetRequested.store(1, std::memory_order_relaxed);

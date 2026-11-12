@@ -57,8 +57,6 @@ namespace YARG.Audio.BASS
         private const double STRUM_MIN_SPREAD_SECONDS            = 0.008;
         private const double STRUM_MAX_SPREAD_SECONDS            = 0.015;
         private const int    SYNTH_AMP_PRIORITY                  = 1;
-        private const float  SYNTH_REVERB_WET                    = 0.47f;
-        private const float  SYNTH_REVERB_ROOM                   = 0.75f;
         private const float  SYNTH_REVERB_DAMP                   = 0.5f;
         private const float  MAX_SYNTH_GAIN                      = 16f;
 
@@ -151,8 +149,7 @@ namespace YARG.Audio.BASS
             _volume = volume;
             _seeds = new BassStemSeedLibrary(format);
 
-            float[]? cabinet = null;
-            int cabinetRate = 0;
+            BassCabinetSet? cabinets = null;
             if (manager is BassAudioManager bassManager)
             {
                 _cleanBus = bassManager.CreateMixerBus(format.Frequency, format.Channels);
@@ -170,14 +167,14 @@ namespace YARG.Audio.BASS
                     if (BassSynthGuitar.Enabled)
                     {
                         _synthBus = bassManager.CreateMixerBus(format.Frequency, format.Channels);
-                        cabinet = BassGuitarSamples.LoadCabinet(out cabinetRate);
+                        cabinets = BassGuitarSamples.LoadCabinets();
                         _synthAmp = _synthBus != null
-                            ? BassLeadAmpDsp.Attach(_synthBus.SourceHandle, 0, cabinet, cabinetRate, SYNTH_AMP_PRIORITY)
+                            ? BassLeadAmpDsp.Attach(_synthBus.SourceHandle, 0, cabinets, SYNTH_AMP_PRIORITY)
                             : null;
                         if (_synthBus != null && _synthAmp != null)
                         {
-                            _synthReverb = BassFreeverbDsp.Create(_synthBus.SourceHandle, 1, SYNTH_REVERB_WET,
-                                SYNTH_REVERB_ROOM, SYNTH_REVERB_DAMP);
+                            _synthReverb = BassFreeverbDsp.Create(_synthBus.SourceHandle, 1,
+                                BassLeadAmpTone.DEFAULT_REVERB_WET, BassLeadAmpTone.DEFAULT_REVERB_ROOM, SYNTH_REVERB_DAMP);
                         }
                         else
                         {
@@ -196,7 +193,7 @@ namespace YARG.Audio.BASS
 
             if (_synthBus != null)
             {
-                _seeds.UseSynth(() => BassGuitarSamples.Load(format), cabinet, cabinetRate);
+                _seeds.UseSynth(() => BassGuitarSamples.Load(format), cabinets);
             }
         }
 
@@ -586,6 +583,7 @@ namespace YARG.Audio.BASS
                 if (tone != _synthTone && _synthAmp?.SetTone(tone) == true)
                 {
                     _synthTone = tone;
+                    _synthReverb?.SetParams(1, tone.ReverbWet, tone.ReverbRoom, SYNTH_REVERB_DAMP, 1);
                 }
 
                 _synthAmp?.SetGain((float) Math.Clamp(_volume() * _seeds.SynthGain, 0, MAX_SYNTH_GAIN));

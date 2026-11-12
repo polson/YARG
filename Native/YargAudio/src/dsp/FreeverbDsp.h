@@ -4,6 +4,7 @@
 #include "yarg_audio.h"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 
 struct yarg_freeverb_dsp {
@@ -41,6 +42,10 @@ int freeverbDspAttach(const BassCoreBindings& bass, std::uint32_t channel,
     int priority, yarg_freeverb_dsp** dsp, int* bassError) noexcept;
 int freeverbDspRequestReset(yarg_freeverb_dsp* dsp) noexcept;
 int freeverbDspSetParams(yarg_freeverb_dsp* dsp, const yarg_freeverb_params* params) noexcept;
+
+// Runs Freeverb over interleaved samples in place, starting from silence.
+bool freeverbRender(std::uint32_t sampleRate, std::uint32_t channels, float dryMix, float wetMix,
+    float roomSize, float damp, float width, float* samples, std::size_t frames) noexcept;
 
 // Returns false when state must remain allocated because detach was not safe.
 bool freeverbDspDestroy(yarg_freeverb_dsp* dsp) noexcept;

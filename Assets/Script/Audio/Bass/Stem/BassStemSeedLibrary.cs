@@ -55,6 +55,7 @@ namespace YARG.Audio.BASS
         private const double TONE_MIN_NOTE_SECONDS          = 0.2;
         private const double TONE_MAX_NOTE_SECONDS          = 0.35;
         private const int    MAX_TONE_NOTES                 = 8;
+        private const double MAX_SPACE_SECONDS              = 40;
 
 
 
@@ -70,8 +71,7 @@ namespace YARG.Audio.BASS
         private          double                  _requestedSoloTime;
         private          Func<BassSynthGuitar?>? _loadSynth;
         private          BassSynthGuitar?        _synth;
-        private          float[]?                _cabinet;
-        private          int                     _cabinetRate;
+        private          BassCabinetSet?         _cabinets;
 
         public BassStemSeedLibrary(BassStemFormat format)
         {
@@ -130,13 +130,12 @@ namespace YARG.Audio.BASS
             }
         }
 
-        public void UseSynth(Func<BassSynthGuitar?> load, float[]? cabinet, int cabinetRate)
+        public void UseSynth(Func<BassSynthGuitar?> load, BassCabinetSet? cabinets)
         {
             lock (_lock)
             {
                 _loadSynth = load;
-                _cabinet = cabinet;
-                _cabinetRate = cabinetRate;
+                _cabinets = cabinets;
             }
         }
 
@@ -327,9 +326,13 @@ namespace YARG.Audio.BASS
                     AddNoteSeed(job, note, jobs);
                 }
 
-                if (stretchAvailable && _loadSynth == null)
+                if (stretchAvailable)
                 {
-                    AddRegionJob(job, jobs);
+                    AddRegionJob(job, jobs, int.MaxValue);
+                }
+                else if (_loadSynth != null)
+                {
+                    AddRegionJob(job, jobs, _format.FramesFor(MAX_SPACE_SECONDS));
                 }
 
                 foreach (var keyed in job.ByKey.Values)
@@ -377,7 +380,8 @@ namespace YARG.Audio.BASS
             jobs.Add((startFrame, frameCount, clip.Samples));
         }
 
-        private void AddRegionJob(BassStemSoloSeeds job, List<(long StartFrame, int FrameCount, float[] Samples)> jobs)
+        private void AddRegionJob(BassStemSoloSeeds job, List<(long StartFrame, int FrameCount, float[] Samples)> jobs,
+            int maxFrames)
         {
             long firstFrame = long.MaxValue;
             long endFrame = 0;
@@ -396,7 +400,7 @@ namespace YARG.Audio.BASS
             }
 
             job.RegionStartFrame = Math.Max(0, firstFrame - _format.FramesFor(STRETCH_REGION_PREROLL_SECONDS));
-            int frameCount = (int) (endFrame - job.RegionStartFrame);
+            int frameCount = (int) Math.Min(endFrame - job.RegionStartFrame, maxFrames);
             job.Region = new float[frameCount * _format.Channels];
             jobs.Add((job.RegionStartFrame, frameCount, job.Region));
         }
@@ -1075,7 +1079,8 @@ namespace YARG.Audio.BASS
             var heard = Array.FindAll(levels, level => level > 0);
             Array.Sort(heard);
             double soloLevel = heard.Length > 0 ? heard[heard.Length / 2] : DEFAULT_SOLO_LEVEL;
-            job.Tone = MatchTone(clips, pitches, onsetOffsets);
+            job.Tone = MatchSpace(job, MatchTone(clips, pitches, onsetOffsets));
+            LogTone(job.Tone);
             job.SynthGain = soloLevel / SYNTH_NOTE_LEVEL * job.Tone.LevelGain;
             SetDecay(job, BassNoteDecay.Typical(decays));
             YargLogger.LogFormatInfo("[SoloSynth] {0} measured pitches, {1} chord anchors, tuning {2} cents, solo level {3}",
@@ -1130,27 +1135,68 @@ namespace YARG.Audio.BASS
                 noteFrames.Add((uint) frames);
             }
 
-            float[]? cabinet;
-            int cabinetRate;
+            BassCabinetSet? cabinets;
             lock (_lock)
             {
-                cabinet = _cabinet;
-                cabinetRate = _cabinetRate;
+                cabinets = _cabinets;
             }
 
-            var tone = BassLeadAmpDsp.Match(_format.Frequency, cabinet, cabinetRate, stem.ToArray(), di.ToArray(),
+            var tone = BassLeadAmpDsp.Match(_format.Frequency, cabinets, stem.ToArray(), di.ToArray(),
                 noteFrames.ToArray());
-            if (tone == null)
+            YargLogger.LogFormatInfo("[SoloTone] matched on {0} notes", picked.Count);
+            return tone ?? BassLeadAmpTone.Default;
+        }
+
+        private BassLeadAmpTone MatchSpace(BassStemSoloSeeds job, BassLeadAmpTone tone)
+        {
+            if (!job.HasRegion)
             {
-                return BassLeadAmpTone.Default;
+                return tone;
             }
 
-            YargLogger.LogFormatInfo("[SoloTone] {0} notes, drive {1}, bands {2} dB, wah {3}, level gain {4}",
-                picked.Count, Math.Round(tone.Drive, 2),
+            int channels = _format.Channels;
+            var region = new float[job.Region.Length / channels];
+            for (int frame = 0; frame < region.Length; frame++)
+            {
+                float sum = 0;
+                for (int channel = 0; channel < channels; channel++)
+                {
+                    sum += job.Region[frame * channels + channel];
+                }
+
+                region[frame] = sum / channels;
+            }
+
+            var picks = new List<double>();
+            foreach (var note in job.Notes)
+            {
+                long frame = (long) Math.Round(note.PlaybackSeconds * _format.Frequency) - job.RegionStartFrame;
+                if (frame >= 0 && frame < region.Length)
+                {
+                    picks.Add(frame / (double) _format.Frequency);
+                }
+            }
+
+            job.Region = Array.Empty<float>();
+            return BassLeadAmpDsp.MatchSpace(tone, _format.Frequency, region, picks.ToArray());
+        }
+
+        private void LogTone(BassLeadAmpTone tone)
+        {
+            BassCabinetSet? cabinets;
+            lock (_lock)
+            {
+                cabinets = _cabinets;
+            }
+
+            string cabinet = cabinets != null && tone.Cabinet < cabinets.Count ? cabinets.Names[tone.Cabinet] : "none";
+            YargLogger.LogFormatInfo(
+                "[SoloTone] cabinet {0}, drive {1}, bands {2} dB, wah {3}, echo {4}, reverb wet {5} room {6}, level gain {7}",
+                cabinet, Math.Round(tone.Drive, 2),
                 string.Join(" ", Array.ConvertAll(tone.BandsDb, band => Math.Round(band, 1))),
                 tone.HasWah ? $"{Math.Round(tone.WahStartHz)} to {Math.Round(tone.WahEndHz)} Hz" : "off",
-                Math.Round(tone.LevelGain, 2));
-            return tone;
+                tone.EchoLevel > 0 ? $"{Math.Round(tone.EchoSeconds, 2)} s at {Math.Round(tone.EchoLevel, 2)}" : "off",
+                Math.Round(tone.ReverbWet, 2), Math.Round(tone.ReverbRoom, 2), Math.Round(tone.LevelGain, 2));
         }
 
         private void AddChordAnchors(List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,

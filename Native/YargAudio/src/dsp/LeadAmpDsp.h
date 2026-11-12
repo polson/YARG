@@ -11,6 +11,12 @@
 
 namespace yarg::audio {
 
+struct Cabinet {
+    const float* samples = nullptr;
+    std::size_t frames = 0;
+    float rate = 0.0f;
+};
+
 class LeadAmp final {
 public:
     static constexpr int MAX_CHANNELS = 8;
@@ -21,20 +27,26 @@ public:
     static constexpr float MAX_DRIVE = 8.0f;
     static constexpr float MAX_TONE_DB = 12.0f;
     static constexpr float TONE_LOWEST_HZ = 62.5f;
+    static constexpr int TONE_BANDS_PER_OCTAVE = 3;
     static constexpr float WAH_MIN_HZ = 300.0f;
     static constexpr float WAH_MAX_HZ = 3000.0f;
+    static constexpr float MIN_ECHO_SECONDS = 0.05f;
+    static constexpr float MAX_ECHO_SECONDS = 0.9f;
+    static constexpr int MAX_CABINETS = 8;
 
-    LeadAmp(int channels, float sampleRate, const float* cabinet = nullptr,
-        std::size_t cabinetFrames = 0, float cabinetRate = 0.0f);
+    explicit LeadAmp(int channels, float sampleRate, const Cabinet* cabinets = nullptr, std::size_t cabinetCount = 0);
+    LeadAmp(int channels, float sampleRate, const float* cabinet, std::size_t cabinetFrames, float cabinetRate);
 
     void process(float* samples, std::size_t frames, float gain) noexcept;
-    void setTone(float drive, const float* bandsDb, float wahStartHz = 0.0f, float wahEndHz = 0.0f) noexcept;
+    void setTone(const yarg_lead_amp_tone& tone) noexcept;
+    std::size_t cabinetCount() const noexcept;
 
     struct Biquad {
         float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
     };
 
-    static bool validTone(float drive, const float* bandsDb, float wahStartHz = 0.0f, float wahEndHz = 0.0f) noexcept;
+    static yarg_lead_amp_tone defaultTone() noexcept;
+    static bool validTone(const yarg_lead_amp_tone& tone) noexcept;
     static float toneHz(int band) noexcept;
     static Biquad toneBand(float sampleRate, int band, float gainDb) noexcept;
     static Biquad peak(float sampleRate, float hz, float gainDb, float q) noexcept;
@@ -84,7 +96,7 @@ private:
     float noise(const float* frame) noexcept;
     void sweepWah(const float* frame) noexcept;
     float wah(ChannelState& state, float input) const noexcept;
-    void loadCabinet(const float* cabinet, std::size_t frames, float cabinetRate, float sampleRate);
+    static std::vector<float> loadCabinet(const Cabinet& cabinet, float sampleRate);
     static float shape(Shaper& shaper, float input, float bias, float offset) noexcept;
 
     int channels_;
@@ -101,7 +113,10 @@ private:
     float targetDrive_ = 1.0f;
     int echoIndex_ = 0;
     int echoLength_ = 1;
-    std::vector<float> cabinet_;
+    float echoLevel_;
+    std::vector<std::vector<float>> cabinets_;
+    std::size_t cabinetLength_ = 0;
+    std::size_t cabinet_ = 0;
     int cabinetIndex_ = 0;
     std::vector<float> hum_;
     std::size_t humIndex_ = 0;
@@ -126,20 +141,20 @@ private:
 
 }
 
+static_assert(sizeof(yarg_lead_amp_tone) % sizeof(std::uint32_t) == 0);
+
 struct yarg_lead_amp_dsp {
+    static constexpr std::size_t TONE_WORDS = sizeof(yarg_lead_amp_tone) / sizeof(std::uint32_t);
+
     yarg_lead_amp_dsp(const yarg::audio::BassCoreBindings& bindings, std::uint32_t channelHandle,
-        int channels, float sampleRate, float gain, const float* cabinet, std::size_t cabinetFrames,
-        float cabinetRate);
+        int channels, float sampleRate, float gain, const yarg::audio::Cabinet* cabinets, std::size_t cabinetCount);
 
     const yarg::audio::BassCoreBindings& bass;
     std::uint32_t channel;
     std::uint32_t dsp = 0;
     int channelCount;
     std::atomic<std::uint32_t> gainBits;
-    std::atomic<std::uint32_t> driveBits;
-    std::array<std::atomic<std::uint32_t>, yarg::audio::LeadAmp::TONE_BANDS> toneBits{};
-    std::atomic<std::uint32_t> wahStartBits{0};
-    std::atomic<std::uint32_t> wahEndBits{0};
+    std::array<std::atomic<std::uint32_t>, TONE_WORDS> toneWords{};
     std::atomic<std::uint32_t> toneVersion{0};
     std::uint32_t appliedToneVersion = 0;
     yarg::audio::LeadAmp amp;
@@ -150,17 +165,18 @@ namespace yarg::audio {
 void YARG_BASS_CALLBACK leadAmpDspProc(std::uint32_t dsp, std::uint32_t channel,
     void* buffer, std::uint32_t length, void* user) noexcept;
 
+bool cabinetList(const float* samples, const std::uint32_t* frames, const float* rates, std::size_t count,
+    std::vector<Cabinet>& cabinets);
+
 int leadAmpDspAttach(const BassCoreBindings& bass, std::uint32_t channel, float gain,
-    const float* cabinet, std::size_t cabinetFrames, float cabinetRate,
+    const Cabinet* cabinets, std::size_t cabinetCount,
     int priority, yarg_lead_amp_dsp** dsp, int* bassError) noexcept;
 int leadAmpDspSetGain(yarg_lead_amp_dsp* dsp, float gain) noexcept;
-int leadAmpDspSetTone(yarg_lead_amp_dsp* dsp, float drive, const float* bandsDb, std::size_t bandCount,
-    float wahStartHz, float wahEndHz) noexcept;
+int leadAmpDspSetTone(yarg_lead_amp_dsp* dsp, const yarg_lead_amp_tone* tone) noexcept;
 
-int leadAmpMatch(float sampleRate, const float* cabinet, std::size_t cabinetFrames, float cabinetRate,
+int leadAmpMatch(float sampleRate, const Cabinet* cabinets, std::size_t cabinetCount,
     const float* stem, const float* di, const std::uint32_t* noteFrames, std::size_t noteCount,
-    float* drive, float* bandsDb, std::size_t bandCount, float* wahStartHz, float* wahEndHz,
-    float* levelGain) noexcept;
+    yarg_lead_amp_tone* tone) noexcept;
 
 bool leadAmpDspDestroy(yarg_lead_amp_dsp* dsp) noexcept;
 

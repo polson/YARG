@@ -24,6 +24,7 @@ void runLeadAmpDspTests();
 void runNoiseMorphTests();
 void runYargStretchTests();
 void runSineSynthDspTests();
+void runSoloSpaceTests();
 void runScheduledSampleSourceTests();
 void runNativeOneShotStreamTests();
 void runStretchTempoStreamTests();

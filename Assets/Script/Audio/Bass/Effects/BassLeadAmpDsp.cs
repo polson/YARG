@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Runtime.InteropServices;
 using YARG.Audio.BASS.Native;
 using YARG.Core.Logging;
 
@@ -13,8 +14,7 @@ namespace YARG.Audio.BASS.Effects
         {
         }
 
-        internal static BassLeadAmpDsp? Attach(int channelHandle, float gain, float[]? cabinet, int cabinetRate,
-            int priority = 0)
+        internal static BassLeadAmpDsp? Attach(int channelHandle, float gain, BassCabinetSet? cabinets, int priority = 0)
         {
             if (channelHandle == 0 || !YargAudioNative.IsFinite(gain))
             {
@@ -25,11 +25,11 @@ namespace YARG.Audio.BASS.Effects
 
             return YargAudioNative.Attach(EFFECT_NAME, channelHandle,
                 (out BassLeadAmpDsp handle, out int bassError) =>
-                    YargAudioBindings.LeadAmpDspAttach(channelHandle, gain, cabinet, cabinet?.Length ?? 0,
-                        cabinetRate, priority, out handle, out bassError));
+                    YargAudioBindings.LeadAmpDspAttach(channelHandle, gain, cabinets?.Samples, cabinets?.Frames,
+                        cabinets?.Rates, cabinets?.Count ?? 0, priority, out handle, out bassError));
         }
 
-        internal static BassLeadAmpTone? Match(int sampleRate, float[]? cabinet, int cabinetRate, float[] stem, float[] di,
+        internal static BassLeadAmpTone? Match(int sampleRate, BassCabinetSet? cabinets, float[] stem, float[] di,
             uint[] noteFrames)
         {
             try
@@ -39,10 +39,9 @@ namespace YARG.Audio.BASS.Effects
                     return null;
                 }
 
-                var bands = new float[BassLeadAmpTone.BAND_COUNT];
-                int result = YargAudioBindings.LeadAmpMatch(sampleRate, cabinet, cabinet?.Length ?? 0, cabinetRate, stem,
-                    di, noteFrames, noteFrames.Length, out float drive, bands, bands.Length, out float wahStartHz,
-                    out float wahEndHz, out float levelGain);
+                var tone = BassLeadAmpTone.Default.ToNative();
+                int result = YargAudioBindings.LeadAmpMatch(sampleRate, cabinets?.Samples, cabinets?.Frames,
+                    cabinets?.Rates, cabinets?.Count ?? 0, stem, di, noteFrames, noteFrames.Length, ref tone);
                 if (result != 0)
                 {
                     YargLogger.LogFormatInfo("Lead amp tone match skipped for {0} notes: result {1}",
@@ -50,7 +49,7 @@ namespace YARG.Audio.BASS.Effects
                     return null;
                 }
 
-                return new BassLeadAmpTone(drive, bands, wahStartHz, wahEndHz, levelGain);
+                return new BassLeadAmpTone(tone, BassLeadAmpTone.DEFAULT_REVERB_WET, BassLeadAmpTone.DEFAULT_REVERB_ROOM);
             }
             catch (Exception exception) when (exception is DllNotFoundException or
                 EntryPointNotFoundException or BadImageFormatException)
@@ -60,11 +59,47 @@ namespace YARG.Audio.BASS.Effects
             }
         }
 
+        internal static BassLeadAmpTone MatchSpace(BassLeadAmpTone tone, int sampleRate, float[] region,
+            double[] pickSeconds)
+        {
+            try
+            {
+                if (!YargAudioNative.CheckAbi())
+                {
+                    return tone;
+                }
+
+                var space = new SoloSpaceParams
+                {
+                    Size = (uint) Marshal.SizeOf<SoloSpaceParams>(),
+                    EchoSeconds = tone.EchoSeconds,
+                    EchoLevel = tone.EchoLevel,
+                    ReverbWet = tone.ReverbWet,
+                    ReverbRoom = tone.ReverbRoom,
+                };
+                int result = YargAudioBindings.SoloSpaceMatch(sampleRate, region, (ulong) region.Length, pickSeconds,
+                    pickSeconds.Length, ref space);
+                if (result != 0)
+                {
+                    YargLogger.LogFormatInfo("Solo space match skipped for {0} picks: result {1}",
+                        pickSeconds.Length, result);
+                    return tone;
+                }
+
+                return tone.WithSpace(space);
+            }
+            catch (Exception exception) when (exception is DllNotFoundException or
+                EntryPointNotFoundException or BadImageFormatException)
+            {
+                YargLogger.LogException(exception, "Failed to load the solo space match");
+                return tone;
+            }
+        }
+
         internal bool SetTone(BassLeadAmpTone tone)
         {
-            return YargAudioNative.TryInvoke(this,
-                handle => YargAudioBindings.LeadAmpDspSetTone(handle, tone.Drive, tone.BandsDb, tone.BandsDb.Length,
-                    tone.WahStartHz, tone.WahEndHz));
+            var native = tone.ToNative();
+            return YargAudioNative.TryInvoke(this, handle => YargAudioBindings.LeadAmpDspSetTone(handle, ref native));
         }
 
         internal bool SetGain(float gain)
@@ -80,29 +115,99 @@ namespace YARG.Audio.BASS.Effects
 
         protected override void Destroy(IntPtr handle) =>
             YargAudioBindings.LeadAmpDspDestroy(handle);
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct LeadAmpToneParams
+        {
+            public uint  Size;
+            public uint  Cabinet;
+            public float Drive;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = BassLeadAmpTone.BAND_COUNT)]
+            public float[] BandsDb;
+            public float WahStartHz;
+            public float WahEndHz;
+            public float EchoSeconds;
+            public float EchoLevel;
+            public float LevelGain;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct SoloSpaceParams
+        {
+            public uint  Size;
+            public float EchoSeconds;
+            public float EchoLevel;
+            public float ReverbWet;
+            public float ReverbRoom;
+        }
     }
 
     internal sealed class BassLeadAmpTone
     {
-        internal const int BAND_COUNT = 9;
+        internal const int   BAND_COUNT           = 25;
+        internal const float DEFAULT_ECHO_SECONDS = 0.37f;
+        internal const float DEFAULT_ECHO_LEVEL   = 0.35f;
+        internal const float DEFAULT_REVERB_WET   = 0.47f;
+        internal const float DEFAULT_REVERB_ROOM  = 0.75f;
 
-        internal static readonly BassLeadAmpTone Default = new(1, new float[BAND_COUNT], 0, 0, 1);
+        internal static readonly BassLeadAmpTone Default = new(new BassLeadAmpDsp.LeadAmpToneParams
+        {
+            Drive = 1,
+            BandsDb = new float[BAND_COUNT],
+            EchoSeconds = DEFAULT_ECHO_SECONDS,
+            EchoLevel = DEFAULT_ECHO_LEVEL,
+            LevelGain = 1,
+        }, DEFAULT_REVERB_WET, DEFAULT_REVERB_ROOM);
 
+        public readonly int     Cabinet;
         public readonly float   Drive;
         public readonly float[] BandsDb;
         public readonly float   WahStartHz;
         public readonly float   WahEndHz;
+        public readonly float   EchoSeconds;
+        public readonly float   EchoLevel;
         public readonly float   LevelGain;
+        public readonly float   ReverbWet;
+        public readonly float   ReverbRoom;
 
         public bool HasWah => WahStartHz > 0;
 
-        internal BassLeadAmpTone(float drive, float[] bandsDb, float wahStartHz, float wahEndHz, float levelGain)
+        internal BassLeadAmpTone(BassLeadAmpDsp.LeadAmpToneParams tone, float reverbWet, float reverbRoom)
         {
-            Drive = drive;
-            BandsDb = bandsDb;
-            WahStartHz = wahStartHz;
-            WahEndHz = wahEndHz;
-            LevelGain = levelGain;
+            Cabinet = (int) tone.Cabinet;
+            Drive = tone.Drive;
+            BandsDb = tone.BandsDb;
+            WahStartHz = tone.WahStartHz;
+            WahEndHz = tone.WahEndHz;
+            EchoSeconds = tone.EchoSeconds;
+            EchoLevel = tone.EchoLevel;
+            LevelGain = tone.LevelGain;
+            ReverbWet = reverbWet;
+            ReverbRoom = reverbRoom;
+        }
+
+        internal BassLeadAmpDsp.LeadAmpToneParams ToNative()
+        {
+            return new BassLeadAmpDsp.LeadAmpToneParams
+            {
+                Size = (uint) Marshal.SizeOf<BassLeadAmpDsp.LeadAmpToneParams>(),
+                Cabinet = (uint) Cabinet,
+                Drive = Drive,
+                BandsDb = (float[]) BandsDb.Clone(),
+                WahStartHz = WahStartHz,
+                WahEndHz = WahEndHz,
+                EchoSeconds = EchoSeconds,
+                EchoLevel = EchoLevel,
+                LevelGain = LevelGain,
+            };
+        }
+
+        internal BassLeadAmpTone WithSpace(BassLeadAmpDsp.SoloSpaceParams space)
+        {
+            var native = ToNative();
+            native.EchoSeconds = space.EchoSeconds;
+            native.EchoLevel = space.EchoLevel;
+            return new BassLeadAmpTone(native, space.ReverbWet, space.ReverbRoom);
         }
     }
 }

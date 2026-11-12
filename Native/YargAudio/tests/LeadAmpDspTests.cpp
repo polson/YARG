@@ -5,10 +5,12 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <vector>
 
 using yarg::audio::LeadAmp;
 using Tone = std::array<float, LeadAmp::TONE_BANDS>;
+using yarg::audio::Cabinet;
 
 namespace {
 
@@ -45,10 +47,19 @@ double tonePower(const std::vector<float>& samples, int firstFrame, int frames, 
     return real * real + imaginary * imaginary;
 }
 
+yarg_lead_amp_tone toneOf(float drive, const Tone& bands, float wahStartHz = 0.0f, float wahEndHz = 0.0f) {
+    auto tone = LeadAmp::defaultTone();
+    tone.drive = drive;
+    std::copy(bands.begin(), bands.end(), tone.bands_db);
+    tone.wah_start_hz = wahStartHz;
+    tone.wah_end_hz = wahEndHz;
+    return tone;
+}
+
 std::vector<float> run(std::vector<float> samples, float gain, const std::vector<float>& cabinet = {},
     float drive = 1.0f, const Tone& tone = {}, float wahStartHz = 0.0f, float wahEndHz = 0.0f) {
     LeadAmp amp(CHANNELS, SAMPLE_RATE, cabinet.data(), cabinet.size(), SAMPLE_RATE);
-    amp.setTone(drive, tone.data(), wahStartHz, wahEndHz);
+    amp.setTone(toneOf(drive, tone, wahStartHz, wahEndHz));
     const std::size_t frames = samples.size() / CHANNELS;
     const std::size_t block = 512;
     for (std::size_t first = 0; first < frames; first += block) {
@@ -197,9 +208,12 @@ std::vector<float> pluck(double frequency, int frames) {
 }
 
 std::vector<float> monoRender(const std::vector<float>& input, float drive, const Tone& tone,
-    float wahStartHz = 0.0f, float wahEndHz = 0.0f) {
-    LeadAmp amp(1, SAMPLE_RATE);
-    amp.setTone(drive, tone.data(), wahStartHz, wahEndHz);
+    float wahStartHz = 0.0f, float wahEndHz = 0.0f, const std::vector<float>* cabinet = nullptr) {
+    const Cabinet source{cabinet ? cabinet->data() : nullptr, cabinet ? cabinet->size() : 0, SAMPLE_RATE};
+    LeadAmp amp(1, SAMPLE_RATE, &source, cabinet ? 1 : 0);
+    auto setting = toneOf(drive, tone, wahStartHz, wahEndHz);
+    setting.echo_level = 0.0f;
+    amp.setTone(setting);
     auto samples = input;
     for (std::size_t first = 0; first < samples.size(); first += 512) {
         amp.process(samples.data() + first, std::min<std::size_t>(512, samples.size() - first), 1.0f);
@@ -227,15 +241,17 @@ struct Matched {
     float wahStartHz;
     float wahEndHz;
     float levelGain;
+    std::uint32_t cabinet;
 };
 
 Matched match(float drive, const Tone& tone, int noteCount, float wahStartHz = 0.0f, float wahEndHz = 0.0f,
-    double rumble = 0.0) {
+    double rumble = 0.0, const std::vector<std::vector<float>>& cabinets = {}, int stemCabinet = 0) {
     std::vector<float> stem, di;
     std::vector<std::uint32_t> frames;
     for (int note = 0; note < noteCount; ++note) {
         const auto played = pluck(196 * std::pow(2.0, note / 4.0), SAMPLE_RATE * 2 / 5);
-        auto heard = monoRender(played, drive, tone, wahStartHz, wahEndHz);
+        auto heard = monoRender(played, drive, tone, wahStartHz, wahEndHz,
+            cabinets.empty() ? nullptr : &cabinets[stemCabinet]);
         for (std::size_t frame = 0; frame < heard.size(); ++frame) {
             heard[frame] += static_cast<float>(rumble * std::sin(2 * PI * 55 * frame / SAMPLE_RATE));
         }
@@ -243,10 +259,20 @@ Matched match(float drive, const Tone& tone, int noteCount, float wahStartHz = 0
         stem.insert(stem.end(), heard.begin(), heard.end());
         frames.push_back(static_cast<std::uint32_t>(played.size()));
     }
+    std::vector<Cabinet> sources;
+    for (const auto& cabinet : cabinets) {
+        sources.push_back({cabinet.data(), cabinet.size(), SAMPLE_RATE});
+    }
+    auto fitted = LeadAmp::defaultTone();
     Matched matched{};
-    matched.result = yarg::audio::leadAmpMatch(SAMPLE_RATE, nullptr, 0, 0, stem.data(), di.data(), frames.data(),
-        frames.size(), &matched.drive, matched.tone.data(), matched.tone.size(), &matched.wahStartHz,
-        &matched.wahEndHz, &matched.levelGain);
+    matched.result = yarg::audio::leadAmpMatch(SAMPLE_RATE, sources.data(), sources.size(), stem.data(), di.data(),
+        frames.data(), frames.size(), &fitted);
+    matched.drive = fitted.drive;
+    std::copy(std::begin(fitted.bands_db), std::end(fitted.bands_db), matched.tone.begin());
+    matched.wahStartHz = fitted.wah_start_hz;
+    matched.wahEndHz = fitted.wah_end_hz;
+    matched.levelGain = fitted.level_gain;
+    matched.cabinet = fitted.cabinet;
     return matched;
 }
 
@@ -263,9 +289,9 @@ void driveSquashesTheAttack() {
     REQUIRE(punch(monoRender(input, 4.0f, {})) < 0.8 * punch(monoRender(input, 0.25f, {})));
 }
 
-void toneBandBoostsItsOctave() {
+void toneBandBoostsItsFrequency() {
     Tone tone{};
-    tone[4] = 12.0f;
+    tone[12] = 12.0f;
     const auto input = sine(500, 0.1, SAMPLE_RATE / 2);
     const int first = SAMPLE_RATE / 4;
     const int frames = 8192;
@@ -277,15 +303,84 @@ void toneBandBoostsItsOctave() {
 }
 
 void invalidToneIsRejected() {
-    Tone tone{};
-    REQUIRE(LeadAmp::validTone(1.0f, tone.data()));
-    REQUIRE(!LeadAmp::validTone(LeadAmp::MAX_DRIVE * 2, tone.data()));
-    REQUIRE(LeadAmp::validTone(1.0f, tone.data(), 500.0f, 1500.0f));
-    REQUIRE(!LeadAmp::validTone(1.0f, tone.data(), 1000.0f, 0.0f));
-    REQUIRE(!LeadAmp::validTone(1.0f, tone.data(), 200.0f, 1000.0f));
-    tone[0] = LeadAmp::MAX_TONE_DB + 1;
-    REQUIRE(!LeadAmp::validTone(1.0f, tone.data()));
-    REQUIRE(!LeadAmp::validTone(1.0f, nullptr));
+    const Tone flat{};
+    REQUIRE(LeadAmp::validTone(toneOf(1.0f, flat)));
+    REQUIRE(!LeadAmp::validTone(toneOf(LeadAmp::MAX_DRIVE * 2, flat)));
+    REQUIRE(LeadAmp::validTone(toneOf(1.0f, flat, 500.0f, 1500.0f)));
+    REQUIRE(!LeadAmp::validTone(toneOf(1.0f, flat, 1000.0f, 0.0f)));
+    REQUIRE(!LeadAmp::validTone(toneOf(1.0f, flat, 200.0f, 1000.0f)));
+    Tone loud{};
+    loud[0] = LeadAmp::MAX_TONE_DB + 1;
+    REQUIRE(!LeadAmp::validTone(toneOf(1.0f, loud)));
+    auto echo = toneOf(1.0f, flat);
+    echo.echo_seconds = LeadAmp::MAX_ECHO_SECONDS * 2;
+    REQUIRE(!LeadAmp::validTone(echo));
+    echo = toneOf(1.0f, flat);
+    echo.echo_level = 2.0f;
+    REQUIRE(!LeadAmp::validTone(echo));
+    auto small = toneOf(1.0f, flat);
+    small.size = sizeof(yarg_lead_amp_tone) - 4;
+    REQUIRE(!LeadAmp::validTone(small));
+}
+
+std::vector<float> resonantCabinet(double hz) {
+    std::vector<float> cabinet(512);
+    for (std::size_t tap = 0; tap < cabinet.size(); ++tap) {
+        cabinet[tap] = static_cast<float>(std::exp(-0.02 * tap) * std::cos(2 * PI * hz * tap / SAMPLE_RATE));
+    }
+    return cabinet;
+}
+
+void toneSwitchesCabinet() {
+    const auto dark = resonantCabinet(500);
+    const auto bright = resonantCabinet(2500);
+    const std::array<Cabinet, 2> cabinets{{{dark.data(), dark.size(), SAMPLE_RATE},
+        {bright.data(), bright.size(), SAMPLE_RATE}}};
+    const auto input = sine(330, 0.1, SAMPLE_RATE / 2);
+    auto viaDark = input, viaBright = input, single = input;
+    LeadAmp both(CHANNELS, SAMPLE_RATE, cabinets.data(), cabinets.size());
+    both.process(viaDark.data(), viaDark.size() / CHANNELS, 1.0f);
+    auto tone = LeadAmp::defaultTone();
+    tone.cabinet = 1;
+    LeadAmp switched(CHANNELS, SAMPLE_RATE, cabinets.data(), cabinets.size());
+    switched.setTone(tone);
+    switched.process(viaBright.data(), viaBright.size() / CHANNELS, 1.0f);
+    REQUIRE(both.cabinetCount() == 2);
+    REQUIRE(viaDark == run(input, 1.0f, dark));
+    const int first = SAMPLE_RATE / 4;
+    const int frames = 8192;
+    REQUIRE(tonePower(viaBright, first, frames, 2310) / tonePower(viaBright, first, frames, 330)
+        > 4 * tonePower(viaDark, first, frames, 2310) / tonePower(viaDark, first, frames, 330));
+}
+
+void echoFollowsTheTone() {
+    auto input = sine(330, 0.1, SAMPLE_RATE);
+    std::fill(input.begin() + SAMPLE_RATE / 20 * CHANNELS, input.end(), 0.0f);
+    auto tone = LeadAmp::defaultTone();
+    tone.echo_seconds = 0.2f;
+    LeadAmp amp(CHANNELS, SAMPLE_RATE);
+    amp.setTone(tone);
+    auto output = input;
+    amp.process(output.data(), output.size() / CHANNELS, 1.0f);
+    const int frames = SAMPLE_RATE / 50;
+    const double echoed = rms(output, 0, SAMPLE_RATE / 5, frames);
+    REQUIRE(echoed > 10 * rms(output, 0, SAMPLE_RATE * 3 / 20, frames));
+
+    tone.echo_level = 0.0f;
+    LeadAmp dry(CHANNELS, SAMPLE_RATE);
+    dry.setTone(tone);
+    output = input;
+    dry.process(output.data(), output.size() / CHANNELS, 1.0f);
+    REQUIRE(rms(output, 0, SAMPLE_RATE / 5, frames) < 0.1 * echoed);
+}
+
+void matchPicksTheCabinet() {
+    const std::vector<std::vector<float>> cabinets{resonantCabinet(500), resonantCabinet(2500)};
+    for (int stemCabinet = 0; stemCabinet < 2; ++stemCabinet) {
+        const auto matched = match(1.0f, {}, 8, 0.0f, 0.0f, 0.0, cabinets, stemCabinet);
+        REQUIRE(matched.result == YARG_AUDIO_OK);
+        REQUIRE(matched.cabinet == static_cast<std::uint32_t>(stemCabinet));
+    }
 }
 
 std::vector<float> stereoPluck(double frequency, int frames, int secondPickFrame = -1) {
@@ -335,12 +430,12 @@ void matchKeepsTheDefaultTone() {
 
 void matchFindsDriveAndTone() {
     Tone tone{};
-    tone[2] = -6.0f;
-    tone[5] = 6.0f;
+    tone[6] = -6.0f;
+    tone[15] = 6.0f;
     const auto matched = match(3.0f, tone, 8);
     REQUIRE(matched.result == YARG_AUDIO_OK);
     REQUIRE(std::abs(std::log2(matched.drive / 3.0f)) < 0.6);
-    REQUIRE(matched.tone[5] - matched.tone[2] > 8.0f);
+    REQUIRE(matched.tone[15] - matched.tone[6] > 8.0f);
     REQUIRE(matched.wahStartHz == 0.0f && matched.wahEndHz == 0.0f);
     REQUIRE(std::isfinite(matched.levelGain) && matched.levelGain > 0.0f);
 }
@@ -386,7 +481,7 @@ void runLeadAmpDspTests() {
     humPlaysUnderNotesAndFadesAfter();
     flatToneLeavesSoundUnchanged();
     driveSquashesTheAttack();
-    toneBandBoostsItsOctave();
+    toneBandBoostsItsFrequency();
     invalidToneIsRejected();
     matchKeepsTheDefaultTone();
     matchFindsDriveAndTone();
@@ -395,4 +490,7 @@ void runLeadAmpDspTests() {
     wahSweepsDownAfterThePick();
     wahRestartsOnTheNextPick();
     matchFindsWah();
+    toneSwitchesCabinet();
+    echoFollowsTheTone();
+    matchPicksTheCabinet();
 }

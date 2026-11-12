@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <iterator>
 #include <new>
 #include <vector>
@@ -53,9 +54,10 @@ constexpr float CAB_HONK_Q = 2.0f;
 constexpr float CAB_LOW_PASS_HZ = 4800.0f;
 constexpr float CAB_LOW_PASS_Q1 = 0.5412f;
 constexpr float CAB_LOW_PASS_Q2 = 1.3066f;
-constexpr float ECHO_SECONDS[] = {0.37f, 0.41f};
+constexpr float DEFAULT_ECHO_SECONDS = 0.37f;
+constexpr float ECHO_SPREAD = 0.41f / 0.37f;
 constexpr float ECHO_FEEDBACK = 0.32f;
-constexpr float ECHO_LEVEL = 0.35f;
+constexpr float DEFAULT_ECHO_LEVEL = 0.35f;
 constexpr float ECHO_TONE_HZ = 3500.0f;
 constexpr float GAIN_SMOOTHING_MS = 20.0f;
 constexpr float ADAA_MIN_STEP = 1e-4f;
@@ -68,7 +70,7 @@ constexpr int HUM_HARMONICS = 12;
 constexpr float NOISE_OPEN_LEVEL = 0.02f;
 constexpr float NOISE_CLOSED_LEVEL = 0.001f;
 constexpr float NOISE_RELEASE_SECONDS = 0.5f;
-constexpr float TONE_Q = 1.41f;
+constexpr float TONE_Q = 4.32f;
 constexpr float WAH_Q = 4.0f;
 constexpr float WAH_DRY = 0.15f;
 constexpr float WAH_PEAK_GAIN = 2.0f;
@@ -89,7 +91,7 @@ constexpr float MATCH_MAX_NOTE_SECONDS = 0.35f;
 constexpr int MATCH_MIN_NOTES = 3;
 constexpr int MATCH_TONE_PASSES = 24;
 constexpr double MATCH_BAND_FLOOR = 1e-5;
-constexpr double MATCH_TRUSTED_SHARE = 0.01;
+constexpr double MATCH_TRUSTED_SHARE = 0.004;
 constexpr std::size_t MATCH_RENDER_BLOCK = 512;
 constexpr int WAH_TRACK_BANDS = 11;
 constexpr double WAH_TRACK_BANDS_PER_OCTAVE = 3.0;
@@ -116,11 +118,16 @@ namespace yarg::audio {
 
 LeadAmp::LeadAmp(int channels, float sampleRate, const float* cabinet, std::size_t cabinetFrames,
     float cabinetRate)
+    : LeadAmp(channels, sampleRate, std::array<Cabinet, 1>{{{cabinet, cabinetFrames, cabinetRate}}}.data(),
+          cabinet ? 1 : 0) {}
+
+LeadAmp::LeadAmp(int channels, float sampleRate, const Cabinet* cabinets, std::size_t cabinetCount)
     : channels_(std::clamp(channels, 1, MAX_CHANNELS)),
       sampleRate_(sampleRate),
       couplingCoefficient_(static_cast<float>(std::exp(-2.0 * PI * COUPLING_HZ / sampleRate))),
       interstageCoefficient_(onePole(std::min(INTERSTAGE_LOW_PASS_HZ, 0.45f * sampleRate), sampleRate)),
       echoToneCoefficient_(onePole(ECHO_TONE_HZ, sampleRate)),
+      echoLevel_(DEFAULT_ECHO_LEVEL),
       gainCoefficient_(static_cast<float>(1.0 - std::exp(-1.0 / (GAIN_SMOOTHING_MS * 0.001 * sampleRate)))),
       firstOffset_(std::tanh(FIRST_BIAS)),
       secondOffset_(std::tanh(SECOND_BIAS)),
@@ -181,14 +188,14 @@ LeadAmp::LeadAmp(int channels, float sampleRate, const float* cabinet, std::size
         filters_[TONE_FIRST + band] = toneBand(sampleRate, band, 0.0f);
     }
 
-    echoLength_ = static_cast<int>(std::ceil(ECHO_SECONDS[1] * sampleRate)) + 1;
+    echoLength_ = static_cast<int>(std::ceil(MAX_ECHO_SECONDS * ECHO_SPREAD * sampleRate)) + 1;
     for (int channel = 0; channel < channels_; ++channel) {
         auto& state = states_[channel];
         state.first = Shaper{FIRST_BIAS, logCosh(FIRST_BIAS)};
         state.second = Shaper{SECOND_BIAS, logCosh(SECOND_BIAS)};
         state.echo.assign(static_cast<std::size_t>(echoLength_), 0.0f);
-        state.echoFrames = std::clamp(static_cast<int>(std::lround(ECHO_SECONDS[channel % 2] * sampleRate)),
-            1, echoLength_ - 1);
+        state.echoFrames = std::clamp(static_cast<int>(std::lround(
+            DEFAULT_ECHO_SECONDS * (channel % 2 ? ECHO_SPREAD : 1.0f) * sampleRate)), 1, echoLength_ - 1);
     }
 
     hum_.assign(static_cast<std::size_t>(std::max(1L, std::lround(sampleRate / HUM_HZ))), 0.0f);
@@ -206,14 +213,27 @@ LeadAmp::LeadAmp(int channels, float sampleRate, const float* cabinet, std::size
     }
 
     wahSincePick_ = wahRefractoryFrames_;
-    loadCabinet(cabinet, cabinetFrames, cabinetRate, sampleRate);
+    for (std::size_t index = 0; index < std::min<std::size_t>(cabinetCount, MAX_CABINETS); ++index) {
+        cabinets_.push_back(loadCabinet(cabinets[index], sampleRate));
+        cabinetLength_ = std::max(cabinetLength_, cabinets_.back().size());
+    }
+    for (auto& cabinet : cabinets_) {
+        if (!cabinet.empty()) cabinet.resize(cabinetLength_, 0.0f);
+    }
     for (int channel = 0; channel < channels_; ++channel) {
-        states_[channel].cabinetHistory.assign(cabinet_.size() * 2, 0.0f);
+        states_[channel].cabinetHistory.assign(cabinetLength_ * 2, 0.0f);
     }
 }
 
-void LeadAmp::loadCabinet(const float* cabinet, std::size_t frames, float cabinetRate, float sampleRate) {
-    if (!cabinet || frames == 0 || !std::isfinite(cabinetRate) || cabinetRate <= 0.0f) return;
+std::size_t LeadAmp::cabinetCount() const noexcept {
+    return cabinets_.size();
+}
+
+std::vector<float> LeadAmp::loadCabinet(const Cabinet& source, float sampleRate) {
+    const float* cabinet = source.samples;
+    const std::size_t frames = source.frames;
+    const float cabinetRate = source.rate;
+    if (!cabinet || frames == 0 || !std::isfinite(cabinetRate) || cabinetRate <= 0.0f) return {};
 
     const double step = static_cast<double>(cabinetRate) / sampleRate;
     const auto resampledFrames = std::min<std::size_t>(MAX_CABINET_FRAMES,
@@ -237,13 +257,13 @@ void LeadAmp::loadCabinet(const float* cabinet, std::size_t frames, float cabine
     for (float sample : resampled) {
         energy += static_cast<double>(sample) * sample;
     }
-    if (!std::isfinite(energy) || energy <= 0.0) return;
+    if (!std::isfinite(energy) || energy <= 0.0) return {};
 
     const auto scale = static_cast<float>(1.0 / std::sqrt(energy));
     for (float& sample : resampled) {
         sample *= scale;
     }
-    cabinet_ = std::move(resampled);
+    return resampled;
 }
 
 LeadAmp::Biquad LeadAmp::peak(float sampleRate, float hz, float gainDb, float q) noexcept {
@@ -262,33 +282,58 @@ LeadAmp::Biquad LeadAmp::peak(float sampleRate, float hz, float gainDb, float q)
 }
 
 float LeadAmp::toneHz(int band) noexcept {
-    return TONE_LOWEST_HZ * static_cast<float>(1 << band);
+    return TONE_LOWEST_HZ * std::exp2(static_cast<float>(band) / TONE_BANDS_PER_OCTAVE);
 }
 
 LeadAmp::Biquad LeadAmp::toneBand(float sampleRate, int band, float gainDb) noexcept {
     return peak(sampleRate, toneHz(band), gainDb, TONE_Q);
 }
 
-bool LeadAmp::validTone(float drive, const float* bandsDb, float wahStartHz, float wahEndHz) noexcept {
-    if (!bandsDb || !std::isfinite(drive) || drive < MIN_DRIVE || drive > MAX_DRIVE) return false;
+yarg_lead_amp_tone LeadAmp::defaultTone() noexcept {
+    yarg_lead_amp_tone tone{};
+    tone.size = sizeof(yarg_lead_amp_tone);
+    tone.drive = 1.0f;
+    tone.echo_seconds = DEFAULT_ECHO_SECONDS;
+    tone.echo_level = DEFAULT_ECHO_LEVEL;
+    tone.level_gain = 1.0f;
+    return tone;
+}
+
+bool LeadAmp::validTone(const yarg_lead_amp_tone& tone) noexcept {
+    if (tone.size < sizeof(yarg_lead_amp_tone) || tone.cabinet >= MAX_CABINETS) return false;
+    if (!std::isfinite(tone.drive) || tone.drive < MIN_DRIVE || tone.drive > MAX_DRIVE) return false;
     const auto wahInRange = [](float hz) { return std::isfinite(hz) && hz >= WAH_MIN_HZ && hz <= WAH_MAX_HZ; };
-    if (!(wahStartHz == 0.0f && wahEndHz == 0.0f) && !(wahInRange(wahStartHz) && wahInRange(wahEndHz))) return false;
-    for (int band = 0; band < TONE_BANDS; ++band) {
-        if (!std::isfinite(bandsDb[band]) || std::abs(bandsDb[band]) > MAX_TONE_DB) return false;
+    if (!(tone.wah_start_hz == 0.0f && tone.wah_end_hz == 0.0f)
+        && !(wahInRange(tone.wah_start_hz) && wahInRange(tone.wah_end_hz))) {
+        return false;
+    }
+    if (!std::isfinite(tone.echo_seconds) || tone.echo_seconds < MIN_ECHO_SECONDS
+        || tone.echo_seconds > MAX_ECHO_SECONDS) {
+        return false;
+    }
+    if (!std::isfinite(tone.echo_level) || tone.echo_level < 0.0f || tone.echo_level > 1.0f) return false;
+    for (float band : tone.bands_db) {
+        if (!std::isfinite(band) || std::abs(band) > MAX_TONE_DB) return false;
     }
     return true;
 }
 
-void LeadAmp::setTone(float drive, const float* bandsDb, float wahStartHz, float wahEndHz) noexcept {
-    targetDrive_ = drive;
-    wahOn_ = wahStartHz > 0.0f && wahEndHz > 0.0f;
+void LeadAmp::setTone(const yarg_lead_amp_tone& tone) noexcept {
+    targetDrive_ = tone.drive;
+    cabinet_ = tone.cabinet < cabinets_.size() ? tone.cabinet : 0;
+    wahOn_ = tone.wah_start_hz > 0.0f && tone.wah_end_hz > 0.0f;
     if (wahOn_) {
-        wahStartOctaves_ = std::log2(wahStartHz);
-        wahEndOctaves_ = std::log2(wahEndHz);
+        wahStartOctaves_ = std::log2(tone.wah_start_hz);
+        wahEndOctaves_ = std::log2(tone.wah_end_hz);
         wahControlFrame_ = 0;
     }
+    echoLevel_ = tone.echo_level;
+    for (int channel = 0; channel < channels_; ++channel) {
+        states_[channel].echoFrames = std::clamp(static_cast<int>(std::lround(
+            tone.echo_seconds * (channel % 2 ? ECHO_SPREAD : 1.0f) * sampleRate_)), 1, echoLength_ - 1);
+    }
     for (int band = 0; band < TONE_BANDS; ++band) {
-        filters_[TONE_FIRST + band] = toneBand(sampleRate_, band, bandsDb[band]);
+        filters_[TONE_FIRST + band] = toneBand(sampleRate_, band, tone.bands_db[band]);
     }
 }
 
@@ -302,12 +347,12 @@ float LeadAmp::run(int filter, ChannelState& state, float input) const noexcept 
 }
 
 float LeadAmp::convolve(ChannelState& state, float input) const noexcept {
-    const std::size_t length = cabinet_.size();
+    const std::size_t length = cabinetLength_;
     state.cabinetHistory[cabinetIndex_] = input;
     state.cabinetHistory[cabinetIndex_ + length] = input;
 
     const float* recent = state.cabinetHistory.data() + cabinetIndex_;
-    const float* taps = cabinet_.data();
+    const float* taps = cabinets_[cabinet_].data();
     float sums[CABINET_LANES] = {};
     for (std::size_t tap = 0; tap < length; tap += CABINET_LANES) {
         for (int lane = 0; lane < CABINET_LANES; ++lane) {
@@ -409,7 +454,7 @@ void LeadAmp::process(float* samples, std::size_t frames, float gain) noexcept {
             float amp = run(LOW_SHELF, state, second);
             amp = run(MID_CUT, state, amp);
             amp = run(PRESENCE, state, amp);
-            if (cabinet_.empty()) {
+            if (cabinets_.empty() || cabinets_[cabinet_].empty()) {
                 for (int filter = CAB_HIGH_PASS; filter <= CAB_LOW_PASS_2; ++filter) {
                     amp = run(filter, state, amp);
                 }
@@ -426,12 +471,12 @@ void LeadAmp::process(float* samples, std::size_t frames, float gain) noexcept {
             state.echoTone += (amp - state.echoTone) * echoToneCoefficient_;
             state.echo[static_cast<std::size_t>(echoIndex_)] = ECHO_FEEDBACK * (state.echoTone + echo);
 
-            sample = (amp + ECHO_LEVEL * echo) * gain_;
+            sample = (amp + echoLevel_ * echo) * gain_;
         }
 
         echoIndex_ = (echoIndex_ + 1) % echoLength_;
-        if (!cabinet_.empty()) {
-            cabinetIndex_ = (cabinetIndex_ == 0 ? static_cast<int>(cabinet_.size()) : cabinetIndex_) - 1;
+        if (cabinetLength_ > 0) {
+            cabinetIndex_ = (cabinetIndex_ == 0 ? static_cast<int>(cabinetLength_) : cabinetIndex_) - 1;
         }
     }
 }
@@ -443,31 +488,45 @@ void YARG_BASS_CALLBACK leadAmpDspProc(std::uint32_t, std::uint32_t,
     auto* state = static_cast<yarg_lead_amp_dsp*>(user);
     const std::uint32_t toneVersion = state->toneVersion.load(std::memory_order_acquire);
     if (toneVersion != state->appliedToneVersion) {
-        std::array<float, LeadAmp::TONE_BANDS> bands{};
-        for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
-            bands[band] = bitCast<float>(state->toneBits[band].load(std::memory_order_relaxed));
+        std::array<std::uint32_t, yarg_lead_amp_dsp::TONE_WORDS> words{};
+        for (std::size_t word = 0; word < words.size(); ++word) {
+            words[word] = state->toneWords[word].load(std::memory_order_relaxed);
         }
-        state->amp.setTone(bitCast<float>(state->driveBits.load(std::memory_order_relaxed)), bands.data(),
-            bitCast<float>(state->wahStartBits.load(std::memory_order_relaxed)),
-            bitCast<float>(state->wahEndBits.load(std::memory_order_relaxed)));
-        state->appliedToneVersion = toneVersion;
+        if (state->toneVersion.load(std::memory_order_acquire) == toneVersion) {
+            yarg_lead_amp_tone tone;
+            std::memcpy(&tone, words.data(), sizeof(tone));
+            state->amp.setTone(tone);
+            state->appliedToneVersion = toneVersion;
+        }
     }
     const float gain = bitCast<float>(state->gainBits.load(std::memory_order_relaxed));
     const std::size_t frames = length / sizeof(float) / static_cast<std::size_t>(state->channelCount);
     state->amp.process(static_cast<float*>(buffer), frames, gain);
 }
 
+bool cabinetList(const float* samples, const std::uint32_t* frames, const float* rates, std::size_t count,
+    std::vector<Cabinet>& cabinets) {
+    cabinets.clear();
+    if (count == 0) return true;
+    if (!samples || !frames || !rates || count > LeadAmp::MAX_CABINETS) return false;
+    std::size_t offset = 0;
+    for (std::size_t index = 0; index < count; ++index) {
+        if (!std::isfinite(rates[index]) || rates[index] <= 0.0f) return false;
+        cabinets.push_back({samples + offset, frames[index], rates[index]});
+        offset += frames[index];
+    }
+    return true;
+}
+
 int leadAmpDspAttach(const BassCoreBindings& bass, std::uint32_t channel, float gain,
-    const float* cabinet, std::size_t cabinetFrames, float cabinetRate,
+    const Cabinet* cabinets, std::size_t cabinetCount,
     int priority, yarg_lead_amp_dsp** dsp, int* bassError) noexcept {
     if (dsp) *dsp = nullptr;
     if (bassError) *bassError = 0;
     if (!dsp || channel == 0 || !std::isfinite(gain) || gain < 0.0f || gain > LeadAmp::MAX_GAIN) {
         return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
     }
-    if (cabinetFrames > 0 && (!cabinet || !std::isfinite(cabinetRate) || cabinetRate <= 0.0f)) {
-        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
-    }
+    if (cabinetCount > 0 && !cabinets) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
     if (!bass.valid()) return YARG_AUDIO_ERROR_DEPENDENCY;
 
     BassChannelInfo info{};
@@ -485,7 +544,7 @@ int leadAmpDspAttach(const BassCoreBindings& bass, std::uint32_t channel, float 
     yarg_lead_amp_dsp* state = nullptr;
     try {
         state = new yarg_lead_amp_dsp(bass, channel, static_cast<int>(info.channels),
-            static_cast<float>(info.frequency), gain, cabinet, cabinetFrames, cabinetRate);
+            static_cast<float>(info.frequency), gain, cabinets, cabinetCount);
     } catch (const std::bad_alloc&) {
         return YARG_AUDIO_ERROR_INTERNAL;
     }
@@ -509,16 +568,12 @@ int leadAmpDspSetGain(yarg_lead_amp_dsp* dsp, float gain) noexcept {
     return YARG_AUDIO_OK;
 }
 
-int leadAmpDspSetTone(yarg_lead_amp_dsp* dsp, float drive, const float* bandsDb, std::size_t bandCount,
-    float wahStartHz, float wahEndHz) noexcept {
-    if (!dsp || bandCount != LeadAmp::TONE_BANDS || !LeadAmp::validTone(drive, bandsDb, wahStartHz, wahEndHz)) {
-        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
-    }
-    dsp->driveBits.store(bitCast<std::uint32_t>(drive), std::memory_order_relaxed);
-    dsp->wahStartBits.store(bitCast<std::uint32_t>(wahStartHz), std::memory_order_relaxed);
-    dsp->wahEndBits.store(bitCast<std::uint32_t>(wahEndHz), std::memory_order_relaxed);
-    for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
-        dsp->toneBits[band].store(bitCast<std::uint32_t>(bandsDb[band]), std::memory_order_relaxed);
+int leadAmpDspSetTone(yarg_lead_amp_dsp* dsp, const yarg_lead_amp_tone* tone) noexcept {
+    if (!dsp || !tone || !LeadAmp::validTone(*tone)) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    std::array<std::uint32_t, yarg_lead_amp_dsp::TONE_WORDS> words{};
+    std::memcpy(words.data(), tone, sizeof(yarg_lead_amp_tone));
+    for (std::size_t word = 0; word < words.size(); ++word) {
+        dsp->toneWords[word].store(words[word], std::memory_order_relaxed);
     }
     dsp->toneVersion.fetch_add(1, std::memory_order_release);
     return YARG_AUDIO_OK;
@@ -615,14 +670,18 @@ ToneMeasure measure(const std::vector<std::vector<float>>& notes, float sampleRa
     return tone;
 }
 
-std::vector<std::vector<float>> render(const std::vector<MatchNote>& notes, float sampleRate, const float* cabinet,
-    std::size_t cabinetFrames, float cabinetRate, float drive, float wahStartHz = 0.0f, float wahEndHz = 0.0f) {
-    const std::array<float, LeadAmp::TONE_BANDS> flat{};
+std::vector<std::vector<float>> render(const std::vector<MatchNote>& notes, float sampleRate, const Cabinet* cabinet,
+    float drive, float wahStartHz = 0.0f, float wahEndHz = 0.0f) {
+    auto tone = LeadAmp::defaultTone();
+    tone.drive = drive;
+    tone.wah_start_hz = wahStartHz;
+    tone.wah_end_hz = wahEndHz;
+    tone.echo_level = 0.0f;
     std::vector<std::vector<float>> rendered;
     rendered.reserve(notes.size());
     for (const auto& note : notes) {
-        LeadAmp amp(1, sampleRate, cabinet, cabinetFrames, cabinetRate);
-        amp.setTone(drive, flat.data(), wahStartHz, wahEndHz);
+        LeadAmp amp(1, sampleRate, cabinet, cabinet ? 1 : 0);
+        amp.setTone(tone);
         std::vector<float> samples(note.di, note.di + note.frames);
         for (std::size_t first = 0; first < samples.size(); first += MATCH_RENDER_BLOCK) {
             amp.process(samples.data() + first, std::min(MATCH_RENDER_BLOCK, samples.size() - first),
@@ -719,6 +778,36 @@ void correct(std::array<float, LeadAmp::TONE_BANDS>& bandsDb, const TrustedBands
 
 }
 
+double toneDistance(const ToneMeasure& stem, const ToneMeasure& amp) {
+    const auto trusted = trustedBands(amp);
+    double stemTotal = 0.0, ampTotal = 0.0;
+    for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+        if (!trusted[band]) continue;
+        stemTotal += stem.bands[band];
+        ampTotal += amp.bands[band];
+    }
+    if (!(stemTotal > 0.0) || !(ampTotal > 0.0)) return HUGE_VAL;
+
+    std::array<double, LeadAmp::TONE_BANDS> differences{};
+    double weighted = 0.0, weight = 0.0;
+    for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+        const double stemShare = stem.bands[band] / stemTotal;
+        if (!trusted[band] || !(stemShare > MATCH_BAND_FLOOR)) continue;
+        differences[band] = 10.0 * std::log10(stemShare / (amp.bands[band] / ampTotal));
+        weighted += stemShare * differences[band];
+        weight += stemShare;
+    }
+    if (!(weight > 0.0)) return HUGE_VAL;
+    const double centre = weighted / weight;
+    double spread = 0.0;
+    for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+        const double stemShare = stem.bands[band] / stemTotal;
+        if (!trusted[band] || !(stemShare > MATCH_BAND_FLOOR)) continue;
+        spread += stemShare * (differences[band] - centre) * (differences[band] - centre);
+    }
+    return std::sqrt(spread / weight);
+}
+
 struct Sweep {
     double early = 0.0;
     double late = 0.0;
@@ -790,22 +879,15 @@ float wahHz(double octaves) {
     return std::clamp(static_cast<float>(std::exp2(octaves)), LeadAmp::WAH_MIN_HZ, LeadAmp::WAH_MAX_HZ);
 }
 
-int leadAmpMatch(float sampleRate, const float* cabinet, std::size_t cabinetFrames, float cabinetRate,
+int leadAmpMatch(float sampleRate, const Cabinet* cabinets, std::size_t cabinetCount,
     const float* stem, const float* di, const std::uint32_t* noteFrames, std::size_t noteCount,
-    float* drive, float* bandsDb, std::size_t bandCount, float* wahStartHz, float* wahEndHz,
-    float* levelGain) noexcept {
-    if (!drive || !bandsDb || !wahStartHz || !wahEndHz || !levelGain || bandCount != LeadAmp::TONE_BANDS) {
-        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
-    }
-    *drive = 1.0f;
-    *wahStartHz = 0.0f;
-    *wahEndHz = 0.0f;
-    *levelGain = 1.0f;
-    std::fill(bandsDb, bandsDb + bandCount, 0.0f);
+    yarg_lead_amp_tone* tone) noexcept {
+    if (!tone || tone->size < sizeof(yarg_lead_amp_tone)) return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    *tone = LeadAmp::defaultTone();
     if (!stem || !di || !noteFrames || !std::isfinite(sampleRate) || sampleRate <= 0.0f) {
         return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
     }
-    if (cabinetFrames > 0 && (!cabinet || !std::isfinite(cabinetRate) || cabinetRate <= 0.0f)) {
+    if ((cabinetCount > 0 && !cabinets) || cabinetCount > LeadAmp::MAX_CABINETS) {
         return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
     }
 
@@ -828,45 +910,58 @@ int leadAmpMatch(float sampleRate, const float* cabinet, std::size_t cabinetFram
         const auto target = measure(stemNotes, sampleRate);
         if (!(target.punch > 0.0)) return YARG_AUDIO_ERROR_INVALID_STATE;
 
-        std::array<float, LeadAmp::TONE_BANDS> tone{};
+        const Cabinet* defaultCabinet = cabinetCount > 0 ? &cabinets[0] : nullptr;
         std::array<double, std::size(MATCH_DRIVES)> punches{};
         double defaultLevel = 0.0;
         for (std::size_t index = 0; index < punches.size(); ++index) {
-            const auto rendered = measure(render(notes, sampleRate, cabinet, cabinetFrames, cabinetRate,
-                MATCH_DRIVES[index]), sampleRate);
+            const auto rendered = measure(render(notes, sampleRate, defaultCabinet, MATCH_DRIVES[index]), sampleRate);
             if (!(rendered.punch > 0.0)) return YARG_AUDIO_ERROR_INVALID_STATE;
             punches[index] = rendered.punch;
             if (MATCH_DRIVES[index] == 1.0f) defaultLevel = rendered.level;
         }
-
         const float fitted = std::clamp(fitDrive(target.punch, punches), LeadAmp::MIN_DRIVE, LeadAmp::MAX_DRIVE);
+
+        std::size_t chosen = 0;
+        double closest = HUGE_VAL;
+        for (std::size_t index = 0; index < cabinetCount; ++index) {
+            const double distance = toneDistance(target, measure(render(notes, sampleRate, &cabinets[index], fitted),
+                sampleRate));
+            if (distance < closest) {
+                closest = distance;
+                chosen = index;
+            }
+        }
+        const Cabinet* cabinet = cabinetCount > 0 ? &cabinets[chosen] : nullptr;
+
         float wahStart = 0.0f, wahEnd = 0.0f;
         const auto stemSweeps = sweeps(stemNotes, sampleRate);
-        if (hasWah(stemSweeps, sweeps(render(notes, sampleRate, cabinet, cabinetFrames, cabinetRate, fitted), sampleRate))) {
+        if (hasWah(stemSweeps, sweeps(render(notes, sampleRate, cabinet, fitted), sampleRate))) {
             const auto wanted = typical(stemSweeps);
             wahStart = wahHz(wanted.early);
             wahEnd = wahHz(wanted.late);
             for (int pass = 0; pass < WAH_FIT_PASSES; ++pass) {
-                const auto heard = typical(sweeps(render(notes, sampleRate, cabinet, cabinetFrames, cabinetRate, fitted,
-                    wahStart, wahEnd), sampleRate));
+                const auto heard = typical(sweeps(render(notes, sampleRate, cabinet, fitted, wahStart, wahEnd),
+                    sampleRate));
                 wahStart = wahHz(std::log2(wahStart) + wanted.early - heard.early);
                 wahEnd = wahHz(std::log2(wahEnd) + wanted.late - heard.late);
             }
         }
 
-        const auto amped = render(notes, sampleRate, cabinet, cabinetFrames, cabinetRate, fitted, wahStart, wahEnd);
+        std::array<float, LeadAmp::TONE_BANDS> bands{};
+        const auto amped = render(notes, sampleRate, cabinet, fitted, wahStart, wahEnd);
         auto rendered = measure(amped, sampleRate);
         const auto trusted = trustedBands(rendered);
         for (int pass = 0; pass < MATCH_TONE_PASSES; ++pass) {
-            correct(tone, trusted, target, rendered);
-            rendered = measure(equalize(amped, sampleRate, tone), sampleRate);
+            correct(bands, trusted, target, rendered);
+            rendered = measure(equalize(amped, sampleRate, bands), sampleRate);
         }
 
-        *drive = fitted;
-        *wahStartHz = wahStart;
-        *wahEndHz = wahEnd;
-        std::copy(tone.begin(), tone.end(), bandsDb);
-        *levelGain = rendered.level > 0.0 && defaultLevel > 0.0
+        tone->cabinet = static_cast<std::uint32_t>(chosen);
+        tone->drive = fitted;
+        tone->wah_start_hz = wahStart;
+        tone->wah_end_hz = wahEnd;
+        std::copy(bands.begin(), bands.end(), tone->bands_db);
+        tone->level_gain = rendered.level > 0.0 && defaultLevel > 0.0
             ? static_cast<float>(defaultLevel / rendered.level)
             : 1.0f;
         return YARG_AUDIO_OK;
@@ -890,9 +985,7 @@ bool leadAmpDspDestroy(yarg_lead_amp_dsp* dsp) noexcept {
 }
 
 yarg_lead_amp_dsp::yarg_lead_amp_dsp(const yarg::audio::BassCoreBindings& bindings, std::uint32_t channelHandle,
-    int channels, float sampleRate, float gain, const float* cabinet, std::size_t cabinetFrames,
-    float cabinetRate)
+    int channels, float sampleRate, float gain, const yarg::audio::Cabinet* cabinets, std::size_t cabinetCount)
     : bass(bindings), channel(channelHandle), channelCount(channels),
       gainBits(yarg::audio::bitCast<std::uint32_t>(gain)),
-      driveBits(yarg::audio::bitCast<std::uint32_t>(1.0f)),
-      amp(channels, sampleRate, cabinet, cabinetFrames, cabinetRate) {}
+      amp(channels, sampleRate, cabinets, cabinetCount) {}

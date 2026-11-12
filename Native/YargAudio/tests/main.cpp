@@ -11,6 +11,7 @@ int main() {
     runNoiseGateDspTests();
     runOverdriveDspTests();
     runLeadAmpDspTests();
+    runSoloSpaceTests();
     runNoiseMorphTests();
     runYargStretchTests();
     runSineSynthDspTests();

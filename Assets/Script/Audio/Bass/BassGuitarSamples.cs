@@ -64,9 +64,8 @@ namespace YARG.Audio.BASS
             return BassSynthGuitar.Create(notes, releases, format);
         }
 
-        internal static float[]? LoadCabinet(out int frequency)
+        internal static BassCabinetSet? LoadCabinets()
         {
-            frequency = 0;
             string folder = Path.Combine(PathHelper.StreamingAssetsPath, CABINET_FOLDER);
             if (!Directory.Exists(folder))
             {
@@ -74,13 +73,34 @@ namespace YARG.Audio.BASS
             }
 
             var paths = Directory.GetFiles(folder, "*.wav");
-            if (paths.Length == 0)
+            Array.Sort(paths, StringComparer.Ordinal);
+            var samples = new List<float>();
+            var frames = new List<uint>();
+            var rates = new List<float>();
+            var names = new List<string>();
+            foreach (string path in paths)
             {
-                return null;
+                if (names.Count == BassCabinetSet.MAX_CABINETS)
+                {
+                    YargLogger.LogFormatWarning("Ignoring guitar cabinets past the first {0}", BassCabinetSet.MAX_CABINETS);
+                    break;
+                }
+
+                var mono = Decode(path, out int frequency);
+                if (mono == null || mono.Length == 0)
+                {
+                    continue;
+                }
+
+                samples.AddRange(mono);
+                frames.Add((uint) mono.Length);
+                rates.Add(frequency);
+                names.Add(Path.GetFileNameWithoutExtension(path));
             }
 
-            Array.Sort(paths, StringComparer.Ordinal);
-            return Decode(paths[0], out frequency);
+            return names.Count > 0
+                ? new BassCabinetSet(samples.ToArray(), frames.ToArray(), rates.ToArray(), names.ToArray())
+                : null;
         }
 
         private static float[]? Decode(string path, out int frequency)
@@ -131,6 +151,26 @@ namespace YARG.Audio.BASS
             {
                 Bass.StreamFree(handle);
             }
+        }
+    }
+
+    internal sealed class BassCabinetSet
+    {
+        internal const int MAX_CABINETS = 8;
+
+        public readonly float[]  Samples;
+        public readonly uint[]   Frames;
+        public readonly float[]  Rates;
+        public readonly string[] Names;
+
+        public int Count => Names.Length;
+
+        internal BassCabinetSet(float[] samples, uint[] frames, float[] rates, string[] names)
+        {
+            Samples = samples;
+            Frames = frames;
+            Rates = rates;
+            Names = names;
         }
     }
 }
