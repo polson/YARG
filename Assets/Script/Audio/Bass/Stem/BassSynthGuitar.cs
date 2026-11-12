@@ -267,9 +267,7 @@ namespace YARG.Audio.BASS
                 FrameCount = resampled.Length,
                 IsSustain = true,
                 AttackEndFrame = format.FramesFor(ATTACK_SECONDS),
-                PitchHz = NoteHz(note),
                 Note = note,
-                IsSynth = true,
             };
             clip.LoopStretchedBody(clip.AttackEndFrame, format);
             return clip;
@@ -282,13 +280,11 @@ namespace YARG.Audio.BASS
             {
                 Samples = Interleaved(resampled, gain, format.Channels),
                 FrameCount = resampled.Length,
-                PitchHz = NoteHz(note),
                 Note = note,
-                IsSynth = true,
             };
         }
 
-        private static double NoteHz(int note)
+        internal static double NoteHz(int note)
         {
             return 440 * Math.Pow(2, (note - 69) / 12.0);
         }

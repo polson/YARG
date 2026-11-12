@@ -4,81 +4,15 @@ namespace YARG.Audio.BASS
 {
     internal static class BassSustainStretch
     {
-        private const double MIN_CAPTURE_SECONDS = 0.025;
-        private const double MAX_CAPTURE_SECONDS = 0.4;
         private const double MIN_ATTACK_SECONDS = 0.015;
         private const double MAX_ATTACK_SECONDS = 0.12;
         private const double ANALYSIS_BLOCK_SECONDS = 0.005;
         private const double STABLE_POWER_RATIO = 1.3;
-        private const double GRAIN_SECONDS = 0.04;
         private const double SEARCH_SECONDS = 0.015;
-        private const double SHORT_BODY_SECONDS = 0.075;
-        private const float SHORT_BODY_SPEED = 0.3f;
-        private const float BODY_SPEED = 0.5f;
         private const double ONSET_BLOCK_SECONDS = 0.003;
         private const double ONSET_RATIO = 3;
         private const double ONSET_FLOOR_RATIO = 0.01;
         private const double ONSET_SMOOTHING = 0.2;
-
-        internal static bool TryRender(float[] samples, BassStemFormat format,
-            out float[] rendered, out int bodyStartFrame)
-        {
-            rendered = Array.Empty<float>();
-            bodyStartFrame = 0;
-            int channels = format.Channels;
-            int frameCount = samples.Length / channels;
-            if (frameCount < MIN_CAPTURE_SECONDS * format.Frequency ||
-                frameCount > MAX_CAPTURE_SECONDS * format.Frequency)
-            {
-                return false;
-            }
-
-            int attackFrames = FindAttackEnd(samples, format);
-            int sustainFrames = frameCount - attackFrames;
-            float speed = sustainFrames < SHORT_BODY_SECONDS * format.Frequency ? SHORT_BODY_SPEED : BODY_SPEED;
-            int bodyFrames = (int) Math.Round(sustainFrames / (double) speed);
-            int grainFrames = Math.Min(format.FramesFor(GRAIN_SECONDS), sustainFrames / 2);
-            int overlapFrames = grainFrames / 2;
-            int hopFrames = grainFrames - overlapFrames;
-            int searchFrames = format.FramesFor(SEARCH_SECONDS);
-            int searchStep = Math.Max(1, format.Frequency / 2000);
-            int sampleStep = Math.Max(1, format.Frequency / 8000);
-            int channel = FindLoudestChannel(samples, channels, firstFrame: attackFrames);
-            int lastSource = frameCount - grainFrames;
-            var fade = new float[overlapFrames];
-            for (int frame = 0; frame < overlapFrames; frame++)
-            {
-                fade[frame] = (float) (0.5 - 0.5 * Math.Cos(Math.PI * (frame + 1) / (overlapFrames + 1)));
-            }
-
-            rendered = new float[(attackFrames + bodyFrames) * channels];
-            Array.Copy(samples, rendered, (attackFrames + grainFrames) * channels);
-            for (int position = attackFrames + hopFrames; position < attackFrames + bodyFrames; position += hopFrames)
-            {
-                int target = attackFrames + (int) Math.Round((position - attackFrames) * speed);
-                target = Math.Min(target, lastSource);
-                int first = Math.Max(attackFrames, target - searchFrames);
-                int last = Math.Min(lastSource, target + searchFrames);
-                int overlap = Math.Min(overlapFrames, attackFrames + bodyFrames - position);
-                int source = FindMatch(samples, rendered, channels, channel, outputFrame: position,
-                    firstFrame: first, lastFrame: last, targetFrame: target, frames: overlap,
-                    searchStep: searchStep, sampleStep: sampleStep);
-                int frames = Math.Min(grainFrames, attackFrames + bodyFrames - position);
-                for (int frame = 0; frame < frames; frame++)
-                {
-                    float blend = frame < overlapFrames ? fade[frame] : 1;
-                    for (int outputChannel = 0; outputChannel < channels; outputChannel++)
-                    {
-                        int output = (position + frame) * channels + outputChannel;
-                        float sample = samples[(source + frame) * channels + outputChannel];
-                        rendered[output] = rendered[output] * (1 - blend) + sample * blend;
-                    }
-                }
-            }
-
-            bodyStartFrame = attackFrames + grainFrames;
-            return true;
-        }
 
         internal static int FindLoopStart(float[] samples, BassStemFormat format, int firstFrame,
             int tailFrame, int fadeFrames)

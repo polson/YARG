@@ -260,24 +260,16 @@ namespace YARG.Gameplay.Player
             }
 
             _freestyle = new FreestyleSolo(soundboard, () => Engine, SetStemMuteState, PlayFreestyleHit,
-                fretRowMask: AllFretRows, maxFretIndex: FretRowCount - 1,
+                fretRowMask: AllFretRows,
                 hopoLeniency: EngineParams.HopoLeniency,
-                lowestSeedNote: _stem == SongStem.Bass ? 0 : LOWEST_LEAD_NOTE);
-            _freestyle.RequestSeeds(SeedNotes(), GameManager.GetAudioPlaybackTime);
+                lowestNote: _stem == SongStem.Bass ? 0 : LOWEST_LEAD_NOTE);
+            _freestyle.RequestPhrases(PhraseNotes(), GameManager.GetAudioPlaybackTime);
         }
 
-        private List<GuitarNote> SeedNotes()
+        private List<GuitarNote> PhraseNotes()
         {
-            var notes = NoteTrack.Notes;
             var expert = GetExpertTrack();
-            if (notes.Count == 0 || expert == null)
-            {
-                return notes;
-            }
-
-            uint firstTick = notes[0].Tick;
-            uint lastTick = notes[^1].Tick;
-            return expert.Notes.FindAll(note => note.Tick >= firstTick && note.Tick <= lastTick);
+            return expert?.Notes ?? NoteTrack.Notes;
         }
 
         protected virtual InstrumentDifficulty<GuitarNote> GetExpertTrack()
@@ -306,7 +298,6 @@ namespace YARG.Gameplay.Player
         protected override void ResetDifficulty(double time)
         {
             Engine.ReplaceChart(NoteTrack);
-            _freestyle?.RequestSeeds(SeedNotes(), GameManager.GetAudioPlaybackTime);
             _freestyle?.Reset();
 
             if (Player.Profile.RangeEnabled)

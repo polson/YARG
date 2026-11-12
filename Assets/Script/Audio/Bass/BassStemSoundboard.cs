@@ -65,15 +65,9 @@ namespace YARG.Audio.BASS
         private sealed class Voice
         {
             public readonly PushStream Stream;
-            public readonly PushStream BentStream;
             public BassStemClip? Clip;
-            public BassStemClip? BentClip;
             public int        PushedFrames;
-            public int        BentPushedFrames;
             public double     Gain;
-            public double     BentShare;
-            public BassMixerBus? Bus;
-            public bool       IsSynth;
             public double     PlaybackRate = 1;
             public float      Frequency;
             public int        Key;
@@ -93,10 +87,9 @@ namespace YARG.Audio.BASS
             public double     TuningCents;
             public float[]    PickBuffer = Array.Empty<float>();
 
-            public Voice(PushStream stream, PushStream bentStream)
+            public Voice(PushStream stream)
             {
                 Stream = stream;
-                BentStream = bentStream;
             }
 
             public bool IsAttached => Key != 0;
@@ -117,26 +110,25 @@ namespace YARG.Audio.BASS
             }
         }
 
-        private readonly object                       _lock = new();
-        private readonly BassStemFormat               _format;
-        private readonly Func<double>                 _volume;
-        private readonly BassStemSeedLibrary          _library;
-        private          BassStemSoloSeeds?           _seeds;
-        private readonly Voice[]                      _voices = new Voice[VOICE_COUNT];
-        private          int                          _heldFrets;
-        private          float                        _whammyPercent;
-        private readonly Random                       _random = new();
-        private readonly List<BassStemClip>           _chordClips = new();
-        private          float[]                      _silence = Array.Empty<float>();
-        private          long                         _playCount;
-        private          long                         _lastVoiceStart = Stopwatch.GetTimestamp();
-        private          int                          _lastLayerTake;
-        private          bool                         _disposed;
-        private readonly BassMixerBus?                _cleanBus;
-        private readonly BassMixerBus?                _synthBus;
-        private readonly BassLeadAmpDsp?              _synthAmp;
-        private          BassLeadAmpTone              _synthTone = BassLeadAmpTone.Default;
-        private readonly BassFreeverbDsp?             _synthReverb;
+        private readonly object                _lock = new();
+        private readonly BassStemFormat        _format;
+        private readonly Func<double>          _volume;
+        private readonly BassSoloPhraseLibrary _library;
+        private          BassSoloPhrase?       _phrase;
+        private readonly Voice[]               _voices = new Voice[VOICE_COUNT];
+        private          int                   _heldFrets;
+        private          float                 _whammyPercent;
+        private readonly Random                _random = new();
+        private readonly List<BassStemClip>    _chordClips = new();
+        private          float[]               _silence = Array.Empty<float>();
+        private          long                  _playCount;
+        private          long                  _lastVoiceStart = Stopwatch.GetTimestamp();
+        private          int                   _lastLayerTake;
+        private          bool                  _disposed;
+        private readonly BassMixerBus?         _synthBus;
+        private readonly BassLeadAmpDsp?       _synthAmp;
+        private          BassLeadAmpTone       _synthTone = BassLeadAmpTone.Default;
+        private readonly BassFreeverbDsp?      _synthReverb;
 
         internal BassStemSoundboard(AudioManager manager, BassStemFormat format, Func<double> volume,
             BassChordTrack? chords)
@@ -146,22 +138,19 @@ namespace YARG.Audio.BASS
             BassCabinetSet? cabinets = null;
             if (manager is BassAudioManager bassManager)
             {
-                _cleanBus = bassManager.CreateMixerBus(format.Frequency, format.Channels);
-                if (_cleanBus != null)
+                _synthBus = bassManager.CreateMixerBus(format.Frequency, format.Channels);
+                if (_synthBus != null)
                 {
-                    _synthBus = bassManager.CreateMixerBus(format.Frequency, format.Channels);
                     cabinets = BassCabinetSet.Load();
-                    _synthAmp = _synthBus != null
-                        ? BassLeadAmpDsp.Attach(_synthBus.SourceHandle, 0, cabinets, SYNTH_AMP_PRIORITY)
-                        : null;
-                    if (_synthBus != null && _synthAmp != null)
+                    _synthAmp = BassLeadAmpDsp.Attach(_synthBus.SourceHandle, 0, cabinets, SYNTH_AMP_PRIORITY);
+                    if (_synthAmp != null)
                     {
                         _synthReverb = BassFreeverbDsp.Create(_synthBus.SourceHandle, 1,
                             BassLeadAmpTone.DEFAULT_REVERB_WET, BassLeadAmpTone.DEFAULT_REVERB_ROOM, SYNTH_REVERB_DAMP);
                     }
                     else
                     {
-                        _synthBus?.Dispose();
+                        _synthBus.Dispose();
                         _synthBus = null;
                     }
                 }
@@ -169,51 +158,49 @@ namespace YARG.Audio.BASS
 
             for (int index = 0; index < VOICE_COUNT; index++)
             {
-                _voices[index] = new Voice(stream: CreateVoiceStream(manager), bentStream: CreateVoiceStream(manager));
-                _voices[index].Bus = _cleanBus;
+                _voices[index] = new Voice(CreateVoiceStream(manager));
             }
 
-            _library = _synthBus != null
-                ? new BassStemSeedLibrary(format, chords, () => BassSynthGuitar.Load(format), cabinets)
-                : new BassStemSeedLibrary(format, chords, loadSynth: null, cabinets: null);
+            _library = new BassSoloPhraseLibrary(format, chords,
+                _synthBus != null ? () => BassSynthGuitar.Load(format) : null, cabinets);
         }
 
         private PushStream CreateVoiceStream(AudioManager manager)
         {
-            if (_cleanBus == null)
+            if (_synthBus == null)
             {
                 return manager.CreatePushStream(sampleRate: _format.Frequency, channelCount: _format.Channels);
             }
 
             var stream = BassPushStream.Create(_format.Frequency, _format.Channels)
                 ?? throw new InvalidOperationException($"Failed to create BASS push stream: {Bass.LastError}");
-            _cleanBus.Take(stream.Handle);
+            _synthBus.Take(stream.Handle);
             return stream;
         }
 
         private int LoopBufferFrames => _format.FramesFor(LOOP_BUFFER_SECONDS);
 
-        public void RequestSeeds(List<GuitarNote> notes, Func<double, double> playbackTime, int lowestNote)
+        public void RequestPhrases(List<GuitarNote> notes, Func<double, double> playbackTime, int lowestNote)
         {
             _library.Request(notes, playbackTime, lowestNote);
         }
 
-        public bool SelectSeedSet(double soloTime, double songTime)
+        public bool SelectPhrase(double soloTime, double songTime)
         {
-            var seeds = _library.Select(soloTime, songTime);
+            var phrase = _library.Select(soloTime, songTime);
             lock (_lock)
             {
-                _seeds = seeds;
+                _phrase = phrase;
             }
 
-            return seeds is { IsEmpty: false };
+            return phrase is { IsEmpty: false };
         }
 
         public void Play(int key)
         {
             lock (_lock)
             {
-                if (_disposed || !_seeds!.TryPickClip(key, out var clip))
+                if (_disposed || !_phrase!.TryPickClip(key, out var clip))
                 {
                     return;
                 }
@@ -228,7 +215,7 @@ namespace YARG.Audio.BASS
         {
             lock (_lock)
             {
-                if (_disposed || !_seeds!.TryPickClip(key, out var clip))
+                if (_disposed || !_phrase!.TryPickClip(key, out var clip))
                 {
                     return;
                 }
@@ -244,20 +231,20 @@ namespace YARG.Audio.BASS
         {
             lock (_lock)
             {
-                if (_disposed || !_seeds!.HasClip(fretMask))
+                if (_disposed || !_phrase!.HasClip(fretMask))
                 {
                     return;
                 }
 
                 var pick = NextPick();
                 FadePreviousVoices(FREESTYLE_MIN_TRANSITION_SECONDS);
-                if (FretCount(fretMask) > 1 && _seeds!.TryGetChordClips(fretMask, _chordClips))
+                if (BassSoloPhrase.FretCount(fretMask) > 1 && _phrase!.TryGetChordClips(fretMask, _chordClips))
                 {
                     StrumChord(fretMask, pick.Gain, pick.Brightness);
                     return;
                 }
 
-                double fretGain = pick.Gain / Math.Sqrt(FretCount(fretMask));
+                double fretGain = pick.Gain / Math.Sqrt(BassSoloPhrase.FretCount(fretMask));
                 for (int fret = 1; fret < GuitarEngine.OPEN_MASK; fret <<= 1)
                 {
                     if ((fretMask & fret) == 0)
@@ -265,7 +252,7 @@ namespace YARG.Audio.BASS
                         continue;
                     }
 
-                    if (!_seeds!.TryPickClip(fret, out var clip))
+                    if (!_phrase!.TryPickClip(fret, out var clip))
                     {
                         continue;
                     }
@@ -309,7 +296,6 @@ namespace YARG.Audio.BASS
                 }
                 else if (voice.WhammySemitones != root.WhammySemitones)
                 {
-                    voice.BentClip = null;
                     voice.WhammySemitones = root.WhammySemitones;
                     SetVoiceVolume(voice, VoiceVolume(voice));
                     SetPitch(voice, glide: false);
@@ -370,15 +356,9 @@ namespace YARG.Audio.BASS
                 _whammyPercent = percent;
                 foreach (var voice in _voices)
                 {
-                    if (!voice.IsLooping)
+                    if (voice.IsLooping)
                     {
-                        continue;
-                    }
-
-                    SetPitch(voice, glide: true);
-                    if (voice.BentClip != null && Shares(voice).Bent != voice.BentShare)
-                    {
-                        SlideVoiceVolume(voice, VoiceVolume(voice), PITCH_GLIDE_SECONDS);
+                        SetPitch(voice, glide: true);
                     }
                 }
             }
@@ -403,12 +383,17 @@ namespace YARG.Audio.BASS
             }
         }
 
-        internal void PrepareSeedJobs(List<(long StartFrame, int FrameCount, float[] Samples)> jobs)
+        internal void PreparePhraseJobs(List<(long StartFrame, int FrameCount, float[] Samples)> jobs)
         {
+            if (_synthBus == null)
+            {
+                return;
+            }
+
             _library.PrepareJobs(jobs);
         }
 
-        internal void PublishSeeds(CancellationToken token)
+        internal void PublishPhrases(CancellationToken token)
         {
             _library.Publish(token);
         }
@@ -425,9 +410,7 @@ namespace YARG.Audio.BASS
                 foreach (var voice in _voices)
                 {
                     voice.Stream.Clear();
-                    voice.BentStream.Clear();
                     voice.Clip = null;
-                    voice.BentClip = null;
                     voice.Key = 0;
                     voice.IsSustain = false;
                     voice.IsLooping = false;
@@ -469,28 +452,12 @@ namespace YARG.Audio.BASS
                 foreach (var voice in _voices)
                 {
                     voice.Stream.Dispose();
-                    voice.BentStream.Dispose();
                 }
 
                 _synthReverb?.Dispose();
                 _synthAmp?.Dispose();
-                _cleanBus?.Dispose();
                 _synthBus?.Dispose();
             }
-        }
-
-        private static int FretCount(int fretMask)
-        {
-            int count = 0;
-            for (int fret = 1; fret < GuitarEngine.OPEN_MASK; fret <<= 1)
-            {
-                if ((fretMask & fret) != 0)
-                {
-                    count++;
-                }
-            }
-
-            return count;
         }
 
         private (double Gain, double Brightness, double Force) NextPick()
@@ -521,7 +488,7 @@ namespace YARG.Audio.BASS
         private void PlayRelease(Voice voice)
         {
             var releases = voice.Clip?.Releases;
-            if (!voice.IsSynth || releases == null || releases.Length == 0)
+            if (releases == null || releases.Length == 0)
             {
                 return;
             }
@@ -533,9 +500,7 @@ namespace YARG.Audio.BASS
             double brightness = 1, int delayFrames = 0)
         {
             var voice = PickVoice(key);
-            Route(voice, clip.IsSynth);
             voice.Stream.Clear();
-            voice.BentStream.Clear();
             if (delayFrames > 0)
             {
                 PushSilence(voice, delayFrames);
@@ -545,24 +510,17 @@ namespace YARG.Audio.BASS
             voice.Key = key;
             voice.IsLooping = clip.HasLoop && voice.IsFullyHeld(_heldFrets);
             voice.IsSustain = clip.IsSustain || voice.IsLooping;
-            voice.BentClip = voice.IsLooping ? clip.Bent : null;
-            voice.BentPushedFrames = firstFrame;
-            voice.WhammySemitones = clip.Bent != null ? clip.BendSemitones : clip.Note >= 0 ? _seeds?.WhammyBend(clip) ?? 0 : 0;
+            voice.WhammySemitones = clip.Note >= 0 ? _phrase?.WhammyBend(clip) ?? 0 : 0;
             voice.Gain = gain;
-            voice.IsSynth = clip.IsSynth && _synthBus != null;
             voice.PlaybackRate = clip.PlaybackRate;
-            if (voice.IsSynth)
+            var tone = _phrase?.Tone ?? BassLeadAmpTone.Default;
+            if (tone != _synthTone && _synthAmp?.SetTone(tone) == true)
             {
-                var tone = _seeds?.Tone ?? BassLeadAmpTone.Default;
-                if (tone != _synthTone && _synthAmp?.SetTone(tone) == true)
-                {
-                    _synthTone = tone;
-                    _synthReverb?.SetParams(1, tone.ReverbWet, tone.ReverbRoom, SYNTH_REVERB_DAMP, 1);
-                }
-
-                _synthAmp?.SetGain((float) Math.Clamp(_volume() * (_seeds?.SynthGain ?? 0), 0, MAX_SYNTH_GAIN));
+                _synthTone = tone;
+                _synthReverb?.SetParams(1, tone.ReverbWet, tone.ReverbRoom, SYNTH_REVERB_DAMP, 1);
             }
 
+            _synthAmp?.SetGain((float) Math.Clamp(_volume() * (_phrase?.SynthGain ?? 0), 0, MAX_SYNTH_GAIN));
             voice.DecayDbPerSecond = clip.DecayDbPerSecond;
             voice.DecayStartSeconds = Math.Max(0, clip.LoopStartFrame - firstFrame) / (double) _format.Frequency;
             voice.DecayDb = 0;
@@ -586,15 +544,13 @@ namespace YARG.Audio.BASS
             voice.VibratoRateHz = VIBRATO_RATE_HZ * (1 + VIBRATO_RATE_SPREAD * (2 * _random.NextDouble() - 1));
             voice.VibratoWanderPhase = _random.NextDouble() * 2 * Math.PI;
             voice.VibratoSeed = _random.Next();
-            voice.AttackCents = voice.IsSynth && clip.IsSustain && firstFrame == 0
+            voice.AttackCents = clip.IsSustain && firstFrame == 0
                 ? ATTACK_SHARP_CENTS * gain * (0.5 + _random.NextDouble())
                 : 0;
-            voice.TuningCents = voice.IsSynth
-                ? TUNING_SPREAD_CENTS * (_random.NextDouble() - _random.NextDouble())
-                : 0;
+            voice.TuningCents = TUNING_SPREAD_CENTS * (_random.NextDouble() - _random.NextDouble());
             SetPitch(voice, glide: false);
 
-            bool picked = voice.IsSynth && clip.IsSustain;
+            bool picked = clip.IsSustain;
             if (firstFrame == 0 && (brightness != 1 || picked))
             {
                 ShapePick(voice, clip, brightness, picked ? SCRAPE_LEVEL * gain : 0);
@@ -613,7 +569,6 @@ namespace YARG.Audio.BASS
             }
 
             Push(voice.Stream, _silence, firstFrame: 0, frameCount: frames);
-            Push(voice.BentStream, _silence, firstFrame: 0, frameCount: frames);
         }
 
         private void ShapePick(Voice voice, BassStemClip clip, double brightness, double scrape)
@@ -666,19 +621,6 @@ namespace YARG.Audio.BASS
 
             Push(voice.Stream, voice.PickBuffer, firstFrame: 0, frameCount: frames);
             voice.PushedFrames = frames;
-        }
-
-        private void Route(Voice voice, bool synth)
-        {
-            var bus = synth && _synthBus != null ? _synthBus : _cleanBus;
-            if (bus == null || voice.Bus == bus)
-            {
-                return;
-            }
-
-            voice.Bus = bus;
-            bus.Take(voice.Stream.Handle);
-            bus.Take(voice.BentStream.Handle);
         }
 
         private void FadePreviousVoices(double minSeconds)
@@ -754,11 +696,6 @@ namespace YARG.Audio.BASS
                 SetPitch(voice, glide: true);
                 Decay(voice);
                 FeedLoop(voice.Stream, clip, ref voice.PushedFrames);
-                if (voice.BentClip != null)
-                {
-                    FeedLoop(voice.BentStream, voice.BentClip, ref voice.BentPushedFrames);
-                }
-
                 return;
             }
 
@@ -855,13 +792,7 @@ namespace YARG.Audio.BASS
             }
 
             voice.Frequency = freq;
-            SetVoiceFrequency(voice, freq, glide ? PITCH_GLIDE_SECONDS : 0);
-        }
-
-        private static void SetVoiceFrequency(Voice voice, float freq, double glideSeconds)
-        {
-            SetFrequency(voice.Stream, freq, glideSeconds);
-            SetFrequency(voice.BentStream, (float) (freq * Math.Pow(2, -voice.WhammySemitones / 12.0)), glideSeconds);
+            SetFrequency(voice.Stream, freq, glide ? PITCH_GLIDE_SECONDS : 0);
         }
 
         private static void SetFrequency(PushStream stream, float freq, double glideSeconds)
@@ -881,32 +812,19 @@ namespace YARG.Audio.BASS
             ? Math.Min(1, _whammyPercent / WHAMMY_FULL_BEND_PERCENT)
             : 0;
 
-        private (double Plain, double Bent) Shares(Voice voice)
-        {
-            double bent = voice.BentClip != null && voice.WhammySemitones > 0 ? BendProgress : 0;
-            return (1 - bent, bent);
-        }
-
         private double VoiceVolume(Voice voice)
         {
-            double level = voice.IsSynth ? 1 : _volume();
-            return level * voice.Gain * Math.Pow(10, -voice.DecayDb / 20);
+            return voice.Gain * Math.Pow(10, -voice.DecayDb / 20);
         }
 
         private void SetVoiceVolume(Voice voice, double volume)
         {
-            var shares = Shares(voice);
-            voice.BentShare = shares.Bent;
-            voice.Stream.SetVolume(volume * shares.Plain);
-            voice.BentStream.SetVolume(volume * shares.Bent);
+            voice.Stream.SetVolume(volume);
         }
 
         private void SlideVoiceVolume(Voice voice, double volume, double seconds)
         {
-            var shares = Shares(voice);
-            voice.BentShare = shares.Bent;
-            SlideVolume(voice.Stream, volume * shares.Plain, seconds);
-            SlideVolume(voice.BentStream, volume * shares.Bent, seconds);
+            SlideVolume(voice.Stream, volume, seconds);
         }
 
         private static void SlideVolume(PushStream stream, double volume, double seconds)
@@ -919,15 +837,13 @@ namespace YARG.Audio.BASS
 
         private static bool IsFading(Voice voice)
         {
-            return Bass.ChannelIsSliding(voice.Stream.Handle, ChannelAttribute.Volume)
-                || Bass.ChannelIsSliding(voice.BentStream.Handle, ChannelAttribute.Volume);
+            return Bass.ChannelIsSliding(voice.Stream.Handle, ChannelAttribute.Volume);
         }
 
         private static float Loudness(Voice voice)
         {
             Bass.ChannelGetAttribute(voice.Stream.Handle, ChannelAttribute.Volume, out float volume);
-            Bass.ChannelGetAttribute(voice.BentStream.Handle, ChannelAttribute.Volume, out float bentVolume);
-            return volume + bentVolume;
+            return volume;
         }
 
         private static double DriftCents(Voice voice)
@@ -985,12 +901,10 @@ namespace YARG.Audio.BASS
         private void FadeOut(Voice voice, double fadeSeconds)
         {
             voice.Clip = null;
-            voice.BentClip = null;
             voice.Key = 0;
             voice.IsSustain = false;
             voice.IsLooping = false;
             SlideVolume(voice.Stream, 0, fadeSeconds);
-            SlideVolume(voice.BentStream, 0, fadeSeconds);
         }
     }
 }

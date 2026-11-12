@@ -90,7 +90,7 @@ namespace YARG.Audio.BASS
                 foreach (var soundboard in _soundboards)
                 {
                     int jobCount = jobs.Count;
-                    soundboard.PrepareSeedJobs(jobs);
+                    soundboard.PreparePhraseJobs(jobs);
                     if (jobs.Count > jobCount)
                     {
                         soundboards.Add(soundboard);
@@ -100,7 +100,7 @@ namespace YARG.Audio.BASS
 
             if (jobs.Count == 0)
             {
-                YargLogger.LogWarning("No freestyle seeds were registered for stem pre-rendering.");
+                YargLogger.LogWarning("No freestyle phrases were registered for stem pre-rendering.");
                 return;
             }
 
@@ -128,7 +128,7 @@ namespace YARG.Audio.BASS
 
                     foreach (var soundboard in soundboards)
                     {
-                        soundboard.PublishSeeds(token);
+                        soundboard.PublishPhrases(token);
                     }
 
                     YargLogger.LogFormatInfo("[SoloPrep] ready in {0} ms", stopwatch.ElapsedMilliseconds);
@@ -193,12 +193,6 @@ namespace YARG.Audio.BASS
         public static bool IsFreestyleStem(SongStem stem)
         {
             return AudioHelpers.PitchBendAllowedStems.Contains(stem) && FreestyleSolosRequested();
-        }
-
-        public static bool ShouldStretch()
-        {
-            return BassStretchRender.IsAvailable() &&
-                SettingsManager.Settings.EffectsMode.Value == EffectsMode.Quality;
         }
 
         /// <summary>

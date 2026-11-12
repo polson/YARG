@@ -7,7 +7,7 @@ using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
 {
-    internal sealed class BassStemSoloSeeds
+    internal sealed class BassSoloPhrase
     {
         public const int FRET_COUNT = 5;
 
@@ -37,17 +37,11 @@ namespace YARG.Audio.BASS
         public readonly double                                          StartTime;
         public readonly double                                          EndTime;
         public readonly int                                             LowestNote;
-        public readonly Dictionary<int, List<BassStemClip>>             ByKey = new();
         public readonly List<BassStemClip>                              Ladder = new();
         public readonly List<(double SongSeconds, int Note, int Fret)>  Windows = new();
         public readonly List<(double SongSeconds, int Note)>            Anchors = new();
-        public readonly List<(int Key, double SongSeconds, double PlaybackSeconds, double DurationSeconds, bool IsSustain)> Notes;
-        public readonly List<(BassStemClip Clip, float[] Raw, int AttackFrames)> Candidates = new();
-        public          float[]                                                  Region = Array.Empty<float>();
-        public          long                                                     RegionStartFrame;
-        public          bool                                                     CanStretch;
-        public          double                                                   SynthGain;
-        public          BassLeadAmpTone                                          Tone = BassLeadAmpTone.Default;
+        public          double                                          SynthGain;
+        public          BassLeadAmpTone                                 Tone = BassLeadAmpTone.Default;
 
         private const double PHRASE_RESET_SECONDS = 0.6;
 
@@ -71,19 +65,14 @@ namespace YARG.Audio.BASS
         private readonly Dictionary<BassStemClip, int> _lastTakes = new();
         private readonly Random       _random = new();
 
-        public BassStemSoloSeeds(double startTime, double endTime,
-            List<(int Key, double SongSeconds, double PlaybackSeconds, double DurationSeconds, bool IsSustain)> notes,
-            int lowestNote)
+        public BassSoloPhrase(double startTime, double endTime, int lowestNote)
         {
             StartTime = startTime;
             EndTime = endTime;
-            Notes = notes;
             LowestNote = lowestNote;
         }
 
-        public bool IsEmpty => ByKey.Count == 0;
-
-        public bool HasRegion => Region.Length > 0;
+        public bool IsEmpty => Ladder.Count == 0;
 
         public bool Covers(double soloTime)
         {
@@ -117,27 +106,15 @@ namespace YARG.Audio.BASS
 
         public bool TryGetClip(int key, out BassStemClip clip)
         {
-            if (Ladder.Count > 0)
+            int fret = Array.IndexOf(FRET_KEYS, key);
+            if (fret < 0 || Ladder.Count == 0)
             {
-                int fret = Array.IndexOf(FRET_KEYS, key);
-                if (fret >= 0)
-                {
-                    clip = RungClip(fret);
-                    return true;
-                }
-
                 clip = null!;
                 return false;
             }
 
-            if (ByKey.TryGetValue(key, out var clips))
-            {
-                clip = ClipAt(clips);
-                return true;
-            }
-
-            clip = null!;
-            return false;
+            clip = RungClip(fret);
+            return true;
         }
 
         public bool TryTakeClip(int key, out BassStemClip clip)
@@ -148,17 +125,13 @@ namespace YARG.Audio.BASS
             }
 
             int fret = Array.IndexOf(FRET_KEYS, key);
-            if (Ladder.Count > 0 && fret >= 0)
-            {
-                clip = NextTake(clip);
-                _phraseFretTotal += fret;
-                _phraseFretCount++;
-                FollowRun(fret);
-                var (windowNote, _) = CurrentWindow();
-                YargLogger.LogFormatDebug("[SoloFret] {0:0.00}s fret {1} note {2} window {3} root {4}",
-                    _songSeconds, fret, clip.Note, windowNote, _root);
-            }
-
+            clip = NextTake(clip);
+            _phraseFretTotal += fret;
+            _phraseFretCount++;
+            FollowRun(fret);
+            var (windowNote, _) = CurrentWindow();
+            YargLogger.LogFormatDebug("[SoloFret] {0:0.00}s fret {1} note {2} window {3} root {4}",
+                _songSeconds, fret, clip.Note, windowNote, _root);
             return true;
         }
 
@@ -227,17 +200,6 @@ namespace YARG.Audio.BASS
         public bool TryGetChordClips(int fretMask, List<BassStemClip> clips)
         {
             clips.Clear();
-            if (Ladder.Count == 0)
-            {
-                if (!ByKey.TryGetValue(fretMask, out var recorded))
-                {
-                    return false;
-                }
-
-                clips.Add(ClipAt(recorded));
-                return true;
-            }
-
             if (!TryTakeClip(fretMask & -fretMask, out var root))
             {
                 return false;
@@ -271,7 +233,7 @@ namespace YARG.Audio.BASS
             return PentatonicScale()[pitchClass] || ColorScale()?[pitchClass] == true;
         }
 
-        private static int FretCount(int fretMask)
+        internal static int FretCount(int fretMask)
         {
             int count = 0;
             foreach (int key in FRET_KEYS)
@@ -300,20 +262,14 @@ namespace YARG.Audio.BASS
 
         public bool TryGetAnyClip(out BassStemClip clip)
         {
-            if (Ladder.Count > 0)
+            if (Ladder.Count == 0)
             {
-                clip = RungClip(0);
-                return true;
+                clip = null!;
+                return false;
             }
 
-            foreach (var clips in ByKey.Values)
-            {
-                clip = ClipAt(clips);
-                return true;
-            }
-
-            clip = null!;
-            return false;
+            clip = RungClip(0);
+            return true;
         }
 
         private BassStemClip NextTake(BassStemClip clip)
@@ -519,11 +475,6 @@ namespace YARG.Audio.BASS
             }
 
             return (note, fret);
-        }
-
-        public bool IsPlayableRung(int index)
-        {
-            return ScaleRungs().Contains(index) || ColorRungs()?.Contains(index) == true;
         }
 
         private List<int> BoxRungs()
@@ -757,19 +708,6 @@ namespace YARG.Audio.BASS
                     rungs.Add(index);
                 }
             }
-        }
-
-        private BassStemClip ClipAt(List<BassStemClip> clips)
-        {
-            foreach (var clip in clips)
-            {
-                if (clip.SongSeconds >= _songSeconds)
-                {
-                    return clip;
-                }
-            }
-
-            return clips[clips.Count - 1];
         }
     }
 }
