@@ -28,6 +28,10 @@ namespace YARG
         public          bool    IsPractice;
         public readonly bool    IsReplay => CurrentReplay is not null;
         public          bool    PlayingWithReplay;
+
+        // Set from the recorded engine parameters, so a replay reproduces the freestyle audio the
+        // recording had even when the current setting differs.
+        public          bool    ReplayFreestyleSolos;
         public          double? SavedInputTime;
         public          bool    CrowdSfxVenueOverride;
     }

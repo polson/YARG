@@ -144,8 +144,19 @@ namespace YARG.Audio.BASS
                     $"Failed to create BASS push stream: {Bass.LastError}");
             }
 
-            _router.AddPushStream(stream, null);
+            _router.AddSource(stream, null);
             return stream;
+        }
+
+        internal BassMixerBus? CreateMixerBus(int sampleRate, int channelCount)
+        {
+            var bus = BassMixerBus.Create(sampleRate, channelCount);
+            if (bus == null || !_router.AddSource(bus, null))
+            {
+                return null;
+            }
+
+            return bus;
         }
 
         protected override List<InputDeviceInfo> GetAllInputDevices() =>

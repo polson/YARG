@@ -11,7 +11,7 @@ namespace YARG.Audio.BASS
     ///     output mixer like any other decode source. The application feeds it with decoded samples via
     ///     <see cref="Push_Internal" />; BASS resamples, downmixes, and routes it to the active output device.
     /// </summary>
-    internal sealed class BassPushStream : PushStream
+    internal sealed class BassPushStream : PushStream, IBassDecodeSource
     {
         private BassPushStream(int handle, int sampleRate, int channelCount) : base(handle, sampleRate, channelCount)
         {
@@ -20,7 +20,9 @@ namespace YARG.Audio.BASS
         /// <summary>
         ///     Raised after the underlying BASS handle has been freed, so owners can unregister it.
         /// </summary>
-        internal event Action<BassPushStream>? Disposed;
+        public event Action<IBassDecodeSource>? Disposed;
+
+        public int SourceHandle => Handle;
 
         /// <summary>
         ///     Creates a push stream that decodes into the output mixer.

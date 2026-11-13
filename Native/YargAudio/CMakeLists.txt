@@ -17,13 +17,17 @@ set(YARG_AUDIO_SOURCES
     src/dsp/DattorroReverbDsp.cpp
     src/dsp/GainDsp.cpp
     src/dsp/FreeverbDsp.cpp
+    src/dsp/LeadAmpDsp.cpp
     src/dsp/NoiseGateDsp.cpp
+    src/dsp/OverdriveDsp.cpp
     src/dsp/SineSynthDsp.cpp
+    src/dsp/SoloSpace.cpp
     src/one_shot/ScheduledSampleSource.cpp
     src/one_shot/NativeOneShotStream.cpp
     src/PlatformDynamicLibrary.cpp
     src/ReadAheadStream.cpp
     src/RenderAheadMixer.cpp
+    src/stretch/StretchRender.cpp
     src/stretch/StretchTempoStream.cpp
     src/yarg_audio_c_api.cpp
 )
@@ -94,27 +98,35 @@ if(YARG_AUDIO_BUILD_TESTS)
         tests/FreeverbDspTests.cpp
         tests/DattorroReverbDspTests.cpp
         tests/NoiseGateDspTests.cpp
+        tests/OverdriveDspTests.cpp
+        tests/LeadAmpDspTests.cpp
         tests/NoiseMorphTests.cpp
         tests/YargStretchTests.cpp
         tests/SineSynthDspTests.cpp
+        tests/SoloSpaceTests.cpp
         tests/RenderAheadMixerTests.cpp
         tests/ScheduledSampleSourceTests.cpp
         tests/NativeOneShotStreamTests.cpp
         tests/ReadAheadStreamTests.cpp
         tests/StretchTempoStreamTests.cpp
+        tests/StretchRenderTests.cpp
         src/AudioRingBuffer.cpp
         src/BassCoreBindings.cpp
         src/BassMixBindings.cpp
         src/dsp/DattorroReverbDsp.cpp
         src/dsp/GainDsp.cpp
         src/dsp/FreeverbDsp.cpp
+        src/dsp/LeadAmpDsp.cpp
         src/dsp/NoiseGateDsp.cpp
+        src/dsp/OverdriveDsp.cpp
         src/dsp/SineSynthDsp.cpp
+        src/dsp/SoloSpace.cpp
         src/one_shot/ScheduledSampleSource.cpp
         src/one_shot/NativeOneShotStream.cpp
         src/PlatformDynamicLibrary.cpp
         src/ReadAheadStream.cpp
         src/RenderAheadMixer.cpp
+        src/stretch/StretchRender.cpp
         src/stretch/StretchTempoStream.cpp
     )
     target_compile_features(yarg_audio_tests PRIVATE cxx_std_20)

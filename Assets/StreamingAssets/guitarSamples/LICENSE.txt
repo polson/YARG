@@ -1,0 +1,14 @@
+Emilyguitar, Karoryfer Samples, played and mapped by D. Smolken
+https://github.com/sfzinstruments/karoryfer.emilyguitar
+
+Epiphone Emily the Strange guitar with d'Addario Chromes flatwound strings,
+recorded direct using both pickups with all knobs on ten.
+
+Published under the Creative Commons CC0 public domain dedication:
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Files are named <MIDI note>_<layer>_<take>.opus for notes, where layers 1, 2
+and 3 are the original mp, mf and f velocity layers, and
+<MIDI note>_release_<take>.opus for the string muting noises played on note
+release. Notes were cut to 3 seconds and everything was encoded to mono Opus
+at 128 kbps.

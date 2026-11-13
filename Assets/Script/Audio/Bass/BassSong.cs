@@ -359,6 +359,12 @@ namespace YARG.Audio.BASS
 
         protected override bool AddChannels_Internal(Stream stream, params StemInfo[] stemInfos)
         {
+            byte[]? prerenderBytes = null;
+            if (stemInfos.Any(info => BassStemReplay.IsFreestyleStem(info.Stem)))
+            {
+                prerenderBytes = BassStemReplay.CopyStream(stream);
+            }
+
             if (!_stemPipeline.AddStems(stream, stemInfos, out var createdStems, out double delay))
             {
                 return false;
@@ -368,18 +374,26 @@ namespace YARG.Audio.BASS
 
             foreach (var stem in createdStems)
             {
-                CreateChannel(stem.Stem, stem.SourceHandle, stem.StreamHandles, stem.ReverbHandles);
+                var channel = CreateChannel(stem.Stem, stem.SourceHandle, stem.StreamHandles, stem.ReverbHandles);
+                if (prerenderBytes != null)
+                {
+                    int[] indices = stemInfos
+                        .Where(info => info.Stem == stem.Stem && info.Indices != null)
+                        .SelectMany(info => info.Indices!)
+                        .ToArray();
+                    channel.Replay?.SetPrerenderSource(prerenderBytes, indices);
+                }
             }
 
             return true;
         }
 
-        private void CreateChannel(SongStem stem, int sourceHandle, StreamHandle streamHandles,
+        private BassStemChannel CreateChannel(SongStem stem, int sourceHandle, StreamHandle streamHandles,
             StreamHandle reverbHandles)
         {
             var pitch = BassHelpers.SetPitchParams(stem, streamHandles, reverbHandles);
             var channel = new BassStemChannel(_manager, stem, _clampStemVolume, sourceHandle, pitch, streamHandles,
-                reverbHandles);
+                reverbHandles, () => _stemPipeline.NormalizationGain);
 
             double length = BassHelpers.GetLengthInSeconds(streamHandles.Stream);
             if (length > _length)
@@ -389,6 +403,7 @@ namespace YARG.Audio.BASS
             }
 
             _channels.Add(channel);
+            return channel;
         }
 
         protected override bool RemoveChannel_Internal(SongStem stemToRemove)

@@ -160,6 +160,7 @@ namespace YARG.Settings
                 nameof(Settings.UseStarpowerFx),
                 nameof(Settings.UseVenueSfx),
                 nameof(Settings.OverstrumAndOverhitSoundEffects),
+                nameof(Settings.FreestyleSolos),
                 nameof(Settings.AlwaysOnDrumSFX),
                 nameof(Settings.UseWhammyFx),
                 nameof(Settings.WhammyPitchShiftAmount),

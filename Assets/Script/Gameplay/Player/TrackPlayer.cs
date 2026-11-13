@@ -150,9 +150,14 @@ namespace YARG.Gameplay.Player
             GameManager.EngineManager.Unregister(EngineContainer);
 
             SetStemMuteState(muted: false);
+            OnDropOut();
             ClosePlayerMenu();
 
             GameManager.RefreshAllPlayerMenus();
+        }
+
+        protected virtual void OnDropOut()
+        {
         }
 
         public void ShowDifficulties()
@@ -346,7 +351,7 @@ namespace YARG.Gameplay.Player
 
         public InstrumentDifficulty<TNote> NoteTrack { get; private set; }
 
-        private InstrumentDifficulty<TNote> OriginalNoteTrack { get; set; }
+        protected InstrumentDifficulty<TNote> OriginalNoteTrack { get; private set; }
 
         private int _currentMultiplier;
         private int _previousMultiplier;
@@ -459,11 +464,16 @@ namespace YARG.Gameplay.Player
         {
             foreach (var phrase in NoteTrack.Phrases)
             {
-                if (phrase.Type == PhraseType.BigRockEnding)
+                if (ShowsBRELanes(phrase))
                 {
                     _brePhrases.Add(phrase);
                 }
             }
+        }
+
+        protected virtual bool ShowsBRELanes(Phrase phrase)
+        {
+            return phrase.Type == PhraseType.BigRockEnding;
         }
 
         private void InitializeUnisonEvents()
@@ -776,7 +786,7 @@ namespace YARG.Gameplay.Player
                 OnNoteSpawned(note);
 
                 // Don't spawn hit or missed notes
-                if (note.WasHit || note.WasMissed)
+                if (note.WasHit || note.WasMissed || IsEnginePlayed(note))
                 {
                     continue;
                 }
@@ -827,6 +837,10 @@ namespace YARG.Gameplay.Player
 
                 var phrase = _brePhrases[_breIndex];
                 _breIndex++;
+                if (phrase.TimeEnd < time)
+                {
+                    continue;
+                }
 
                 StartBRE(phrase.Time, phrase.TimeEnd);
             }
@@ -1099,7 +1113,7 @@ namespace YARG.Gameplay.Player
 
         protected virtual void SpawnLanesFromNote(TNote parentNote)
         {
-            if (!Engine.BaseParameters.EnableLanes)
+            if (!Engine.BaseParameters.EnableLanes || IsEnginePlayed(parentNote))
             {
                 return;
             }
@@ -1110,9 +1124,10 @@ namespace YARG.Gameplay.Player
             }
 
             bool containsLaneStart = false;
+            bool followsEnginePlayed = parentNote.PreviousNote != null && IsEnginePlayed(parentNote.PreviousNote);
             foreach (var childNote in parentNote.AllNotes)
             {
-                if (childNote.IsLaneStart)
+                if (childNote.IsLaneStart || (followsEnginePlayed && childNote.IsLane))
                 {
                     containsLaneStart = true;
                     break;
@@ -1128,7 +1143,7 @@ namespace YARG.Gameplay.Player
                 var noteRef = parentNote;
                 var thisLaneFlag = parentNote.IsTrill ? NoteFlags.Trill : NoteFlags.Tremolo;
 
-                while (noteRef != null)
+                while (noteRef != null && !IsEnginePlayed(noteRef))
                 {
                     // Create one lane for single notes, create multiple lanes for non-drum chords
                     bool containsLaneEnd = false;
@@ -1178,13 +1193,18 @@ namespace YARG.Gameplay.Player
                         {
                             if (startTime - existingLane.EndTime <= LaneElement.COMBINE_LANE_THRESHOLD)
                             {
+                                if (CrossesEnginePlayedNote(firstLaneNote.ParentOrSelf, existingLane.EndTime))
+                                {
+                                    continue;
+                                }
+
                                 // New lane will overlap with existing one
                                 // Determine if the previous notes in this chart should prevent combining
                                 int notesToSearch = firstLaneNote.IsTrill ? 2 : 1;
                                 noteRef = firstLaneNote.PreviousNote;
                                 for (int n = 0; n < notesToSearch; n++)
                                 {
-                                    if (noteRef == null)
+                                    if (noteRef == null || IsEnginePlayed(noteRef))
                                     {
                                         break;
                                     }
@@ -1294,6 +1314,24 @@ namespace YARG.Gameplay.Player
             }
         }
 
+        protected virtual bool IsEnginePlayed(TNote note) => false;
+
+        private bool CrossesEnginePlayedNote(TNote note, double laneEndTime)
+        {
+            var previousNote = note.PreviousNote;
+            while (previousNote != null && previousNote.Time >= laneEndTime)
+            {
+                if (IsEnginePlayed(previousNote))
+                {
+                    return true;
+                }
+
+                previousNote = previousNote.PreviousNote;
+            }
+
+            return false;
+        }
+
         protected void SpawnNote(TNote note)
         {
             var poolable = NotePool.KeyedTakeWithoutEnabling(note);
@@ -1316,7 +1354,7 @@ namespace YARG.Gameplay.Player
 
         protected virtual void OnNoteHit(int index, TNote note)
         {
-            if (!Player.Profile.IsBot)
+            if (!Player.Profile.IsBot && !IsEnginePlayed(note))
             {
                 _autoCalibrator.RecordAccuracy(Engine.CurrentTime, note.Time);
             }

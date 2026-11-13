@@ -319,6 +319,7 @@ namespace YARG.Gameplay
 
             // Update handlers
             _songRunner.Update();
+            PumpStemSoundboards();
 
             ApplySongSpeed();
             BeatEventHandler.Update(_songRunner.SongTime, _songRunner.VisualTime);
@@ -428,7 +429,21 @@ namespace YARG.Gameplay
         public void Pause(bool showMenu = true)
         {
             _songRunner.Pause();
+            ReleaseStemMutesInPractice();
             PauseCore(showMenu);
+        }
+
+        private void ReleaseStemMutesInPractice()
+        {
+            if (!IsPractice || _players == null)
+            {
+                return;
+            }
+
+            foreach (var player in _players)
+            {
+                player.SetStemMuteState(false);
+            }
         }
 
         private void PauseCore(bool showMenu, bool overridePause = false)

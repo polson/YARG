@@ -1229,6 +1229,10 @@
                 "Name": "Overstrum/Overhit Sound Effects",
                 "Description": "Enables the overstrum/overhit sound effect."
             },
+            "FreestyleSolos": {
+                "Name": "Freestyle Solos",
+                "Description": "If enabled, guitar solo notes are hidden and you can strum any frets to play your own solo. Solo notes are scored as if hit perfectly."
+            },
             "AlwaysOnDrumSFX": {
                 "Name": "Always-On Drum SFX",
                 "Description": "Enables Drum SFX at all times."

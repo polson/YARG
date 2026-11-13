@@ -56,6 +56,7 @@ namespace YARG.Audio.BASS
 
         public int OutputHandle => _tempoStream.Handle;
         internal double CommandDelay => _tempoStream.CommandDelay;
+        internal double NormalizationGain => _normalizer?.Gain ?? 1;
 
         public static BassStemPipeline? Create(int sampleRate, int channelCount, BassFlags flags,
             bool withCompressor = true, bool withNormalization = false, int processingThreads = 0)

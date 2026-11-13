@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using YARG.Audio.BASS;
 using YARG.Core;
 using YARG.Core.Audio;
 using YARG.Core.Game;
@@ -136,6 +137,8 @@ namespace YARG.Gameplay.Player
 
         protected SongStem _stem;
         private double _practiceSectionStartTime;
+        private FreestyleSolo _freestyle;
+        private float _whammyAxis;
 
         public override void Initialize(int index, YargPlayer player, SongChart chart, TrackView trackView, StemMixer mixer, int? currentHighScore)
         {
@@ -175,7 +178,8 @@ namespace YARG.Gameplay.Player
 
             if (!Player.IsReplay)
             {
-                EngineParams = GetEnginePreset().Create(StarMultiplierThresholds, SoloBonusStarMultiplierThresholds, isBass);
+                EngineParams = GetEnginePreset().Create(StarMultiplierThresholds, SoloBonusStarMultiplierThresholds, isBass,
+                    SettingsManager.Settings.FreestyleSolos.Value);
             }
             else
             {
@@ -241,6 +245,34 @@ namespace YARG.Gameplay.Player
             LaneElement.DefineLaneScale(Player.Profile.CurrentInstrument, LaneCount);
 
             GameManager.BeatEventHandler.Visual.Subscribe(_fretArray.PulseFretColors, BeatEventType.StrongBeat);
+
+            if (!EngineParams.FreestyleSolos)
+            {
+                return;
+            }
+
+            var soundboard = GameManager.CreateStemSoundboard(_stem);
+            if (soundboard == null)
+            {
+                YargLogger.LogWarning("Freestyle solos are enabled for this chart but stem replay is unavailable.");
+                return;
+            }
+
+            _freestyle = new FreestyleSolo(soundboard, () => Engine, setStemMuted: SetStemMuteState,
+                onPlayed: PlayFreestyleHit, fretRowMask: AllFretRows, hopoLeniency: EngineParams.HopoLeniency);
+            _freestyle.RequestPhrases(PhraseNotes(), GameManager.GetAudioPlaybackTime);
+        }
+
+        private List<GuitarNote> PhraseNotes()
+        {
+            var expert = GetExpertTrack();
+            return expert?.Notes ?? NoteTrack.Notes;
+        }
+
+        protected virtual InstrumentDifficulty<GuitarNote> GetExpertTrack()
+        {
+            var track = Chart.GetFiveFretTrack(Player.Profile.CurrentInstrument);
+            return track.TryGetDifficulty(Difficulty.Expert, out var expert) ? expert : null;
         }
 
         protected virtual void InitializeIndicatorStripes()
@@ -263,6 +295,7 @@ namespace YARG.Gameplay.Player
         protected override void ResetDifficulty(double time)
         {
             Engine.ReplaceChart(NoteTrack);
+            _freestyle?.Reset();
 
             if (Player.Profile.RangeEnabled)
             {
@@ -308,7 +341,7 @@ namespace YARG.Gameplay.Player
         protected override void UpdateVisuals(double visualTime)
         {
             // Update coda lane emissions if necessary
-            if (Engine.IsCodaActive)
+            if (Engine.IsCodaActive || ShowsFreestyleLanes && Engine.IsFreestyleActive)
             {
                 UpdateBreLaneEmissions(visualTime);
             }
@@ -326,6 +359,11 @@ namespace YARG.Gameplay.Player
         {
             foreach (var (breLaneIndex, highwayOrderingIndex) in HighwayOrdering)
             {
+                if (BRELanes[highwayOrderingIndex] == null)
+                {
+                    continue;
+                }
+
                 var mostRecentTime = FretToMostRecentTime[breLaneIndex];
                 var normalizedTimeSinceLastHit = CodaSection.GetNormalizedTimeSinceLastHit(visualTime, mostRecentTime);
                 BRELanes[highwayOrderingIndex].SetEmissionColor(normalizedTimeSinceLastHit);
@@ -419,7 +457,7 @@ namespace YARG.Gameplay.Player
         {
             for (var action = GuitarAction.GreenFret; action <= GetFretActionMax(); action++)
             {
-                _fretArray.SetPressed(GetFretIndex((int)action), Engine.IsFretHeld(action));
+                _fretArray.SetPressed(GetFretIndex((int)action), IsFretDisplayed(action));
             }
 
             if (UsingOpenLane) {
@@ -435,6 +473,10 @@ namespace YARG.Gameplay.Player
         }
 
         protected virtual GuitarAction GetFretActionMax() => GuitarAction.OrangeFret;
+
+        private int FretRowCount => (int) GetFretActionMax() + 1;
+
+        private int AllFretRows => (1 << FretRowCount) - 1;
 
         private void SpawnRangeIndicator(FiveFretRangeShift nextShift)
         {
@@ -475,9 +517,73 @@ namespace YARG.Gameplay.Player
         protected override void ResetVisuals()
         {
             base.ResetVisuals();
+            _freestyle?.Reset();
 
             StrikelineAnimator.SetSustaining(false);
             _fretArray.ResetAll();
+        }
+
+        protected virtual bool ShowsFreestyleLanes => EngineParams.FreestyleSolos;
+
+        protected override bool ShowsBRELanes(Phrase phrase)
+        {
+            return base.ShowsBRELanes(phrase) || ShowsFreestyleLanes && phrase.Type == PhraseType.Solo;
+        }
+
+        protected virtual void PlayFreestyleHit(int fretMask)
+        {
+            if (GameManager.Paused)
+            {
+                return;
+            }
+
+            if (fretMask == GuitarEngine.OPEN_MASK)
+            {
+                _fretArray.PlayFullWidthHitAnimation();
+                return;
+            }
+
+            for (int bit = 0; bit < 5; bit++)
+            {
+                if ((fretMask & (1 << bit)) != 0)
+                {
+                    _fretArray.PlayHitAnimation(bit + (int) FiveFretGuitarFret.Green);
+                }
+            }
+        }
+
+        private void LightFreestyleLanes(int fretMask)
+        {
+            if (!ShowsFreestyleLanes || !Engine.IsFreestyleActive)
+            {
+                return;
+            }
+
+            if ((fretMask & ~GuitarEngine.OPEN_MASK) == 0)
+            {
+                fretMask = GuitarEngine.OPEN_MASK;
+            }
+
+            for (int bit = 0; bit < 5; bit++)
+            {
+                if ((fretMask & (1 << bit)) != 0)
+                {
+                    SetLaneLitTime(bit + (int) FiveFretGuitarFret.Green);
+                }
+            }
+
+            if ((fretMask & GuitarEngine.OPEN_MASK) != 0)
+            {
+                SetLaneLitTime((int) FiveFretGuitarFret.Open);
+            }
+        }
+
+        private void SetLaneLitTime(int fret)
+        {
+            if (FretToMostRecentTime.ContainsKey(fret))
+            {
+                FretToMostRecentTime[fret] = GameManager.VisualTime;
+            }
         }
 
         protected override void InitializeSpawnedNote(IPoolable poolable, GuitarNote note)
@@ -594,6 +700,13 @@ namespace YARG.Gameplay.Player
         {
             base.OnNoteHit(index, chordParent);
 
+            if (IsEnginePlayed(chordParent))
+            {
+                return;
+            }
+
+            _freestyle?.StopVoices();
+
             if (GameManager.Paused) return;
 
             foreach (var note in chordParent.AllNotes)
@@ -614,6 +727,12 @@ namespace YARG.Gameplay.Player
                     _fretArray.PlayHitAnimation(note.Fret);
                 }
             }
+        }
+
+        protected override void OnDropOut()
+        {
+            base.OnDropOut();
+            _freestyle?.Reset();
         }
 
         protected override void OnNoteMissed(int index, GuitarNote chordParent)
@@ -691,8 +810,44 @@ namespace YARG.Gameplay.Player
             }
         }
 
+        protected bool IsFretDisplayed(GuitarAction action)
+        {
+            if (!Engine.IsFreestyleActive)
+            {
+                return Engine.IsFretHeld(action);
+            }
+
+            return (Engine.PlayerButtonMask & (1 << (int) action)) != 0;
+        }
+
+        protected override bool IsEnginePlayed(GuitarNote note)
+        {
+            return Engine.IsAutoPlayed(note);
+        }
+
+        protected override void UpdateInputs(double time)
+        {
+            base.UpdateInputs(time);
+            _freestyle?.Update(Engine.CurrentTime, _whammyAxis, GameManager.IsSeekingReplay);
+        }
+
+        protected override void UpdateMuteState(GuitarNote note, bool isMuted)
+        {
+            if (IsEnginePlayed(note))
+            {
+                return;
+            }
+
+            base.UpdateMuteState(note, isMuted);
+        }
+
         protected virtual void OnSustainStart(GuitarNote parent)
         {
+            if (IsEnginePlayed(parent))
+            {
+                return;
+            }
+
             foreach (var note in parent.AllNotes)
             {
                 if (parent.IsDisjoint && parent != note) continue;
@@ -726,6 +881,11 @@ namespace YARG.Gameplay.Player
 
         protected virtual void OnSustainEnd(GuitarNote parent, double timeEnded, bool finished)
         {
+            if (IsEnginePlayed(parent))
+            {
+                return;
+            }
+
             foreach (var note in parent.AllNotes)
             {
                 if (parent.IsDisjoint && parent != note) continue;
@@ -785,11 +945,36 @@ namespace YARG.Gameplay.Player
         {
             base.OnInputQueued(input);
 
-            // Update the whammy factor
-            if (_sustainCount > 0 && input.GetAction<GuitarAction>() == GuitarAction.Whammy)
+            var action = input.GetAction<GuitarAction>();
+            int fretMask = GuitarEngine.FretRowMask(action);
+            if (input.Button)
             {
-                WhammyFactor = Mathf.Clamp01(input.Axis);
-                GameManager.ChangeStemWhammyPitch(_stem, WhammyFactor);
+                if (action is GuitarAction.StrumUp or GuitarAction.StrumDown)
+                {
+                    _freestyle?.QueueStrum();
+                    LightFreestyleLanes(Engine.PlayerButtonMask);
+                }
+
+                if (fretMask != 0)
+                {
+                    _freestyle?.QueueTap(fretMask);
+                    LightFreestyleLanes(fretMask);
+                }
+            }
+            else if (fretMask != 0)
+            {
+                _freestyle?.ReleaseFrets(fretMask);
+            }
+
+            // Update the whammy factor
+            if (action == GuitarAction.Whammy)
+            {
+                _whammyAxis = Mathf.Clamp01(input.Axis);
+                if (_sustainCount > 0)
+                {
+                    WhammyFactor = _whammyAxis;
+                    GameManager.ChangeStemWhammyPitch(_stem, WhammyFactor);
+                }
             }
         }
 

@@ -18,15 +18,19 @@
 extern "C" {
 #endif
 
-#define YARG_AUDIO_ABI_VERSION 27u
+#define YARG_AUDIO_ABI_VERSION 34u
+#define YARG_LEAD_AMP_TONE_BANDS 25
 
 typedef struct yarg_stretch_stream yarg_stretch_stream;
+typedef struct yarg_stretch_render yarg_stretch_render;
 
 typedef struct yarg_read_ahead_stream yarg_read_ahead_stream;
 typedef struct yarg_gain_dsp yarg_gain_dsp;
 typedef struct yarg_freeverb_dsp yarg_freeverb_dsp;
 typedef struct yarg_dattorro_reverb_dsp yarg_dattorro_reverb_dsp;
 typedef struct yarg_noise_gate_dsp yarg_noise_gate_dsp;
+typedef struct yarg_overdrive_dsp yarg_overdrive_dsp;
+typedef struct yarg_lead_amp_dsp yarg_lead_amp_dsp;
 typedef struct yarg_one_shot_stream yarg_one_shot_stream;
 typedef struct yarg_sine_synth_dsp yarg_sine_synth_dsp;
 
@@ -49,6 +53,33 @@ typedef struct yarg_one_shot_config {
     uint32_t reserved;
     double lead_time;
 } yarg_one_shot_config;
+/* Lead amp settings. cabinet indexes the cabinets given at attach. bands_db holds one correction gain
+   per third-octave band starting at 62.5 Hz. Each pick sweeps the wah from wah_start_hz towards
+   wah_end_hz; both zero turns it off. level_gain and stem_gain are only written by
+   yarg_lead_amp_match. stem_gain scales the default tone up to the stem level. */
+typedef struct yarg_lead_amp_tone {
+    uint32_t size;
+    uint32_t cabinet;
+    float drive;
+    float bands_db[YARG_LEAD_AMP_TONE_BANDS];
+    float wah_start_hz;
+    float wah_end_hz;
+    float echo_seconds;
+    float echo_level;
+    float level_gain;
+    float stem_gain;
+} yarg_lead_amp_tone;
+/* Room a solo was recorded in: the amp echo and the Freeverb wet level and room size. level_gain is
+   written by yarg_solo_space_match and scales the dry signal so it sounds as loud with the reverb
+   as it did without. */
+typedef struct yarg_solo_space {
+    uint32_t size;
+    float echo_seconds;
+    float echo_level;
+    float reverb_wet;
+    float reverb_room;
+    float level_gain;
+} yarg_solo_space;
 /* One segment of a tone schedule, in song seconds and MIDI pitch. A segment with equal start
    and end pitch is held; unequal pitches are interpolated linearly across the segment. */
 typedef struct yarg_tone_segment {
@@ -132,6 +163,19 @@ YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_stream_get_latency(
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_stream_get_position(
     yarg_stretch_stream* stream, int64_t bytes, double* seconds);
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_stream_destroy(yarg_stretch_stream* stream);
+/* Offline constant-speed stretch over a caller-owned interleaved float buffer. Pass the same
+   buffer to begin and every read. After begin, output frame n maps to input frame
+   start_frame + n * speed. Reads move forward only; skipped output is rendered and discarded. */
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_render_create(
+    uint32_t channels, uint32_t sample_rate, float speed, yarg_stretch_render** render);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_render_set_pitch(
+    yarg_stretch_render* render, float factor, float base_hz);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_render_begin(
+    yarg_stretch_render* render, const float* input, int64_t input_frames, int64_t start_frame);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_render_read(
+    yarg_stretch_render* render, const float* input, int64_t input_frames, int64_t output_frame,
+    float* output, int32_t output_frames);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_stretch_render_destroy(yarg_stretch_render* render);
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_gain_dsp_attach(
     uint32_t channel, float initial_gain, int32_t priority,
     yarg_gain_dsp** dsp, int32_t* bass_error);
@@ -192,6 +236,39 @@ YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_reset(
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_set_params(
     yarg_noise_gate_dsp* dsp, const yarg_noise_gate_params* params);
 YARG_AUDIO_API void YARG_AUDIO_CALL yarg_noise_gate_dsp_destroy(yarg_noise_gate_dsp* dsp);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_overdrive_dsp_attach(
+    uint32_t channel, float mix, float drive, int32_t priority, yarg_overdrive_dsp** dsp, int32_t* bass_error);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_overdrive_dsp_set(
+    yarg_overdrive_dsp* dsp, float mix, float drive);
+YARG_AUDIO_API void YARG_AUDIO_CALL yarg_overdrive_dsp_destroy(yarg_overdrive_dsp* dsp);
+/* cabinets holds cabinet_count impulse responses back to back, cabinet i being cabinet_frames[i]
+   long at cabinet_rates[i]. */
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_attach(
+    uint32_t channel, float gain, const float* cabinets, const uint32_t* cabinet_frames,
+    const float* cabinet_rates, uint32_t cabinet_count,
+    int32_t priority, yarg_lead_amp_dsp** dsp, int32_t* bass_error);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_set_gain(yarg_lead_amp_dsp* dsp, float gain);
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_set_tone(
+    yarg_lead_amp_dsp* dsp, const yarg_lead_amp_tone* tone);
+/* Fits cabinet, drive, wah and correction EQ so DI notes played through the amp sound like the
+   paired stem notes. Cabinets are laid out as for attach. stem and di hold note_count mono notes back
+   to back, note i being note_frames[i] long in both, each starting at its pick. Echo fields are left
+   at their defaults. level_gain scales the fitted amp output back to the level it had at the default
+   tone. stem_gain is the factor from the default tone's level to the stem's measured level.
+   Returns YARG_AUDIO_ERROR_INVALID_STATE when too few notes are long enough. */
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_lead_amp_match(
+    float sample_rate, const float* cabinets, const uint32_t* cabinet_frames,
+    const float* cabinet_rates, uint32_t cabinet_count,
+    const float* stem, const float* di, const uint32_t* note_frames, uint32_t note_count,
+    yarg_lead_amp_tone* tone);
+/* Measures echo and reverb from the gaps after picks in a mono solo recording. pick_seconds holds the
+   chart pick times from the start of region, in order. Fields it cannot measure keep the values passed
+   in. level_gain is always written for the resulting reverb. Returns YARG_AUDIO_ERROR_INVALID_STATE
+   when the solo has too few gaps to measure. */
+YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_solo_space_match(
+    float sample_rate, const float* region, uint64_t frames,
+    const double* pick_seconds, uint32_t pick_count, yarg_solo_space* space);
+YARG_AUDIO_API void YARG_AUDIO_CALL yarg_lead_amp_dsp_destroy(yarg_lead_amp_dsp* dsp);
 YARG_AUDIO_API int32_t YARG_AUDIO_CALL yarg_one_shot_stream_create(
     const yarg_one_shot_config* config,
     const float* pcm, uint64_t pcm_sample_count,

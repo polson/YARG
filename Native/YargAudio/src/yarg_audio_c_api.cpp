@@ -4,9 +4,13 @@
 #include "dsp/DattorroReverbDsp.h"
 #include "dsp/FreeverbDsp.h"
 #include "dsp/GainDsp.h"
+#include "dsp/LeadAmpDsp.h"
 #include "dsp/NoiseGateDsp.h"
+#include "dsp/OverdriveDsp.h"
 #include "dsp/SineSynthDsp.h"
+#include "dsp/SoloSpace.h"
 #include "one_shot/NativeOneShotStream.h"
+#include "stretch/StretchRender.h"
 #include "stretch/StretchTempoStream.h"
 #include "yarg_audio.h"
 
@@ -15,11 +19,15 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <new>
+#include <vector>
 
 static_assert(sizeof(yarg_read_ahead_config) == 32);
 static_assert(sizeof(yarg_read_ahead_stats) == 104);
 static_assert(sizeof(yarg_read_ahead_position_snapshot) == 24);
 static_assert(sizeof(yarg_one_shot_config) == 24);
+static_assert(sizeof(yarg_lead_amp_tone) == 136);
+static_assert(sizeof(yarg_solo_space) == 24);
 static_assert(sizeof(yarg_freeverb_params) == 24);
 static_assert(sizeof(yarg_dattorro_reverb_params) == 24);
 static_assert(sizeof(yarg_noise_gate_params) == 24);
@@ -162,6 +170,60 @@ int32_t YARG_AUDIO_CALL yarg_stretch_stream_destroy(yarg_stretch_stream* stream)
     return YARG_AUDIO_OK;
 }
 
+int32_t YARG_AUDIO_CALL yarg_stretch_render_create(uint32_t channels, uint32_t sample_rate,
+    float speed, yarg_stretch_render** render) {
+    using yarg::audio::StretchRender;
+    if (!render || channels == 0 || channels > 8 || sample_rate < 8000 || sample_rate > 192000 ||
+        !std::isfinite(speed) || speed < StretchRender::MIN_SPEED || speed > StretchRender::MAX_SPEED) {
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    }
+    *render = nullptr;
+    try {
+        *render = new yarg_stretch_render(static_cast<int>(channels),
+            static_cast<int>(sample_rate), speed);
+        return YARG_AUDIO_OK;
+    } catch (...) {
+        return YARG_AUDIO_ERROR_INTERNAL;
+    }
+}
+
+int32_t YARG_AUDIO_CALL yarg_stretch_render_set_pitch(yarg_stretch_render* render, float factor,
+    float base_hz) {
+    using yarg::audio::StretchRender;
+    if (!render || !std::isfinite(factor) || factor < StretchRender::MIN_PITCH ||
+        factor > StretchRender::MAX_PITCH || !std::isfinite(base_hz) || base_hz < 0) {
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    }
+    render->value.setPitch(factor, base_hz);
+    return YARG_AUDIO_OK;
+}
+
+int32_t YARG_AUDIO_CALL yarg_stretch_render_begin(yarg_stretch_render* render, const float* input,
+    int64_t input_frames, int64_t start_frame) {
+    if (!render || !input || input_frames <= 0 || start_frame < 0 || start_frame >= input_frames) {
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    }
+    render->value.begin(input, input_frames, start_frame);
+    return YARG_AUDIO_OK;
+}
+
+int32_t YARG_AUDIO_CALL yarg_stretch_render_read(yarg_stretch_render* render, const float* input,
+    int64_t input_frames, int64_t output_frame, float* output, int32_t output_frames) {
+    if (!render || !input || input_frames <= 0 || !output || output_frames < 0) {
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    }
+    return render->value.read(input, input_frames, output_frame, output, output_frames)
+        ? YARG_AUDIO_OK : YARG_AUDIO_ERROR_INVALID_STATE;
+}
+
+int32_t YARG_AUDIO_CALL yarg_stretch_render_destroy(yarg_stretch_render* render) {
+    if (!render) {
+        return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+    }
+    delete render;
+    return YARG_AUDIO_OK;
+}
+
 int32_t YARG_AUDIO_CALL yarg_gain_dsp_attach(uint32_t channel,
     float initial_gain, int32_t priority, yarg_gain_dsp** dsp, int32_t* bass_error) {
     return yarg::audio::gainDspAttach(coreBassBindings(), channel, initial_gain,
@@ -272,6 +334,68 @@ int32_t YARG_AUDIO_CALL yarg_noise_gate_dsp_set_params(yarg_noise_gate_dsp* dsp,
 
 void YARG_AUDIO_CALL yarg_noise_gate_dsp_destroy(yarg_noise_gate_dsp* dsp) {
     (void) yarg::audio::noiseGateDspDestroy(dsp);
+}
+
+int32_t YARG_AUDIO_CALL yarg_overdrive_dsp_attach(uint32_t channel, float mix, float drive,
+    int32_t priority, yarg_overdrive_dsp** dsp, int32_t* bass_error) {
+    return yarg::audio::overdriveDspAttach(coreBassBindings(), channel, mix, drive, priority, dsp, bass_error);
+}
+
+int32_t YARG_AUDIO_CALL yarg_overdrive_dsp_set(yarg_overdrive_dsp* dsp, float mix, float drive) {
+    return yarg::audio::overdriveDspSet(dsp, mix, drive);
+}
+
+void YARG_AUDIO_CALL yarg_overdrive_dsp_destroy(yarg_overdrive_dsp* dsp) {
+    (void) yarg::audio::overdriveDspDestroy(dsp);
+}
+
+int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_attach(uint32_t channel, float gain, const float* cabinets,
+    const uint32_t* cabinet_frames, const float* cabinet_rates, uint32_t cabinet_count,
+    int32_t priority, yarg_lead_amp_dsp** dsp, int32_t* bass_error) {
+    if (dsp) *dsp = nullptr;
+    if (bass_error) *bass_error = 0;
+    try {
+        std::vector<yarg::audio::Cabinet> list;
+        if (!yarg::audio::cabinetList(cabinets, cabinet_frames, cabinet_rates, cabinet_count, list)) {
+            return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+        }
+        return yarg::audio::leadAmpDspAttach(coreBassBindings(), channel, gain, list.data(), list.size(), priority,
+            dsp, bass_error);
+    } catch (const std::bad_alloc&) {
+        return YARG_AUDIO_ERROR_INTERNAL;
+    }
+}
+
+int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_set_gain(yarg_lead_amp_dsp* dsp, float gain) {
+    return yarg::audio::leadAmpDspSetGain(dsp, gain);
+}
+
+int32_t YARG_AUDIO_CALL yarg_lead_amp_dsp_set_tone(yarg_lead_amp_dsp* dsp, const yarg_lead_amp_tone* tone) {
+    return yarg::audio::leadAmpDspSetTone(dsp, tone);
+}
+
+int32_t YARG_AUDIO_CALL yarg_lead_amp_match(float sample_rate, const float* cabinets, const uint32_t* cabinet_frames,
+    const float* cabinet_rates, uint32_t cabinet_count, const float* stem, const float* di,
+    const uint32_t* note_frames, uint32_t note_count, yarg_lead_amp_tone* tone) {
+    try {
+        std::vector<yarg::audio::Cabinet> list;
+        if (!yarg::audio::cabinetList(cabinets, cabinet_frames, cabinet_rates, cabinet_count, list)) {
+            return YARG_AUDIO_ERROR_INVALID_ARGUMENT;
+        }
+        return yarg::audio::leadAmpMatch(sample_rate, list.data(), list.size(), stem, di, note_frames, note_count,
+            tone);
+    } catch (const std::bad_alloc&) {
+        return YARG_AUDIO_ERROR_INTERNAL;
+    }
+}
+
+int32_t YARG_AUDIO_CALL yarg_solo_space_match(float sample_rate, const float* region, uint64_t frames,
+    const double* pick_seconds, uint32_t pick_count, yarg_solo_space* space) {
+    return yarg::audio::soloSpaceMatch(sample_rate, region, frames, pick_seconds, pick_count, space);
+}
+
+void YARG_AUDIO_CALL yarg_lead_amp_dsp_destroy(yarg_lead_amp_dsp* dsp) {
+    (void) yarg::audio::leadAmpDspDestroy(dsp);
 }
 
 int32_t YARG_AUDIO_CALL yarg_one_shot_stream_create(

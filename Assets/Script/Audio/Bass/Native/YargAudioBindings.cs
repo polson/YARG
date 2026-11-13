@@ -30,6 +30,12 @@ namespace YARG.Audio.BASS.Native
         private static GainDspAttachDelegate? _gainDspAttach;
         private static GainDspSetGainDelegate? _gainDspSetGain;
         private static GainDspDestroyDelegate? _gainDspDestroy;
+        private static LeadAmpDspAttachDelegate? _leadAmpDspAttach;
+        private static LeadAmpDspSetGainDelegate? _leadAmpDspSetGain;
+        private static LeadAmpDspSetToneDelegate? _leadAmpDspSetTone;
+        private static LeadAmpMatchDelegate? _leadAmpMatch;
+        private static SoloSpaceMatchDelegate? _soloSpaceMatch;
+        private static LeadAmpDspDestroyDelegate? _leadAmpDspDestroy;
         private static FreeverbDspAttachDelegate? _freeverbDspAttach;
         private static FreeverbDspResetDelegate? _freeverbDspReset;
         private static FreeverbDspSetParamsDelegate? _freeverbDspSetParams;
@@ -142,6 +148,29 @@ namespace YARG.Audio.BASS.Native
 
         internal static void GainDspDestroy(IntPtr dsp) =>
             EnsureBound(ref _gainDspDestroy, "yarg_gain_dsp_destroy")(dsp);
+
+        internal static int LeadAmpDspAttach(int channel, float gain, float[]? cabinets, uint[]? cabinetFrames, float[]? cabinetRates, int cabinetCount, int priority, out BassLeadAmpDsp dsp, out int bassError) =>
+            EnsureBound(ref _leadAmpDspAttach, "yarg_lead_amp_dsp_attach")(channel, gain, cabinets, cabinetFrames, cabinetRates, cabinetCount, priority, out dsp, out bassError);
+
+        internal static int LeadAmpDspSetGain(BassLeadAmpDsp dsp, float gain) =>
+            EnsureBound(ref _leadAmpDspSetGain, "yarg_lead_amp_dsp_set_gain")(dsp, gain);
+
+        internal static int LeadAmpDspSetTone(BassLeadAmpDsp dsp, ref BassLeadAmpDsp.LeadAmpToneParams tone) =>
+            EnsureBound(ref _leadAmpDspSetTone, "yarg_lead_amp_dsp_set_tone")(dsp, ref tone);
+
+        internal static int LeadAmpMatch(float sampleRate, float[]? cabinets, uint[]? cabinetFrames, float[]? cabinetRates,
+            int cabinetCount, float[] stem, float[] di, uint[] noteFrames, int noteCount,
+            ref BassLeadAmpDsp.LeadAmpToneParams tone) =>
+            EnsureBound(ref _leadAmpMatch, "yarg_lead_amp_match")(sampleRate, cabinets, cabinetFrames, cabinetRates,
+                cabinetCount, stem, di, noteFrames, noteCount, ref tone);
+
+        internal static int SoloSpaceMatch(float sampleRate, float[]? region, ulong frames, double[] pickSeconds,
+            int pickCount, ref BassLeadAmpDsp.SoloSpaceParams space) =>
+            EnsureBound(ref _soloSpaceMatch, "yarg_solo_space_match")(sampleRate, region, frames, pickSeconds, pickCount,
+                ref space);
+
+        internal static void LeadAmpDspDestroy(IntPtr dsp) =>
+            EnsureBound(ref _leadAmpDspDestroy, "yarg_lead_amp_dsp_destroy")(dsp);
 
         internal static int FreeverbDspAttach(int channel, float dryMix, float wetMix, float roomSize, float damp, float width, int priority, out BassFreeverbDsp dsp, out int bassError) =>
             EnsureBound(ref _freeverbDspAttach, "yarg_freeverb_dsp_attach")(channel, dryMix, wetMix, roomSize, damp, width, priority, out dsp, out bassError);
@@ -279,6 +308,12 @@ namespace YARG.Audio.BASS.Native
             _gainDspAttach = GetFunction<GainDspAttachDelegate>(handle, "yarg_gain_dsp_attach");
             _gainDspSetGain = GetFunction<GainDspSetGainDelegate>(handle, "yarg_gain_dsp_set_gain");
             _gainDspDestroy = GetFunction<GainDspDestroyDelegate>(handle, "yarg_gain_dsp_destroy");
+            _leadAmpDspAttach = GetFunction<LeadAmpDspAttachDelegate>(handle, "yarg_lead_amp_dsp_attach");
+            _leadAmpDspSetGain = GetFunction<LeadAmpDspSetGainDelegate>(handle, "yarg_lead_amp_dsp_set_gain");
+            _leadAmpDspSetTone = GetFunction<LeadAmpDspSetToneDelegate>(handle, "yarg_lead_amp_dsp_set_tone");
+            _leadAmpMatch = GetFunction<LeadAmpMatchDelegate>(handle, "yarg_lead_amp_match");
+            _soloSpaceMatch = GetFunction<SoloSpaceMatchDelegate>(handle, "yarg_solo_space_match");
+            _leadAmpDspDestroy = GetFunction<LeadAmpDspDestroyDelegate>(handle, "yarg_lead_amp_dsp_destroy");
             _freeverbDspAttach = GetFunction<FreeverbDspAttachDelegate>(handle, "yarg_freeverb_dsp_attach");
             _freeverbDspReset = GetFunction<FreeverbDspResetDelegate>(handle, "yarg_freeverb_dsp_reset");
             _freeverbDspSetParams = GetFunction<FreeverbDspSetParamsDelegate>(handle, "yarg_freeverb_dsp_set_params");
@@ -430,6 +465,27 @@ namespace YARG.Audio.BASS.Native
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate void GainDspDestroyDelegate(IntPtr dsp);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int LeadAmpDspAttachDelegate(int channel, float gain, float[]? cabinets, uint[]? cabinetFrames, float[]? cabinetRates, int cabinetCount, int priority, out BassLeadAmpDsp dsp, out int bassError);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int LeadAmpDspSetGainDelegate(BassLeadAmpDsp dsp, float gain);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int LeadAmpDspSetToneDelegate(BassLeadAmpDsp dsp, ref BassLeadAmpDsp.LeadAmpToneParams tone);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int LeadAmpMatchDelegate(float sampleRate, float[]? cabinets, uint[]? cabinetFrames,
+            float[]? cabinetRates, int cabinetCount, float[] stem, float[] di, uint[] noteFrames, int noteCount,
+            ref BassLeadAmpDsp.LeadAmpToneParams tone);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate int SoloSpaceMatchDelegate(float sampleRate, float[]? region, ulong frames, double[] pickSeconds,
+            int pickCount, ref BassLeadAmpDsp.SoloSpaceParams space);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate void LeadAmpDspDestroyDelegate(IntPtr dsp);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int FreeverbDspAttachDelegate(int channel, float dryMix, float wetMix, float roomSize, float damp, float width, int priority, out BassFreeverbDsp dsp, out int bassError);

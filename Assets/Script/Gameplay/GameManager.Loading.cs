@@ -1,12 +1,14 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 using YARG.Core;
 using YARG.Core.Audio;
 using YARG.Core.Chart;
 using YARG.Core.Engine;
+using YARG.Core.Engine.Guitar;
 using YARG.Core.Logging;
 using YARG.Core.Replays;
 using YARG.Gameplay.HUD;
@@ -231,6 +233,7 @@ namespace YARG.Gameplay
 
             // Spawn players
             CreatePlayers();
+            StartStemPrerenders();
             YargLogger.LogFormatDebug("Calculating star cutoffs for {0} players", _players.Count);
             EngineManager.StarScoreThresholds = EngineManager.GetStarScoreCutoffs(_players.ConvertAll(p => p.BaseEngine.StarScoreThresholds));
             YargLogger.LogFormatDebug("Star score thresholds: {0}", string.Join(", ", EngineManager.StarScoreThresholds));
@@ -339,6 +342,8 @@ namespace YARG.Gameplay
 
             ReplayData = data;
             YargPlayers = players;
+            GlobalVariables.State.ReplayFreestyleSolos = data.Frames.Any(frame =>
+                frame.EngineParameters is GuitarEngineParameters { FreestyleSolos: true });
             return true;
         }
 
