@@ -1,148 +1,97 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Threading;
-using System.Threading.Tasks;
-using YARG.Audio.BASS.Effects;
 using YARG.Core.Chart;
-using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
 {
     /// <summary>
-    /// Turns the engine's solo phrases into the phrases the stem soundboard plays, fitting the
-    /// synth guitar's tone, space and level to the recorded solo.
+    /// Owns the thread-safe queue of solo phrases the stem soundboard selects from: the main thread
+    /// requests them, the pre-render task prepares them, and selection reads the published set.
     /// </summary>
     internal sealed class BassSoloPhraseLibrary
     {
-        private const double REGION_PREROLL_SECONDS    = 0.1;
-        private const double PITCH_MAX_MEASURE_SECONDS = 0.4;
-        private const double LEVEL_SECONDS             = 0.3;
-        private const float  PITCH_MIN_VOICED          = 0.8f;
-        private const float  ANCHOR_MIN_VOICED         = 0.6f;
-        private const float  PITCH_AGREE_CENTS         = 35f;
-        private const int    ANCHOR_NEIGHBOURS         = 2;
-        private const int    ANCHOR_OUTLIER_SEMITONES  = 10;
-        private const double MIN_WINDOW_SECONDS        = 0.3;
-        private const double DEPARTURE_CENTS           = 80;
-        private const int    DEPARTURE_READINGS        = 3;
-        private const double BEND_CHECK_SECONDS        = 0.15;
-        private const float  BEND_MIN_CENTS            = 30f;
-        private const float  BEND_MAX_CENTS            = 400f;
-        private const int    MIN_SYNTH_ANCHORS         = 8;
-        private const int    CHORD_ANCHOR_NOTE         = 60;
-        private const double SYNTH_NOTE_LEVEL          = 1.32;
-        private const double DEFAULT_SOLO_LEVEL        = 0.1;
-        private const double TONE_MIN_NOTE_SECONDS     = 0.1;
-        private const double TONE_MAX_NOTE_SECONDS     = 0.35;
-        private const int    MAX_TONE_NOTES            = 8;
-        private const double MAX_SPACE_SECONDS         = 40;
-        private const double MAX_ANALYSIS_SECONDS      = 3;
+        private const double REGION_PREROLL_SECONDS = 0.1;
+        private const double MAX_SPACE_SECONDS      = 40;
+        private const double MAX_ANALYSIS_SECONDS   = 3;
 
-        private const double DECAY_DEFAULT_DB_PER_SEC  = 3;
-        private const double DECAY_MIN_DB_PER_SEC      = 1;
-        private const double DECAY_MAX_DB_PER_SEC      = 10;
-
-        private sealed class RenderJob
+        /// <summary>
+        /// One chart note the solo preparation renders: its fret key, chart time, playback time, clip
+        /// length and whether it holds.
+        /// </summary>
+        internal readonly struct SoloNote
         {
-            public readonly BassSoloPhrase Phrase;
-            public readonly List<(int Key, double SongSeconds, double PlaybackSeconds, double DurationSeconds, bool IsSustain)> Notes;
+            public readonly int    Key;
+            public readonly double SongSeconds;
+            public readonly double PlaybackSeconds;
+            public readonly double DurationSeconds;
+            public readonly bool   IsSustain;
+
+            public SoloNote(int key, double songSeconds, double playbackSeconds, double durationSeconds,
+                bool isSustain)
+            {
+                Key = key;
+                SongSeconds = songSeconds;
+                PlaybackSeconds = playbackSeconds;
+                DurationSeconds = durationSeconds;
+                IsSustain = isSustain;
+            }
+        }
+
+        /// <summary>
+        /// The decode, analysis and publish work for one solo phrase.
+        /// </summary>
+        internal sealed class RenderJob
+        {
+            public readonly double                             StartTime;
+            public readonly double                             EndTime;
+            public readonly List<SoloNote>                     Notes;
             public readonly List<(BassStemClip Clip, int Key)> Clips = new();
             public          float[]                            Region = Array.Empty<float>();
             public          long                               RegionStartFrame;
 
-            public RenderJob(BassSoloPhrase phrase,
-                List<(int Key, double SongSeconds, double PlaybackSeconds, double DurationSeconds, bool IsSustain)> notes)
+            public RenderJob(List<SoloNote> notes)
             {
-                Phrase = phrase;
                 Notes = notes;
+                StartTime = notes[0].SongSeconds;
+                EndTime = notes[^1].SongSeconds;
+            }
+
+            public bool Covers(double soloTime)
+            {
+                return soloTime >= StartTime && soloTime <= EndTime;
             }
         }
 
-        // Lock order: the replay lock or a soundboard lock is always taken before this one.
-        private readonly object           _lock = new();
-        private readonly BassStemFormat   _format;
-        private          List<RenderJob>  _requests  = new();
-        private          List<RenderJob>  _pending   = new();
+        // Lock order: the replay lock is taken before this one, and selection takes this one before
+        // the backing chord track.
+        private readonly object               _lock = new();
+        private readonly BassStemFormat       _format;
+        private readonly BassChordTrack?      _backingChords;
+        private readonly BassSoloPreparation  _preparation;
+        private          List<RenderJob>      _requests = new();
+        private          List<RenderJob>      _pending = new();
         private readonly List<BassSoloPhrase> _published = new();
-        private readonly BassChordTrack?  _chords;
-        private          double           _requestedSoloTime;
-        private readonly Func<BassSynthGuitar?>? _loadSynth;
-        private          BassSynthGuitar? _synth;
-        private readonly BassCabinetSet?  _cabinets;
+        private          double               _requestedSoloTime;
 
-        public BassSoloPhraseLibrary(BassStemFormat format, BassChordTrack? chords, Func<BassSynthGuitar?>? loadSynth,
-            BassCabinetSet? cabinets)
+        public BassSoloPhraseLibrary(BassStemFormat format, BassChordTrack? backingChords, BassCabinetSet? cabinets)
         {
             _format = format;
-            _chords = chords;
-            _loadSynth = loadSynth;
-            _cabinets = cabinets;
+            _backingChords = backingChords;
+            _preparation = new BassSoloPreparation(format, backingChords, cabinets);
         }
 
         public void RequestPhrases(List<GuitarNote> notes, Func<double, double> playbackTime)
         {
-            var phrases = SoloPhrases(notes);
-            var requests = new List<RenderJob>(phrases.Count);
-            foreach (var phrase in phrases)
-            {
-                var phraseNotes = new List<(int Key, double SongSeconds, double PlaybackSeconds, double DurationSeconds, bool IsSustain)>();
-                foreach (var note in notes)
-                {
-                    if (note.Tick < phrase.StartTick || note.Tick > phrase.EndTick)
-                    {
-                        continue;
-                    }
-
-                    phraseNotes.Add((note.NoteMask, note.Time, playbackTime(note.Time),
-                        ClipDuration(note), HasSustain(note)));
-                }
-
-                if (phraseNotes.Count == 0)
-                {
-                    continue;
-                }
-
-                var solo = new BassSoloPhrase(phraseNotes[0].SongSeconds, phraseNotes[^1].SongSeconds);
-                requests.Add(new RenderJob(solo, phraseNotes));
-            }
-
+            var requests = CreateRequests(notes, playbackTime);
             lock (_lock)
             {
                 _requests = requests;
             }
 
-            _chords?.RequestRegions(requests.ConvertAll(request => (request.Phrase.StartTime, request.Phrase.EndTime)), playbackTime);
-        }
-
-        private static List<(uint StartTick, uint EndTick)> SoloPhrases(List<GuitarNote> notes)
-        {
-            var phrases = new List<(uint StartTick, uint EndTick)>();
-            int start = -1;
-            for (int index = 0; index < notes.Count; index++)
-            {
-                var note = notes[index];
-                if (!note.IsSolo)
-                {
-                    start = -1;
-                    continue;
-                }
-
-                if (start < 0)
-                {
-                    start = index;
-                }
-
-                bool ends = note.IsSoloEnd || index + 1 == notes.Count || !notes[index + 1].IsSolo;
-                if (ends)
-                {
-                    phrases.Add((notes[start].Tick, note.Tick));
-                    start = -1;
-                }
-            }
-
-            return phrases;
+            _backingChords?.RequestRegions(requests.ConvertAll(request => (request.StartTime, request.EndTime)),
+                playbackTime);
         }
 
         public BassSoloPhrase? SelectPhrase(double soloTime, double songTime)
@@ -151,7 +100,7 @@ namespace YARG.Audio.BASS
             {
                 _requestedSoloTime = soloTime;
                 var phrase = Find(soloTime);
-                phrase?.SetPosition(songTime, _chords);
+                phrase?.SetPosition(songTime, _backingChords);
                 return phrase;
             }
         }
@@ -170,7 +119,16 @@ namespace YARG.Audio.BASS
         {
             lock (_lock)
             {
-                BuildJobs(_requests, jobs);
+                foreach (var request in _requests)
+                {
+                    foreach (var note in request.Notes)
+                    {
+                        AddNoteWindow(request, note, jobs);
+                    }
+
+                    AddRegionJob(request, jobs);
+                }
+
                 _pending = _requests;
             }
         }
@@ -186,15 +144,7 @@ namespace YARG.Audio.BASS
                 _published.Clear();
             }
 
-            if (_loadSynth != null && _synth == null)
-            {
-                var stopwatch = Stopwatch.StartNew();
-                _synth = _loadSynth();
-                YargLogger.LogFormatInfo("[SoloSynth] guitar samples {0} in {1} ms",
-                    _synth != null ? "loaded" : "failed to load", stopwatch.ElapsedMilliseconds);
-            }
-
-            if (_synth == null)
+            if (!_preparation.TryLoadSynth())
             {
                 return;
             }
@@ -207,35 +157,73 @@ namespace YARG.Audio.BASS
                     requestedSoloTime = _requestedSoloTime;
                 }
 
-                var job = TakeNext(pending, requestedSoloTime);
-                if (!Prepare(job, token))
+                var phrase = _preparation.Prepare(TakeNext(pending, requestedSoloTime), token);
+                if (phrase == null)
                 {
                     return;
                 }
 
                 lock (_lock)
                 {
-                    _published.Add(job.Phrase);
+                    _published.Add(phrase);
                 }
             }
         }
 
-        private void BuildJobs(List<RenderJob> requests,
-            List<(long StartFrame, int FrameCount, float[] Samples)> jobs)
+        private BassSoloPhrase? Find(double soloTime)
         {
-            foreach (var job in requests)
+            foreach (var phrase in _published)
             {
-                foreach (var note in job.Notes)
+                if (phrase.Covers(soloTime))
                 {
-                    AddNoteWindow(job, note, jobs);
+                    return phrase;
                 }
-
-                AddRegionJob(job, jobs, _format.FramesFor(MAX_SPACE_SECONDS));
             }
+
+            return null;
         }
 
-        private void AddNoteWindow(RenderJob job,
-            (int Key, double SongSeconds, double PlaybackSeconds, double DurationSeconds, bool IsSustain) note,
+        private static RenderJob TakeNext(List<RenderJob> queue, double soloTime)
+        {
+            int index = queue.FindIndex(job => job.Covers(soloTime));
+            if (index < 0)
+            {
+                index = 0;
+            }
+
+            var job = queue[index];
+            queue.RemoveAt(index);
+            return job;
+        }
+
+        private static List<RenderJob> CreateRequests(List<GuitarNote> notes, Func<double, double> playbackTime)
+        {
+            var spans = notes.SoloSpans();
+            var requests = new List<RenderJob>(spans.Count);
+            foreach (var (startTick, endTick) in spans)
+            {
+                var soloNotes = new List<SoloNote>();
+                foreach (var note in notes)
+                {
+                    if (note.Tick < startTick || note.Tick > endTick)
+                    {
+                        continue;
+                    }
+
+                    soloNotes.Add(new SoloNote(note.NoteMask, note.Time, playbackTime(note.Time),
+                        note.ClipDuration(), note.HasSustain()));
+                }
+
+                if (soloNotes.Count > 0)
+                {
+                    requests.Add(new RenderJob(soloNotes));
+                }
+            }
+
+            return requests;
+        }
+
+        private void AddNoteWindow(RenderJob request, SoloNote note,
             List<(long StartFrame, int FrameCount, float[] Samples)> jobs)
         {
             long chartFrame = (long) Math.Round(note.PlaybackSeconds * _format.Frequency);
@@ -258,16 +246,15 @@ namespace YARG.Audio.BASS
                 IsSustain = note.IsSustain,
                 ChartFrame = leadFrames,
             };
-            job.Clips.Add((clip, note.Key));
+            request.Clips.Add((clip, note.Key));
             jobs.Add((startFrame, frameCount, clip.Samples));
         }
 
-        private void AddRegionJob(RenderJob job, List<(long StartFrame, int FrameCount, float[] Samples)> jobs,
-            int maxFrames)
+        private void AddRegionJob(RenderJob request, List<(long StartFrame, int FrameCount, float[] Samples)> jobs)
         {
             long firstFrame = long.MaxValue;
             long endFrame = 0;
-            foreach (var (clip, _) in job.Clips)
+            foreach (var (clip, _) in request.Clips)
             {
                 firstFrame = Math.Min(firstFrame, clip.StartFrame);
                 endFrame = Math.Max(endFrame, clip.StartFrame + clip.FrameCount);
@@ -278,510 +265,10 @@ namespace YARG.Audio.BASS
                 return;
             }
 
-            job.RegionStartFrame = Math.Max(0, firstFrame - _format.FramesFor(REGION_PREROLL_SECONDS));
-            int frameCount = (int) Math.Min(endFrame - job.RegionStartFrame, maxFrames);
-            job.Region = new float[frameCount * _format.Channels];
-            jobs.Add((job.RegionStartFrame, frameCount, job.Region));
-        }
-
-        private bool Prepare(RenderJob job, CancellationToken token)
-        {
-            var clips = new List<(BassStemClip Clip, bool SingleNote, int Fret)>(job.Clips.Count);
-            foreach (var (clip, key) in job.Clips)
-            {
-                bool singleNote = (key & (key - 1)) == 0;
-                int fret = singleNote ? ChartFret(key) : -1;
-                clips.Add((clip, singleNote, fret));
-            }
-
-            var options = new ParallelOptions
-            {
-                MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2),
-            };
-            var pitches = new (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)?[clips.Count];
-            var levels = new double[clips.Count];
-            var decays = new double[clips.Count];
-            Parallel.For(0, clips.Count, options,
-                () => (Pitch: new BassSoloPitch(_format.Frequency), Readings: new List<float>()),
-                (index, state, local) =>
-                {
-                    if (token.IsCancellationRequested)
-                    {
-                        state.Stop();
-                        return local;
-                    }
-
-                    var (clip, singleNote, _) = clips[index];
-                    clip.AlignToOnset(_format);
-                    clip.TrimToCleanEnd(_format);
-                    clip.AttackEndFrame = clip.MeasureAttackEnd(_format);
-                    decays[index] = clip.MeasureDecay(_format);
-                    levels[index] = Level(clip);
-                    if (singleNote)
-                    {
-                        pitches[index] = Measure(clip, local.Pitch, local.Readings);
-                    }
-
-                    return local;
-                },
-                _ => { });
-            if (token.IsCancellationRequested)
-            {
-                return false;
-            }
-
-            PrepareSynth(job, clips, pitches, levels, decays);
-            return true;
-        }
-
-        private void PrepareSynth(RenderJob job, List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,
-            (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)?[] pitches, double[] levels,
-            double[] decays)
-        {
-            var phrase = job.Phrase;
-            var tone = MatchTone(clips, pitches);
-            if (tone == null)
-            {
-                YargLogger.LogInfo("[SoloSynth] no notes usable for a tone match, using the default amp tone");
-                tone = BassLeadAmpTone.Default;
-            }
-
-            var anchors = new List<(double SongSeconds, int Note, int Fret)>();
-            var tunings = new List<double>();
-            for (int index = 0; index < clips.Count; index++)
-            {
-                if (pitches[index] is not { } pitch)
-                {
-                    continue;
-                }
-
-                if (pitch.Bent || pitch.Voiced < ANCHOR_MIN_VOICED
-                    || pitch.Note < BassSynthGuitar.LOWEST_NOTE || pitch.Note > BassSynthGuitar.HIGHEST_NOTE)
-                {
-                    continue;
-                }
-
-                anchors.Add((clips[index].Clip.SongSeconds, pitch.Note, clips[index].Fret));
-                tunings.Add(1200 * Math.Log(pitch.Hz / BassSynthGuitar.NoteHz(pitch.Note), 2));
-            }
-
-            int measured = anchors.Count;
-            if (measured < MIN_SYNTH_ANCHORS)
-            {
-                AddChordAnchors(clips, anchors);
-            }
-
-            tunings.Sort();
-            double tuningCents = tunings.Count > 0 ? tunings[tunings.Count / 2] : 0;
-            var ladder = _synth!.Ladder(tuningCents);
-            var windows = new List<(double SongSeconds, int Note, int Fret)>();
-            var anchorNotes = new List<(double SongSeconds, int Note)>();
-            SetWindows(anchors, anchorNotes, windows);
-
-            var heard = Array.FindAll(levels, level => level > 0);
-            Array.Sort(heard);
-            double soloLevel = heard.Length > 0 ? heard[heard.Length / 2] : DEFAULT_SOLO_LEVEL;
-            tone = MatchSpace(job, tone);
-            LogTone(tone);
-            double stemGain = tone.StemGain > 0 ? tone.StemGain : soloLevel / SYNTH_NOTE_LEVEL;
-            double synthGain = stemGain * tone.LevelGain * tone.ReverbLevelGain;
-            SetDecay(ladder, TypicalDecay(decays));
-            phrase.Publish(ladder, windows, anchorNotes, tone, synthGain);
-            int singles = clips.FindAll(clip => clip.SingleNote).Count;
-            YargLogger.LogFormatInfo(
-                "[SoloLevel] {0} notes ({1} single, {2} chord), stem gain {3}, tone gain {4}, reverb gain {5}, synth gain {6}, solo level {7}",
-                clips.Count, singles, clips.Count - singles, Math.Round(tone.StemGain, 2),
-                Math.Round(tone.LevelGain, 2), Math.Round(tone.ReverbLevelGain, 2),
-                Math.Round(synthGain, 4), Math.Round(soloLevel, 4));
-            YargLogger.LogFormatInfo("[SoloSynth] {0} measured pitches, {1} chord anchors, tuning {2} cents, solo level {3}",
-                measured, anchors.Count - measured, Math.Round(tuningCents), Math.Round(soloLevel, 4));
-        }
-
-        private BassLeadAmpTone? MatchTone(List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,
-            (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)?[] pitches)
-        {
-            int minFrames = _format.FramesFor(TONE_MIN_NOTE_SECONDS);
-            var picked = new List<(BassStemClip Clip, double Hz)>();
-            for (int index = 0; index < clips.Count; index++)
-            {
-                var clip = clips[index].Clip;
-                if (pitches[index] is not { } pitch)
-                {
-                    continue;
-                }
-
-                if (pitch.Bent || pitch.Voiced < PITCH_MIN_VOICED
-                    || pitch.Note < BassSynthGuitar.LOWEST_NOTE || pitch.Note > BassSynthGuitar.HIGHEST_NOTE
-                    || clip.FrameCount < minFrames)
-                {
-                    continue;
-                }
-
-                picked.Add((clip, pitch.Hz));
-            }
-
-            picked.Sort((left, right) => right.Clip.FrameCount.CompareTo(left.Clip.FrameCount));
-            if (picked.Count > MAX_TONE_NOTES)
-            {
-                picked.RemoveRange(MAX_TONE_NOTES, picked.Count - MAX_TONE_NOTES);
-            }
-
-            int channels = _format.Channels;
-            int maxFrames = _format.FramesFor(TONE_MAX_NOTE_SECONDS);
-            var stem = new List<float>();
-            var di = new List<float>();
-            var noteFrames = new List<uint>();
-            foreach (var (clip, hz) in picked)
-            {
-                int frames = Math.Min(clip.FrameCount, maxFrames);
-                for (int frame = 0; frame < frames; frame++)
-                {
-                    float sum = 0;
-                    for (int channel = 0; channel < channels; channel++)
-                    {
-                        sum += clip.Samples[frame * channels + channel];
-                    }
-
-                    stem.Add(sum / channels);
-                }
-
-                di.AddRange(_synth!.DiNote(hz, frames, _format));
-                noteFrames.Add((uint) frames);
-            }
-
-            var tone = BassLeadAmpDsp.Match(_format.Frequency, _cabinets, stem.ToArray(), di.ToArray(),
-                noteFrames.ToArray());
-            YargLogger.LogFormatInfo("[SoloTone] {0} on {1} notes", tone != null ? "matched" : "skipped", picked.Count);
-            return tone;
-        }
-
-        private BassLeadAmpTone MatchSpace(RenderJob job, BassLeadAmpTone tone)
-        {
-            if (job.Region.Length == 0)
-            {
-                return BassLeadAmpDsp.MatchSpace(tone, _format.Frequency, null, Array.Empty<double>());
-            }
-
-            int channels = _format.Channels;
-            var region = new float[job.Region.Length / channels];
-            for (int frame = 0; frame < region.Length; frame++)
-            {
-                float sum = 0;
-                for (int channel = 0; channel < channels; channel++)
-                {
-                    sum += job.Region[frame * channels + channel];
-                }
-
-                region[frame] = sum / channels;
-            }
-
-            var picks = new List<double>();
-            foreach (var note in job.Notes)
-            {
-                long frame = (long) Math.Round(note.PlaybackSeconds * _format.Frequency) - job.RegionStartFrame;
-                if (frame >= 0 && frame < region.Length)
-                {
-                    picks.Add(frame / (double) _format.Frequency);
-                }
-            }
-
-            job.Region = Array.Empty<float>();
-            return BassLeadAmpDsp.MatchSpace(tone, _format.Frequency, region, picks.ToArray());
-        }
-
-        private void LogTone(BassLeadAmpTone tone)
-        {
-            string cabinet = _cabinets != null && tone.Cabinet < _cabinets.Count ? _cabinets.Names[tone.Cabinet] : "none";
-            YargLogger.LogFormatInfo(
-                "[SoloTone] cabinet {0}, drive {1}, bands {2} dB, wah {3}, echo {4}, reverb wet {5} room {6}, level gain {7}, reverb level gain {8}",
-                cabinet, Math.Round(tone.Drive, 2),
-                string.Join(" ", Array.ConvertAll(tone.BandsDb, band => Math.Round(band, 1))),
-                tone.HasWah ? $"{Math.Round(tone.WahStartHz)} to {Math.Round(tone.WahEndHz)} Hz" : "off",
-                tone.EchoLevel > 0 ? $"{Math.Round(tone.EchoSeconds, 2)} s at {Math.Round(tone.EchoLevel, 2)}" : "off",
-                Math.Round(tone.ReverbWet, 2), Math.Round(tone.ReverbRoom, 2), Math.Round(tone.LevelGain, 2),
-                Math.Round(tone.ReverbLevelGain, 2));
-        }
-
-        private void AddChordAnchors(List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,
-            List<(double SongSeconds, int Note, int Fret)> anchors)
-        {
-            if (_chords == null)
-            {
-                return;
-            }
-
-            foreach (var (clip, singleNote, fret) in clips)
-            {
-                int root = singleNote ? _chords.RootAt(clip.SongSeconds) : -1;
-                if (root >= 0)
-                {
-                    anchors.Add((clip.SongSeconds, CHORD_ANCHOR_NOTE + root, fret));
-                }
-            }
-        }
-
-        private static void SetDecay(List<BassStemClip> ladder, double decay)
-        {
-            foreach (var clip in ladder)
-            {
-                clip.DecayDbPerSecond = decay;
-                foreach (var take in clip.Takes)
-                {
-                    take.DecayDbPerSecond = decay;
-                }
-            }
-        }
-
-        private static double TypicalDecay(IEnumerable<double> measured)
-        {
-            var rates = new List<double>();
-            foreach (double rate in measured)
-            {
-                if (!double.IsNaN(rate))
-                {
-                    rates.Add(rate);
-                }
-            }
-
-            if (rates.Count == 0)
-            {
-                return DECAY_DEFAULT_DB_PER_SEC;
-            }
-
-            rates.Sort();
-            return Math.Clamp(rates[rates.Count / 2], DECAY_MIN_DB_PER_SEC, DECAY_MAX_DB_PER_SEC);
-        }
-
-        private (int Note, double Hz, float Voiced, double Spread, double Seconds, bool Bent)? Measure(BassStemClip clip, BassSoloPitch detector,
-            List<float> readings)
-        {
-            int channels = _format.Channels;
-            int attackFrames = clip.AttackEndFrame;
-            int bodyFrames = clip.FrameCount - attackFrames;
-            var mono = new float[Math.Min(bodyFrames, _format.FramesFor(PITCH_MAX_MEASURE_SECONDS))];
-            for (int frame = 0; frame < mono.Length; frame++)
-            {
-                float sum = 0;
-                for (int channel = 0; channel < channels; channel++)
-                {
-                    sum += clip.Samples[(attackFrames + frame) * channels + channel];
-                }
-
-                mono[frame] = sum / channels;
-            }
-
-            detector.Detect(mono, readings);
-
-            var voiced = readings.FindAll(pitch => pitch > 0f);
-            if (voiced.Count == 0)
-            {
-                return null;
-            }
-
-            voiced.Sort();
-            float median = voiced[voiced.Count / 2];
-            int heldReadings = HeldReadings(readings, median);
-            int agreeing = 0;
-            double spread = 0;
-            for (int index = 0; index < heldReadings; index++)
-            {
-                float pitch = readings[index];
-                if (pitch <= 0f)
-                {
-                    continue;
-                }
-
-                double rawCents = 1200 * Math.Log(pitch / median, 2);
-                double cents = Math.Abs(rawCents);
-                if (cents <= PITCH_AGREE_CENTS)
-                {
-                    agreeing++;
-                    spread += cents;
-                }
-            }
-
-            if (agreeing == 0)
-            {
-                return null;
-            }
-
-            int heldFrames = heldReadings < readings.Count ? heldReadings * detector.HopFrames : bodyFrames;
-            int note = (int) Math.Round(69 + 12 * Math.Log(median / 440.0, 2));
-            return (note, median, (float) agreeing / heldReadings, spread / agreeing, (double) heldFrames / _format.Frequency,
-                StartsWithBend(readings, median, (double) mono.Length / _format.Frequency));
-        }
-
-        private static int HeldReadings(List<float> readings, float hz)
-        {
-            int departureRun = 0;
-            for (int index = 0; index < readings.Count; index++)
-            {
-                if (Holds(readings[index], hz))
-                {
-                    departureRun = 0;
-                    continue;
-                }
-
-                departureRun++;
-                if (departureRun >= DEPARTURE_READINGS)
-                {
-                    return index - departureRun + 1;
-                }
-            }
-
-            return readings.Count;
-        }
-
-        private static bool Holds(float reading, double hz)
-        {
-            if (reading <= 0f)
-            {
-                return false;
-            }
-
-            double rawCents = 1200 * Math.Log(reading / hz, 2);
-            return Math.Abs(rawCents) <= DEPARTURE_CENTS;
-        }
-
-        private static bool StartsWithBend(List<float> readings, float settledHz, double measuredSeconds)
-        {
-            int startReadings = (int) Math.Ceiling(BEND_CHECK_SECONDS / measuredSeconds * readings.Count);
-            for (int index = 0; index < Math.Min(startReadings, readings.Count); index++)
-            {
-                if (readings[index] <= 0f)
-                {
-                    continue;
-                }
-
-                double cents = Math.Abs(1200 * Math.Log(readings[index] / settledHz, 2));
-                if (cents >= BEND_MIN_CENTS && cents <= BEND_MAX_CENTS)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static void SetWindows(List<(double SongSeconds, int Note, int Fret)> anchors,
-            List<(double SongSeconds, int Note)> anchorNotes, List<(double SongSeconds, int Note, int Fret)> windows)
-        {
-            anchors.Sort((left, right) => left.SongSeconds.CompareTo(right.SongSeconds));
-            foreach (var anchor in anchors)
-            {
-                anchorNotes.Add((anchor.SongSeconds, anchor.Note));
-            }
-
-            var neighbours = new List<int>(ANCHOR_NEIGHBOURS * 2 + 1);
-            for (int anchorIndex = 0; anchorIndex < anchors.Count; anchorIndex++)
-            {
-                var anchor = anchors[anchorIndex];
-                neighbours.Clear();
-                int first = Math.Max(0, anchorIndex - ANCHOR_NEIGHBOURS);
-                int last = Math.Min(anchors.Count - 1, anchorIndex + ANCHOR_NEIGHBOURS);
-                for (int neighbour = first; neighbour <= last; neighbour++)
-                {
-                    neighbours.Add(anchors[neighbour].Note);
-                }
-
-                neighbours.Sort();
-                int medianNote = neighbours[neighbours.Count / 2];
-                if (Math.Abs(anchor.Note - medianNote) >= ANCHOR_OUTLIER_SEMITONES)
-                {
-                    continue;
-                }
-
-                if (windows.Count > 0 && anchor.SongSeconds - windows[^1].SongSeconds < MIN_WINDOW_SECONDS)
-                {
-                    continue;
-                }
-
-                int fret = anchor.Fret >= 0 ? anchor.Fret : BassSoloPhrase.FRET_COUNT / 2;
-                if (windows.Count > 0)
-                {
-                    var previous = windows[^1];
-                    if (previous.Note == anchor.Note && previous.Fret == fret)
-                    {
-                        continue;
-                    }
-                }
-
-                windows.Add((anchor.SongSeconds, anchor.Note, fret));
-            }
-        }
-
-        private double Level(BassStemClip clip)
-        {
-            int channels = _format.Channels;
-            int frames = Math.Min(clip.FrameCount, _format.FramesFor(LEVEL_SECONDS));
-            double energy = 0;
-            for (int sample = 0; sample < frames * channels; sample++)
-            {
-                energy += (double) clip.Samples[sample] * clip.Samples[sample];
-            }
-
-            return frames > 0 ? Math.Sqrt(energy / (frames * channels)) : 0;
-        }
-
-        private static int ChartFret(int key)
-        {
-            for (int fret = 0; fret < BassSoloPhrase.FRET_COUNT; fret++)
-            {
-                if (key == 1 << fret)
-                {
-                    return fret;
-                }
-            }
-
-            return -1;
-        }
-
-        private BassSoloPhrase? Find(double soloTime)
-        {
-            foreach (var phrase in _published)
-            {
-                if (phrase.Covers(soloTime))
-                {
-                    return phrase;
-                }
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// The two derived properties of a chart note that the stem layer needs: how long its clip runs
-        /// and whether it holds.
-        /// </summary>
-        private static double ClipDuration(GuitarNote note)
-        {
-            return note.NextNote != null ? note.NextNote.Time - note.Time : double.MaxValue;
-        }
-
-        private static bool HasSustain(GuitarNote note)
-        {
-            foreach (var child in note.AllNotes)
-            {
-                if (child.IsSustain)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static RenderJob TakeNext(List<RenderJob> queue, double soloTime)
-        {
-            int index = queue.FindIndex(job => job.Phrase.Covers(soloTime));
-            if (index < 0)
-            {
-                index = 0;
-            }
-
-            var job = queue[index];
-            queue.RemoveAt(index);
-            return job;
+            request.RegionStartFrame = Math.Max(0, firstFrame - _format.FramesFor(REGION_PREROLL_SECONDS));
+            int frameCount = (int) Math.Min(endFrame - request.RegionStartFrame, _format.FramesFor(MAX_SPACE_SECONDS));
+            request.Region = new float[frameCount * _format.Channels];
+            jobs.Add((request.RegionStartFrame, frameCount, request.Region));
         }
     }
 }

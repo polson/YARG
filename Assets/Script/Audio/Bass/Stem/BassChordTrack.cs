@@ -5,6 +5,9 @@ using System.Threading;
 
 namespace YARG.Audio.BASS
 {
+    /// <summary>
+    /// Tracks the backing chord root under each solo so the fret box can follow the harmony.
+    /// </summary>
     internal sealed class BassChordTrack
     {
         private const int    TARGET_RATE    = 5512;
@@ -17,6 +20,9 @@ namespace YARG.Audio.BASS
         private const int    VOTE_RADIUS    = 6;
         private const int    MIN_VOTES      = 3;
 
+        /// <summary>
+        /// One requested span of backing audio and the roots measured across it.
+        /// </summary>
         private sealed class Region
         {
             public double  StartSeconds;
@@ -147,7 +153,9 @@ namespace YARG.Audio.BASS
             var pitchClasses = new int[readings.Count];
             for (int index = 0; index < readings.Count; index++)
             {
-                pitchClasses[index] = readings[index] > 0f ? PitchClass(readings[index]) : -1;
+                pitchClasses[index] = readings[index] > 0f
+                    ? BassSoloScale.PitchClass(BassSynthGuitar.NearestNote(readings[index]))
+                    : -1;
             }
 
             int holdHops = (int) Math.Round(HOLD_SECONDS / HOP_SECONDS);
@@ -194,12 +202,6 @@ namespace YARG.Audio.BASS
             }
 
             return roots;
-        }
-
-        private static int PitchClass(float frequency)
-        {
-            double midi = 69 + 12 * Math.Log(frequency / 440.0, 2);
-            return ((int) Math.Round(midi) % 12 + 12) % 12;
         }
     }
 }

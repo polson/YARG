@@ -11,6 +11,11 @@ using YARG.Settings;
 
 namespace YARG.Audio.BASS
 {
+    /// <summary>
+    /// Session owner of the freestyle stem soundboards: prepares their solo material off the main
+    /// thread, pumps their voices and releases them with the song. It also decodes and analyzes the
+    /// backing chord track another stem's solo soundboard follows.
+    /// </summary>
     internal sealed class BassStemReplay : IDisposable
     {
         private const int PRERENDER_SHUTDOWN_TIMEOUT_MS = 1000;
@@ -20,7 +25,7 @@ namespace YARG.Audio.BASS
         private readonly AudioManager               _manager;
         private readonly Func<double>               _normalizationGain;
         private readonly List<BassStemSoundboard>   _soundboards = new();
-        private readonly List<BassChordTrack>       _chordTracks = new();
+        private readonly List<BassChordTrack>       _backingChordTracks = new();
         private readonly object                     _lock = new();
         private readonly BassStemFormat             _format;
         private          byte[]?                    _prerenderBytes;
@@ -36,9 +41,10 @@ namespace YARG.Audio.BASS
             _format = new BassStemFormat(frequency: info.Frequency, channels: info.Channels);
         }
 
-        public BassStemSoundboard CreateSoundboard(Func<double> stemVolume, BassChordTrack? chords)
+        public BassStemSoundboard CreateSoundboard(Func<double> stemVolume, BassChordTrack? backingChords)
         {
-            var soundboard = new BassStemSoundboard(_manager, _format, () => stemVolume() * _normalizationGain(), chords);
+            var soundboard = new BassStemSoundboard(_manager, _format, () => stemVolume() * _normalizationGain(),
+                backingChords);
             lock (_lock)
             {
                 _soundboards.Add(soundboard);
@@ -47,15 +53,15 @@ namespace YARG.Audio.BASS
             return soundboard;
         }
 
-        public BassChordTrack CreateChordTrack()
+        public BassChordTrack CreateBackingChordTrack()
         {
-            var chords = new BassChordTrack(_format);
+            var chordTrack = new BassChordTrack(_format);
             lock (_lock)
             {
-                _chordTracks.Add(chords);
+                _backingChordTracks.Add(chordTrack);
             }
 
-            return chords;
+            return chordTrack;
         }
 
         public void SetPrerenderSource(byte[] bytes, int[] indices)
@@ -74,16 +80,16 @@ namespace YARG.Audio.BASS
 
             var jobs = new List<(long StartFrame, int FrameCount, float[] Samples)>();
             var soundboards = new List<BassStemSoundboard>();
-            var chordTracks = new List<BassChordTrack>();
+            var backingChordTracks = new List<BassChordTrack>();
             lock (_lock)
             {
-                foreach (var chords in _chordTracks)
+                foreach (var chordTrack in _backingChordTracks)
                 {
                     int jobCount = jobs.Count;
-                    chords.PrepareJobs(jobs);
+                    chordTrack.PrepareJobs(jobs);
                     if (jobs.Count > jobCount)
                     {
-                        chordTracks.Add(chords);
+                        backingChordTracks.Add(chordTrack);
                     }
                 }
 
@@ -119,10 +125,10 @@ namespace YARG.Audio.BASS
                     }
 
                     YargLogger.LogFormatInfo("[SoloPrep] decoded in {0} ms", stopwatch.ElapsedMilliseconds);
-                    foreach (var chords in chordTracks)
+                    foreach (var chordTrack in backingChordTracks)
                     {
                         var chordStopwatch = System.Diagnostics.Stopwatch.StartNew();
-                        chords.Analyze(token);
+                        chordTrack.Analyze(token);
                         YargLogger.LogFormatInfo("[SoloChords] bass roots tracked in {0} ms", chordStopwatch.ElapsedMilliseconds);
                     }
 

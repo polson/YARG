@@ -8,50 +8,27 @@ using YARG.Audio.BASS.Effects;
 using YARG.Core.Audio;
 using YARG.Core.Chart;
 using YARG.Core.Engine.Guitar;
-using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
 {
+    /// <summary>
+    /// Owns the push-stream voices and synth bus that sound freestyle solo notes over the muted stem.
+    /// </summary>
     internal sealed class BassStemSoundboard : IDisposable
     {
         private const int    VOICE_COUNT                         = 12;
         private const int    RELEASE_KEY                         = 1 << 8;
-        private const int    FLOAT_BYTES                         = sizeof(float);
-        private const double VOICE_FADE_SECONDS                  = 0.08;
-        private const double FREESTYLE_RELEASE_SECONDS           = 0.08;
         private const double FREESTYLE_MIN_TRANSITION_SECONDS    = 0.015;
         private const double FREESTYLE_MAX_TRANSITION_SECONDS    = 0.03;
         private const double FREESTYLE_TRANSITION_INTERVAL_RATIO = 0.25;
         private const double LEGATO_TRANSITION_SECONDS           = 0.035;
         private const double LEGATO_FADE_IN_SECONDS              = 0.01;
         private const double LOOP_BUFFER_SECONDS                 = 0.25;
-        private const float  WHAMMY_IDLE_PERCENT                 = 0.05f;
-        private const float  WHAMMY_FULL_BEND_PERCENT            = 0.9f;
-        private const double PITCH_GLIDE_SECONDS                 = 0.02;
-        private const double VIBRATO_DELAY_SECONDS               = 0.3;
-        private const double VIBRATO_RAMP_SECONDS                = 0.15;
-        private const double VIBRATO_RATE_HZ                     = 4.5;
-        private const double VIBRATO_DEPTH_CENTS                 = 90;
-        private const double VIBRATO_RATE_SPREAD                 = 0.1;
-        private const double VIBRATO_RATE_WANDER                 = 0.08;
-        private const double VIBRATO_WANDER_HZ                   = 0.3;
-        private const double VIBRATO_DEPTH_SPREAD                = 0.15;
-        private const double DRIFT_DEPTH_CENTS                   = 6;
-        private const double ATTACK_SHARP_CENTS                  = 10;
-        private const double ATTACK_SETTLE_SECONDS               = 0.03;
-        private const double TUNING_SPREAD_CENTS                 = 5;
         private const double PICK_VELOCITY_DB                    = 3;
         private const double PICK_BRIGHTNESS_SPREAD              = 0.25;
         private const double FAST_NOTE_SECONDS                   = 0.15;
         private const double FAST_SOFTEN_DB                      = 1.5;
         private const double FAST_DULLING                        = 0.3;
-        private const double PICK_SHAPE_SECONDS                  = 0.02;
-        private const double PICK_HIGH_PASS_HZ                   = 2000;
-        private const double SCRAPE_LEVEL                        = 0.03;
-        private const double SCRAPE_DECAY_SECONDS                = 0.004;
-        private const double MAX_DECAY_DB                        = 15;
-        private const double DECAY_STEP_DB                       = 0.25;
-        private const double DECAY_SLIDE_SECONDS                 = 0.05;
         private const double STRUM_MIN_SPREAD_SECONDS            = 0.008;
         private const double STRUM_MAX_SPREAD_SECONDS            = 0.015;
         private const int    SYNTH_AMP_PRIORITY                  = 1;
@@ -60,72 +37,16 @@ namespace YARG.Audio.BASS
 
         private static readonly double[] CHORD_NOTE_GAINS = { 1, 0.8, 0.65 };
 
-        private static readonly double[] DRIFT_RATES_HZ = { 0.37, 0.71, 1.13 };
-
-        private sealed class Voice
-        {
-            public readonly PushStream Stream;
-            public BassStemClip? Clip;
-            public int        PushedFrames;
-            public double     Gain;
-            public double     PlaybackRate = 1;
-            public float      Frequency;
-            public int        Key;
-            public bool       IsSustain;
-            public bool       IsLooping;
-            public long       StartOrder;
-            public long       StartTimestamp;
-            public readonly double[] DriftPhases = new double[DRIFT_RATES_HZ.Length];
-            public double     VibratoRateHz;
-            public double     VibratoWanderPhase;
-            public int        VibratoSeed;
-            public int        WhammySemitones;
-            public double     DecayDbPerSecond;
-            public double     DecayStartSeconds;
-            public double     DecayDb;
-            public double     AttackCents;
-            public double     TuningCents;
-            public float[]    PickBuffer = Array.Empty<float>();
-
-            public Voice(PushStream stream)
-            {
-                Stream = stream;
-            }
-
-            public bool IsAttached => Key != 0;
-
-            public bool IsPlainSustainFor(int fretMask)
-            {
-                return IsSustain && !IsLooping && (Key & fretMask) != 0;
-            }
-
-            public bool IsFullyHeld(int heldMask)
-            {
-                return (Key & heldMask) == Key;
-            }
-
-            public bool IsReleasedBy(int heldMask)
-            {
-                if (Key == GuitarEngine.OPEN_MASK)
-                {
-                    return heldMask == 0;
-                }
-
-                return (Key & heldMask) != Key;
-            }
-        }
-
         private readonly object                _lock = new();
         private readonly BassStemFormat        _format;
         private readonly Func<double>          _volume;
         private readonly BassSoloPhraseLibrary _library;
         private          BassSoloPhrase?       _phrase;
-        private readonly Voice[]               _voices = new Voice[VOICE_COUNT];
+        private readonly BassStemVoice[]       _voices = new BassStemVoice[VOICE_COUNT];
         private          int                   _heldFrets;
         private          float                 _whammyPercent;
         private readonly Random                _random = new();
         private readonly List<BassStemClip>    _chordClips = new();
-        private          float[]               _silence = Array.Empty<float>();
         private          long                  _playCount;
         private          long                  _lastVoiceStart = Stopwatch.GetTimestamp();
         private          int                   _lastLayerTake;
@@ -136,7 +57,7 @@ namespace YARG.Audio.BASS
         private readonly BassFreeverbDsp?      _synthReverb;
 
         internal BassStemSoundboard(AudioManager manager, BassStemFormat format, Func<double> volume,
-            BassChordTrack? chords)
+            BassChordTrack? backingChords)
         {
             _format = format;
             _volume = volume;
@@ -163,16 +84,10 @@ namespace YARG.Audio.BASS
 
             for (int index = 0; index < VOICE_COUNT; index++)
             {
-                _voices[index] = new Voice(CreateVoiceStream(manager));
+                _voices[index] = new BassStemVoice(CreateVoiceStream(manager), format, _random);
             }
 
-            Func<BassSynthGuitar?>? loadSynth = null;
-            if (_synthBus != null)
-            {
-                loadSynth = () => BassSynthGuitar.Load(format);
-            }
-
-            _library = new BassSoloPhraseLibrary(format, chords, loadSynth, cabinets);
+            _library = new BassSoloPhraseLibrary(format, backingChords, cabinets);
         }
 
         private PushStream CreateVoiceStream(AudioManager manager)
@@ -222,7 +137,9 @@ namespace YARG.Audio.BASS
 
                 var pick = NextPick();
                 FadePreviousVoices(FREESTYLE_MIN_TRANSITION_SECONDS);
-                Start(Layered(clip, pick.Force), key: fretMask, gain: pick.Gain, firstFrame: 0, brightness: pick.Brightness);
+                var layered = Layered(clip, pick.Force);
+                Start(layered, key: fretMask, gain: pick.Gain, firstFrame: 0, whammySemitones: WhammySemitones(layered),
+                    brightness: pick.Brightness);
             }
         }
 
@@ -243,7 +160,7 @@ namespace YARG.Audio.BASS
                 FadePreviousVoices(LEGATO_TRANSITION_SECONDS);
                 int lastFrame = (clip.HasLoop ? clip.LoopEndFrame : clip.FrameCount) - 1;
                 Start(clip, key: fretMask, gain: 1, firstFrame: Math.Min(clip.AttackEndFrame, lastFrame),
-                    fadeInSeconds: LEGATO_FADE_IN_SECONDS);
+                    whammySemitones: WhammySemitones(clip), fadeInSeconds: LEGATO_FADE_IN_SECONDS);
             }
         }
 
@@ -282,16 +199,20 @@ namespace YARG.Audio.BASS
                         continue;
                     }
 
-                    Start(Layered(clip, pick.Force), key: fret, gain: fretGain, firstFrame: 0, brightness: pick.Brightness);
+                    var layered = Layered(clip, pick.Force);
+                    Start(layered, key: fret, gain: fretGain, firstFrame: 0, whammySemitones: WhammySemitones(layered),
+                        brightness: pick.Brightness);
                 }
             }
         }
 
         private void StrumChord(int fretMask, double gain, double brightness)
         {
+            int whammySemitones = WhammySemitones(_chordClips[0]);
             if (_chordClips.Count == 1)
             {
-                Start(_chordClips[0], key: fretMask, gain: gain, firstFrame: 0, brightness: brightness);
+                Start(_chordClips[0], key: fretMask, gain: gain, firstFrame: 0, whammySemitones: whammySemitones,
+                    brightness: brightness);
                 return;
             }
 
@@ -304,7 +225,6 @@ namespace YARG.Audio.BASS
             double spread = STRUM_MIN_SPREAD_SECONDS
                 + _random.NextDouble() * (STRUM_MAX_SPREAD_SECONDS - STRUM_MIN_SPREAD_SECONDS);
             int fret = 1;
-            Voice? root = null;
             for (int index = 0; index < _chordClips.Count; index++)
             {
                 while ((fretMask & fret) == 0)
@@ -312,19 +232,10 @@ namespace YARG.Audio.BASS
                     fret <<= 1;
                 }
 
-                var voice = Start(_chordClips[index], key: fret, gain: gain * CHORD_NOTE_GAINS[index] / Math.Sqrt(power),
-                    firstFrame: 0, brightness: brightness, delayFrames: _format.FramesFor(spread * index));
+                Start(_chordClips[index], key: fret, gain: gain * CHORD_NOTE_GAINS[index] / Math.Sqrt(power),
+                    firstFrame: 0, whammySemitones: whammySemitones, brightness: brightness,
+                    delayFrames: _format.FramesFor(spread * index));
                 fret <<= 1;
-                if (root == null)
-                {
-                    root = voice;
-                }
-                else if (voice.WhammySemitones != root.WhammySemitones)
-                {
-                    voice.WhammySemitones = root.WhammySemitones;
-                    voice.Stream.SetVolume(VoiceVolume(voice));
-                    SetPitch(voice, glide: false);
-                }
             }
         }
 
@@ -341,8 +252,7 @@ namespace YARG.Audio.BASS
                 {
                     if (voice.IsPlainSustainFor(fretMask))
                     {
-                        PlayRelease(voice);
-                        FadeOut(voice);
+                        Release(voice);
                     }
                 }
             }
@@ -362,8 +272,7 @@ namespace YARG.Audio.BASS
                 {
                     if (voice.IsLooping && voice.IsReleasedBy(fretMask))
                     {
-                        PlayRelease(voice);
-                        FadeOut(voice);
+                        Release(voice);
                     }
                 }
             }
@@ -383,7 +292,7 @@ namespace YARG.Audio.BASS
                 {
                     if (voice.IsLooping)
                     {
-                        SetPitch(voice, glide: true);
+                        voice.SetPitch(glide: true, whammyPercent: percent);
                     }
                 }
             }
@@ -402,7 +311,7 @@ namespace YARG.Audio.BASS
                 {
                     if (voice.IsAttached)
                     {
-                        FadeOut(voice);
+                        voice.FadeOut();
                     }
                 }
             }
@@ -434,11 +343,7 @@ namespace YARG.Audio.BASS
 
                 foreach (var voice in _voices)
                 {
-                    voice.Stream.Clear();
-                    voice.Clip = null;
-                    voice.Key = 0;
-                    voice.IsSustain = false;
-                    voice.IsLooping = false;
+                    voice.Reset();
                 }
 
                 _heldFrets = 0;
@@ -458,7 +363,7 @@ namespace YARG.Audio.BASS
 
                 foreach (var voice in _voices)
                 {
-                    Feed(voice);
+                    voice.Feed(LoopBufferFrames, _whammyPercent);
                 }
             }
         }
@@ -476,7 +381,7 @@ namespace YARG.Audio.BASS
                 _library.Clear();
                 foreach (var voice in _voices)
                 {
-                    voice.Stream.Dispose();
+                    voice.Dispose();
                 }
 
                 _synthReverb?.Dispose();
@@ -504,163 +409,49 @@ namespace YARG.Audio.BASS
             }
 
             int layer = Math.Clamp((int) ((force + 1) / 2 * layers.Length), 0, layers.Length - 1);
-            var chosen = layers[layer];
-            int count = chosen.Takes.Length + 1;
-            if (count > 1)
-            {
-                _lastLayerTake = (_lastLayerTake + 1 + _random.Next(count - 1)) % count;
-            }
-            else
-            {
-                _lastLayerTake = 0;
-            }
-
-            return _lastLayerTake == 0 ? chosen : chosen.Takes[_lastLayerTake - 1];
+            return layers[layer].TakeAfter(_lastLayerTake, _random, out _lastLayerTake);
         }
 
-        private void PlayRelease(Voice voice)
+        private void Release(BassStemVoice voice)
         {
             var releases = voice.Clip?.Releases;
-            if (releases == null || releases.Length == 0)
+            if (releases is { Length: > 0 })
             {
-                return;
+                var release = releases[_random.Next(releases.Length)];
+                Start(release, key: RELEASE_KEY, gain: voice.Gain, firstFrame: 0,
+                    whammySemitones: WhammySemitones(release));
             }
 
-            Start(releases[_random.Next(releases.Length)], key: RELEASE_KEY, gain: voice.Gain, firstFrame: 0);
+            voice.FadeOut();
         }
 
-        private Voice Start(BassStemClip clip, int key, double gain, int firstFrame, double fadeInSeconds = 0,
-            double brightness = 1, int delayFrames = 0)
+        private int WhammySemitones(BassStemClip clip)
+        {
+            return clip.Note >= 0 && _phrase != null ? _phrase.WhammySemitones(clip) : 0;
+        }
+
+        private void Start(BassStemClip clip, int key, double gain, int firstFrame, int whammySemitones,
+            double fadeInSeconds = 0, double brightness = 1, int delayFrames = 0)
         {
             var voice = PickVoice(key);
-            voice.Stream.Clear();
-            if (delayFrames > 0)
-            {
-                PushSilence(voice, delayFrames);
-            }
-            voice.Clip = clip;
-            voice.PushedFrames = firstFrame;
-            voice.Key = key;
-            voice.IsLooping = clip.HasLoop && voice.IsFullyHeld(_heldFrets);
-            voice.IsSustain = clip.IsSustain || voice.IsLooping;
-            voice.WhammySemitones = 0;
-            if (clip.Note >= 0 && _phrase != null)
-            {
-                voice.WhammySemitones = _phrase.WhammySemitones(clip);
-            }
-            voice.Gain = gain;
-            voice.PlaybackRate = clip.PlaybackRate;
-            var tone = _phrase?.Tone ?? BassLeadAmpTone.Default;
-            if (tone != _synthTone)
-            {
-                if (_synthAmp?.SetTone(tone) == true)
-                {
-                    _synthTone = tone;
-                    _synthReverb?.SetParams(1, tone.ReverbWet, tone.ReverbRoom, SYNTH_REVERB_DAMP, 1);
-                }
-            }
-
-            _synthAmp?.SetGain((float) Math.Clamp(_volume() * (_phrase?.SynthGain ?? 0), 0, MAX_SYNTH_GAIN));
-            voice.DecayDbPerSecond = clip.DecayDbPerSecond;
-            voice.DecayStartSeconds = Math.Max(0, clip.LoopStartFrame - firstFrame) / (double) _format.Frequency;
-            voice.DecayDb = 0;
-            if (fadeInSeconds > 0)
-            {
-                voice.Stream.SetVolume(0);
-                SlideVolume(voice.Stream, VoiceVolume(voice), fadeInSeconds);
-            }
-            else
-            {
-                voice.Stream.SetVolume(VoiceVolume(voice));
-            }
-
+            ApplyPhraseTone();
+            voice.Begin(clip, key, gain, firstFrame, fadeInSeconds, brightness, delayFrames, whammySemitones, _heldFrets,
+                _whammyPercent);
             voice.StartOrder = ++_playCount;
-            voice.StartTimestamp = Stopwatch.GetTimestamp();
-            for (int index = 0; index < voice.DriftPhases.Length; index++)
-            {
-                voice.DriftPhases[index] = _random.NextDouble() * 2 * Math.PI;
-            }
-
-            voice.VibratoRateHz = VIBRATO_RATE_HZ * (1 + VIBRATO_RATE_SPREAD * (2 * _random.NextDouble() - 1));
-            voice.VibratoWanderPhase = _random.NextDouble() * 2 * Math.PI;
-            voice.VibratoSeed = _random.Next();
-            voice.AttackCents = clip.IsSustain && firstFrame == 0
-                ? ATTACK_SHARP_CENTS * gain * (0.5 + _random.NextDouble())
-                : 0;
-            voice.TuningCents = TUNING_SPREAD_CENTS * (_random.NextDouble() - _random.NextDouble());
-            SetPitch(voice, glide: false);
-
-            bool picked = clip.IsSustain;
-            if (firstFrame == 0 && (brightness != 1 || picked))
-            {
-                ShapePick(voice, clip, brightness, picked ? SCRAPE_LEVEL * gain : 0);
-            }
-
-            Feed(voice);
-            return voice;
+            voice.Feed(LoopBufferFrames, _whammyPercent);
         }
 
-        private void PushSilence(Voice voice, int frames)
+        private void ApplyPhraseTone()
         {
-            int samples = frames * _format.Channels;
-            if (_silence.Length < samples)
+            var tone = _phrase?.Tone ?? BassLeadAmpTone.Default;
+            if (tone != _synthTone && _synthAmp?.SetTone(tone) == true)
             {
-                _silence = new float[samples];
+                _synthTone = tone;
+                _synthReverb?.SetParams(1, tone.ReverbWet, tone.ReverbRoom, SYNTH_REVERB_DAMP, 1);
             }
 
-            Push(voice.Stream, _silence, firstFrame: 0, frameCount: frames);
-        }
-
-        private void ShapePick(Voice voice, BassStemClip clip, double brightness, double scrape)
-        {
-            int channels = _format.Channels;
-            int lastFrame = clip.HasLoop ? clip.LoopEndFrame - clip.LoopFadeFrames : clip.FrameCount;
-            int frames = Math.Min(_format.FramesFor(PICK_SHAPE_SECONDS), lastFrame);
-            if (frames <= 0)
-            {
-                return;
-            }
-
-            if (voice.PickBuffer.Length < frames * channels)
-            {
-                voice.PickBuffer = new float[frames * channels];
-            }
-
-            float smoothing = (float) Math.Exp(-2 * Math.PI * PICK_HIGH_PASS_HZ / _format.Frequency);
-            float extra = (float) (brightness - 1);
-            float scrapeDecay = (float) Math.Exp(-1 / (SCRAPE_DECAY_SECONDS * _format.Frequency));
-            int fadeFrames = frames / 2;
-            float scrapeLow = 0;
-            float scrapeLevel = (float) scrape;
-            for (int frame = 0; frame < frames; frame++)
-            {
-                float noise = scrape > 0 ? (float) (_random.NextDouble() * 2 - 1) : 0;
-                scrapeLow = smoothing * scrapeLow + (1 - smoothing) * noise;
-                float scraped = scrapeLevel * (noise - scrapeLow);
-                scrapeLevel *= scrapeDecay;
-                for (int channel = 0; channel < channels; channel++)
-                {
-                    int index = frame * channels + channel;
-                    voice.PickBuffer[index] = clip.Samples[index] + scraped;
-                }
-            }
-
-            for (int channel = 0; channel < channels; channel++)
-            {
-                float low = clip.Samples[channel];
-                for (int frame = 0; frame < frames; frame++)
-                {
-                    int index = frame * channels + channel;
-                    float sample = clip.Samples[index];
-                    low = smoothing * low + (1 - smoothing) * sample;
-                    int fromEnd = frames - frame;
-                    float fade = fromEnd < fadeFrames ? (float) (0.5 - 0.5 * Math.Cos(Math.PI * fromEnd / fadeFrames)) : 1;
-                    voice.PickBuffer[index] += extra * fade * (sample - low);
-                }
-            }
-
-            Push(voice.Stream, voice.PickBuffer, firstFrame: 0, frameCount: frames);
-            voice.PushedFrames = frames;
+            double gain = _volume() * (_phrase?.SynthGain ?? 0);
+            _synthAmp?.SetGain((float) Math.Clamp(gain, 0, MAX_SYNTH_GAIN));
         }
 
         private void FadePreviousVoices(double minSeconds)
@@ -672,19 +463,19 @@ namespace YARG.Audio.BASS
             _lastVoiceStart = now;
             foreach (var previous in _voices)
             {
-                if (previous.IsAttached || IsFading(previous))
+                if (previous.IsAttached || previous.IsFading())
                 {
-                    FadeOut(previous, fadeSeconds: transition);
+                    previous.FadeOut(fadeSeconds: transition);
                 }
             }
         }
 
-        private Voice PickVoice(int key)
+        private BassStemVoice PickVoice(int key)
         {
-            Voice? oldestIdle = null;
-            Voice? quietestTail = null;
+            BassStemVoice? oldestIdle = null;
+            BassStemVoice? quietestTail = null;
             float quietestVolume = float.MaxValue;
-            Voice oldest = _voices[0];
+            var oldest = _voices[0];
             foreach (var voice in _voices)
             {
                 if (voice.Key == key)
@@ -702,7 +493,7 @@ namespace YARG.Audio.BASS
                     continue;
                 }
 
-                if (!IsFading(voice))
+                if (!voice.IsFading())
                 {
                     if (oldestIdle == null || voice.StartOrder < oldestIdle.StartOrder)
                     {
@@ -712,7 +503,7 @@ namespace YARG.Audio.BASS
                     continue;
                 }
 
-                float volume = Loudness(voice);
+                float volume = voice.Loudness();
                 if (volume < quietestVolume)
                 {
                     quietestTail = voice;
@@ -721,232 +512,6 @@ namespace YARG.Audio.BASS
             }
 
             return oldestIdle ?? quietestTail ?? oldest;
-        }
-
-        private void Feed(Voice voice)
-        {
-            var clip = voice.Clip;
-            if (clip == null)
-            {
-                return;
-            }
-
-            if (voice.IsLooping)
-            {
-                SetPitch(voice, glide: true);
-                Decay(voice);
-                FeedLoop(voice.Stream, clip, ref voice.PushedFrames);
-                return;
-            }
-
-            int frames = clip.FrameCount - voice.PushedFrames;
-            if (frames > 0)
-            {
-                Push(voice.Stream, clip.Samples, firstFrame: voice.PushedFrames, frameCount: frames);
-                voice.PushedFrames += frames;
-            }
-
-            if (voice.PushedFrames >= clip.FrameCount)
-            {
-                voice.Clip = null;
-            }
-        }
-
-        private void Decay(Voice voice)
-        {
-            double held = (Stopwatch.GetTimestamp() - voice.StartTimestamp) / (double) Stopwatch.Frequency;
-            double decaying = held - voice.DecayStartSeconds;
-            if (decaying <= 0)
-            {
-                return;
-            }
-
-            double decibels = Math.Min(voice.DecayDbPerSecond * decaying, MAX_DECAY_DB);
-            if (decibels - voice.DecayDb < DECAY_STEP_DB)
-            {
-                return;
-            }
-
-            voice.DecayDb = decibels;
-            SlideVolume(voice.Stream, VoiceVolume(voice), DECAY_SLIDE_SECONDS);
-        }
-
-        private void FeedLoop(PushStream stream, BassStemClip clip, ref int pushedFrames)
-        {
-            int queuedBytes = Bass.StreamPutData(stream.Handle, IntPtr.Zero, 0);
-            if (queuedBytes < 0)
-            {
-                YargLogger.LogFormatError("Failed to query replay queue: {0}!", Bass.LastError);
-                return;
-            }
-
-            int queuedFrames = queuedBytes / (_format.Channels * FLOAT_BYTES);
-            int remaining = LoopBufferFrames - queuedFrames;
-            while (remaining > 0)
-            {
-                int frames = clip.NextLoopSegment(pushedFrames, remaining, out bool fromTail, out int sourceFrame);
-                Push(stream, fromTail ? clip.LoopTail : clip.Samples, firstFrame: sourceFrame, frameCount: frames);
-                remaining -= frames;
-                pushedFrames += frames;
-                if (pushedFrames == clip.LoopEndFrame)
-                {
-                    pushedFrames = clip.LoopStartFrame;
-                }
-            }
-        }
-
-        private unsafe void Push(PushStream stream, float[] samples, int firstFrame, int frameCount)
-        {
-            int channels = _format.Channels;
-            fixed (float* pointer = &samples[firstFrame * channels])
-            {
-                stream.Push((IntPtr) pointer, frameCount * channels * FLOAT_BYTES);
-            }
-        }
-
-        private void SetPitch(Voice voice, bool glide)
-        {
-            float freq = (float) (_format.Frequency * voice.PlaybackRate);
-            if (voice.IsLooping)
-            {
-                double semitones = 0;
-                if (GlobalAudioHandler.UseWhammyFx)
-                {
-                    int bend = voice.WhammySemitones;
-                    if (bend > 0)
-                    {
-                        semitones = bend * BendProgress;
-                    }
-                    else
-                    {
-                        semitones = -GlobalAudioHandler.WhammyPitchShiftAmount * _whammyPercent;
-                    }
-                }
-
-                semitones += (DriftCents(voice) + HumanCents(voice)) / 100;
-                if (IsWhammyIdle)
-                {
-                    semitones += VibratoCents(voice) / 100;
-                }
-                freq = (float) (_format.Frequency * voice.PlaybackRate * Math.Pow(2, semitones / 12));
-            }
-
-            if (glide && freq == voice.Frequency)
-            {
-                return;
-            }
-
-            voice.Frequency = freq;
-            SetFrequency(voice.Stream, freq, glide ? PITCH_GLIDE_SECONDS : 0);
-        }
-
-        private static void SetFrequency(PushStream stream, float freq, double glideSeconds)
-        {
-            bool set;
-            if (glideSeconds > 0)
-            {
-                int glideMilliseconds = (int) (glideSeconds * 1000);
-                set = Bass.ChannelSlideAttribute(stream.Handle, ChannelAttribute.Frequency, freq, glideMilliseconds);
-            }
-            else
-            {
-                set = Bass.ChannelSetAttribute(stream.Handle, ChannelAttribute.Frequency, freq);
-            }
-            if (!set)
-            {
-                YargLogger.LogFormatError("Failed to set replay frequency: {0}!", Bass.LastError);
-            }
-        }
-
-        private bool IsWhammyIdle => _whammyPercent <= WHAMMY_IDLE_PERCENT;
-
-        private double BendProgress => GlobalAudioHandler.UseWhammyFx
-            ? Math.Min(1, _whammyPercent / WHAMMY_FULL_BEND_PERCENT)
-            : 0;
-
-        private double VoiceVolume(Voice voice)
-        {
-            return voice.Gain * Math.Pow(10, -voice.DecayDb / 20);
-        }
-
-        private static void SlideVolume(PushStream stream, double volume, double seconds)
-        {
-            if (!Bass.ChannelSlideAttribute(stream.Handle, ChannelAttribute.Volume, (float) volume, (int) (seconds * 1000)))
-            {
-                YargLogger.LogFormatError("Failed to fade replay voice: {0}!", Bass.LastError);
-            }
-        }
-
-        private static bool IsFading(Voice voice)
-        {
-            return Bass.ChannelIsSliding(voice.Stream.Handle, ChannelAttribute.Volume);
-        }
-
-        private static float Loudness(Voice voice)
-        {
-            Bass.ChannelGetAttribute(voice.Stream.Handle, ChannelAttribute.Volume, out float volume);
-            return volume;
-        }
-
-        private static double DriftCents(Voice voice)
-        {
-            double held = (Stopwatch.GetTimestamp() - voice.StartTimestamp) / (double) Stopwatch.Frequency;
-            double cents = 0;
-            for (int index = 0; index < DRIFT_RATES_HZ.Length; index++)
-            {
-                cents += Math.Sin(2 * Math.PI * DRIFT_RATES_HZ[index] * held + voice.DriftPhases[index]);
-            }
-
-            return cents * DRIFT_DEPTH_CENTS / DRIFT_RATES_HZ.Length;
-        }
-
-        private static double HumanCents(Voice voice)
-        {
-            double held = (Stopwatch.GetTimestamp() - voice.StartTimestamp) / (double) Stopwatch.Frequency;
-            return voice.TuningCents + voice.AttackCents * Math.Exp(-held / ATTACK_SETTLE_SECONDS);
-        }
-
-        private static double VibratoCents(Voice voice)
-        {
-            double held = (Stopwatch.GetTimestamp() - voice.StartTimestamp) / (double) Stopwatch.Frequency;
-            double vibrating = held - VIBRATO_DELAY_SECONDS;
-            if (vibrating <= 0)
-            {
-                return 0;
-            }
-
-            double wanderSpeed = 2 * Math.PI * VIBRATO_WANDER_HZ;
-            double wander = VIBRATO_RATE_WANDER / wanderSpeed
-                * (Math.Cos(voice.VibratoWanderPhase) - Math.Cos(wanderSpeed * vibrating + voice.VibratoWanderPhase));
-            double cycles = voice.VibratoRateHz * (vibrating + wander);
-            double depth = VIBRATO_DEPTH_CENTS * Math.Min(1, vibrating / VIBRATO_RAMP_SECONDS)
-                * (1 + VIBRATO_DEPTH_SPREAD * CycleRandom(voice.VibratoSeed, (int) cycles));
-            return depth * 0.5 * (1 - Math.Cos(2 * Math.PI * cycles));
-        }
-
-        private static double CycleRandom(int seed, int cycle)
-        {
-            uint hash = (uint) seed ^ (uint) cycle * 0x9E3779B9u;
-            hash ^= hash >> 16;
-            hash *= 0x85EBCA6Bu;
-            hash ^= hash >> 13;
-            hash *= 0xC2B2AE35u;
-            hash ^= hash >> 16;
-            return hash / (double) uint.MaxValue * 2 - 1;
-        }
-
-        private void FadeOut(Voice voice)
-        {
-            FadeOut(voice, fadeSeconds: voice.IsLooping ? FREESTYLE_RELEASE_SECONDS : VOICE_FADE_SECONDS);
-        }
-
-        private void FadeOut(Voice voice, double fadeSeconds)
-        {
-            voice.Clip = null;
-            voice.Key = 0;
-            voice.IsSustain = false;
-            voice.IsLooping = false;
-            SlideVolume(voice.Stream, 0, fadeSeconds);
         }
     }
 }

@@ -3,6 +3,9 @@ using System.Collections.Generic;
 
 namespace YARG.Audio.BASS
 {
+    /// <summary>
+    /// YIN pitch detector used to measure the recorded solo's notes.
+    /// </summary>
     internal sealed class BassSoloPitch
     {
         private const double WINDOW_SECONDS  = 0.023;
@@ -35,8 +38,6 @@ namespace YARG.Audio.BASS
             _maxLag = (int) Math.Ceiling(sampleRate / minFrequency);
             _difference = new double[_maxLag + 2];
         }
-
-        public int HopFrames => _hop;
 
         public void Detect(float[] mono, List<float> readings)
         {

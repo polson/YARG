@@ -3,6 +3,9 @@ using System;
 
 namespace YARG.Audio.BASS
 {
+    /// <summary>
+    /// One decoded slice of solo audio with the onset, loop and decay analysis the stem layer needs.
+    /// </summary>
     internal sealed class BassStemClip
     {
         internal const double ONSET_LEAD_SECONDS = 0.05;
@@ -113,6 +116,13 @@ namespace YARG.Audio.BASS
                 LoopTail = LoopTail,
                 PlaybackRate = playbackRate,
             };
+        }
+
+        public BassStemClip TakeAfter(int lastTake, Random random, out int take)
+        {
+            int count = Takes.Length + 1;
+            take = count == 1 ? 0 : (lastTake + 1 + random.Next(count - 1)) % count;
+            return take == 0 ? this : Takes[take - 1];
         }
 
         public int NextLoopSegment(int pushedFrames, int remaining, out bool fromTail, out int sourceFrame)

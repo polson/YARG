@@ -250,10 +250,10 @@ namespace YARG.Gameplay
                 return null;
             }
 
-            var chords = stem == SongStem.Bass || _backgroundStem == SongStem.Bass
+            var backingChords = stem == SongStem.Bass || _backgroundStem == SongStem.Bass
                 ? null
-                : GetStemChannel(SongStem.Bass)?.Replay?.CreateChordTrack();
-            return replay.CreateSoundboard(() => _stemStates[stem].Volume, chords);
+                : GetStemChannel(SongStem.Bass)?.Replay?.CreateBackingChordTrack();
+            return replay.CreateSoundboard(() => _stemStates[stem].Volume, backingChords);
         }
 
         private BassStemChannel GetStemChannel(SongStem stem)

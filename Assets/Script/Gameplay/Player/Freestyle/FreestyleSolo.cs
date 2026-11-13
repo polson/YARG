@@ -22,7 +22,6 @@ namespace YARG.Gameplay.Player
         private readonly Action<bool> _setStemMuted;
         private readonly Action<int> _onPlayed;
         private readonly int _fretRowMask;
-        private readonly int _highestFretIndex;
         private EngineTimer _hopoLeniency;
 
         private bool _strumPending;
@@ -43,7 +42,6 @@ namespace YARG.Gameplay.Player
             _setStemMuted = setStemMuted;
             _onPlayed = onPlayed;
             _fretRowMask = fretRowMask;
-            _highestFretIndex = HighestFretBit(fretRowMask);
             _hopoLeniency = new EngineTimer("Freestyle HOPO Leniency", hopoLeniency);
         }
 
@@ -126,17 +124,18 @@ namespace YARG.Gameplay.Player
             int playMask = heldMask != 0 ? heldMask : tappedMask;
             bool fretInput = fretsChanged || tappedMask != 0;
             bool hammerOn = _phraseMask != 0 && fretInput && playMask != 0;
-            bool repick = strummed && playMask != 0 && playMask == _unpickedMask
-                && currentTime - _unpickedTime <= STRUM_REPICK_SECONDS * songSpeed;
-            if (strummed && !hammerOn && !repick && _hopoLeniency.IsActive)
+            bool strumAbsorbed = strummed && !hammerOn && _hopoLeniency.IsActive
+                && !IsRepick(playMask, currentTime, songSpeed);
+            if (strumAbsorbed)
             {
                 strummed = false;
                 _unpickedMask = 0;
                 _hopoLeniency.Reset();
             }
 
+            bool sounding = strummed || hammerOn;
             int sustainMask = heldMask | (_phraseFretless ? _phraseMask : 0);
-            if (strummed || hammerOn)
+            if (sounding)
             {
                 sustainMask |= playMask == 0 ? GuitarEngine.OPEN_MASK : playMask;
             }
@@ -146,11 +145,17 @@ namespace YARG.Gameplay.Player
             _setStemMuted(soloAudio);
             _soundboard.SetHeldFrets(sustainMask);
             _soundboard.SetWhammyPitch(whammyAxis);
-            if ((strummed || hammerOn) && soloAudio)
+            if (sounding && soloAudio)
             {
                 StartPhrase(strummed: strummed, hammerOn: hammerOn, playMask: playMask, fretless: heldMask == 0,
                     currentTime: currentTime);
             }
+        }
+
+        private bool IsRepick(int playMask, double currentTime, double songSpeed)
+        {
+            return playMask != 0 && playMask == _unpickedMask
+                && currentTime - _unpickedTime <= STRUM_REPICK_SECONDS * songSpeed;
         }
 
         private static double? SoloTime(GuitarEngine engine, double currentTime, bool isSeekingReplay)
@@ -238,27 +243,17 @@ namespace YARG.Gameplay.Player
 
         private int HighestFret(int noteMask)
         {
-            for (int fret = _highestFretIndex; fret >= 0; fret--)
+            int frets = noteMask & _fretRowMask;
+            int highest = 0;
+            for (int fret = 1; fret <= frets; fret <<= 1)
             {
-                int mask = 1 << fret;
-                if ((noteMask & mask) != 0)
+                if ((frets & fret) != 0)
                 {
-                    return mask;
+                    highest = fret;
                 }
             }
 
-            return 0;
-        }
-
-        private static int HighestFretBit(int fretRowMask)
-        {
-            int index = 0;
-            for (int mask = fretRowMask >> 1; mask != 0; mask >>= 1)
-            {
-                index++;
-            }
-
-            return index;
+            return highest;
         }
     }
 }

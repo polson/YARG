@@ -8,6 +8,9 @@ using YARG.Helpers;
 
 namespace YARG.Audio.BASS
 {
+    /// <summary>
+    /// The sampled guitar library that builds a solo's note ladder and the dry DI used for tone matching.
+    /// </summary>
     internal sealed class BassSynthGuitar
     {
         internal const int LOWEST_NOTE  = 50;
@@ -27,6 +30,9 @@ namespace YARG.Audio.BASS
         private const double ATTACK_SECONDS       = 0.025;
         private const double LOWER_SAMPLE_PENALTY = 0.1;
 
+        /// <summary>
+        /// The takes and releases recorded for one note.
+        /// </summary>
         private sealed class Sample
         {
             public readonly int Note;
@@ -192,8 +198,7 @@ namespace YARG.Audio.BASS
 
         internal float[] DiNote(double hz, int frames, BassStemFormat format)
         {
-            int note = (int) Math.Round(69 + 12 * Math.Log(hz / 440, 2));
-            var sample = Nearest(Math.Clamp(note, LOWEST_NOTE, HIGHEST_NOTE));
+            var sample = Nearest(Math.Clamp(NearestNote(hz), LOWEST_NOTE, HIGHEST_NOTE));
             var clip = sample.MiddleTakes![0].Clip;
             double rate = hz / NoteHz(sample.Note);
             int sourceFrames = Math.Min(clip.FrameCount, (int) Math.Ceiling(frames * rate) + 4);
@@ -289,6 +294,11 @@ namespace YARG.Audio.BASS
             return 440 * Math.Pow(2, (note - 69) / 12.0);
         }
 
+        internal static int NearestNote(double hz)
+        {
+            return (int) Math.Round(69 + 12 * Math.Log(hz / 440, 2));
+        }
+
         private static float[] Interleaved(float[] mono, float gain, int channels)
         {
             var samples = new float[mono.Length * channels];
@@ -375,66 +385,4 @@ namespace YARG.Audio.BASS
                 Bass.StreamFree(handle);
             }
         }
-    }
-
-    internal sealed class BassCabinetSet
-    {
-        internal const int MAX_CABINETS = 8;
-
-        private const string FOLDER = "guitarCabinet";
-
-        public readonly float[]  Samples;
-        public readonly uint[]   Frames;
-        public readonly float[]  Rates;
-        public readonly string[] Names;
-
-        public int Count => Names.Length;
-
-        internal static BassCabinetSet? Load()
-        {
-            string folder = Path.Combine(PathHelper.StreamingAssetsPath, FOLDER);
-            if (!Directory.Exists(folder))
-            {
-                return null;
-            }
-
-            var paths = Directory.GetFiles(folder, "*.wav");
-            Array.Sort(paths, StringComparer.Ordinal);
-            var samples = new List<float>();
-            var frames = new List<uint>();
-            var rates = new List<float>();
-            var names = new List<string>();
-            foreach (string path in paths)
-            {
-                if (names.Count == MAX_CABINETS)
-                {
-                    YargLogger.LogFormatWarning("Ignoring guitar cabinets past the first {0}", MAX_CABINETS);
-                    break;
-                }
-
-                var mono = BassSynthGuitar.Decode(path, out int frequency);
-                if (mono == null || mono.Length == 0)
-                {
-                    continue;
-                }
-
-                samples.AddRange(mono);
-                frames.Add((uint) mono.Length);
-                rates.Add(frequency);
-                names.Add(Path.GetFileNameWithoutExtension(path));
-            }
-
-            return names.Count > 0
-                ? new BassCabinetSet(samples.ToArray(), frames.ToArray(), rates.ToArray(), names.ToArray())
-                : null;
-        }
-
-        private BassCabinetSet(float[] samples, uint[] frames, float[] rates, string[] names)
-        {
-            Samples = samples;
-            Frames = frames;
-            Rates = rates;
-            Names = names;
-        }
-    }
-}
+    }}
