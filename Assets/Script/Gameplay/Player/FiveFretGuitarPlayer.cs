@@ -258,9 +258,8 @@ namespace YARG.Gameplay.Player
                 return;
             }
 
-            _freestyle = new FreestyleSolo(soundboard, () => Engine, SetStemMuteState, PlayFreestyleHit,
-                fretRowMask: AllFretRows,
-                hopoLeniency: EngineParams.HopoLeniency);
+            _freestyle = new FreestyleSolo(soundboard, () => Engine, setStemMuted: SetStemMuteState,
+                onPlayed: PlayFreestyleHit, fretRowMask: AllFretRows, hopoLeniency: EngineParams.HopoLeniency);
             _freestyle.RequestPhrases(PhraseNotes(), GameManager.GetAudioPlaybackTime);
         }
 

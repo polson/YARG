@@ -106,7 +106,12 @@ namespace YARG.Audio.BASS
 
             public bool IsReleasedBy(int heldMask)
             {
-                return Key == GuitarEngine.OPEN_MASK ? heldMask == 0 : (Key & heldMask) != Key;
+                if (Key == GuitarEngine.OPEN_MASK)
+                {
+                    return heldMask == 0;
+                }
+
+                return (Key & heldMask) != Key;
             }
         }
 
@@ -161,8 +166,13 @@ namespace YARG.Audio.BASS
                 _voices[index] = new Voice(CreateVoiceStream(manager));
             }
 
-            _library = new BassSoloPhraseLibrary(format, chords,
-                _synthBus != null ? () => BassSynthGuitar.Load(format) : null, cabinets);
+            Func<BassSynthGuitar?>? loadSynth = null;
+            if (_synthBus != null)
+            {
+                loadSynth = () => BassSynthGuitar.Load(format);
+            }
+
+            _library = new BassSoloPhraseLibrary(format, chords, loadSynth, cabinets);
         }
 
         private PushStream CreateVoiceStream(AudioManager manager)
@@ -182,12 +192,12 @@ namespace YARG.Audio.BASS
 
         public void RequestPhrases(List<GuitarNote> notes, Func<double, double> playbackTime)
         {
-            _library.Request(notes, playbackTime);
+            _library.RequestPhrases(notes, playbackTime);
         }
 
-        public bool SelectPhrase(double soloTime, double songTime)
+        public bool TrySelectPhrase(double soloTime, double songTime)
         {
-            var phrase = _library.Select(soloTime, songTime);
+            var phrase = _library.SelectPhrase(soloTime, songTime);
             lock (_lock)
             {
                 _phrase = phrase;
@@ -196,33 +206,43 @@ namespace YARG.Audio.BASS
             return phrase is { IsEmpty: false };
         }
 
-        public void Play(int key)
+        public void PlayNote(int fretMask)
         {
             lock (_lock)
             {
-                if (_disposed || !_phrase!.TryPickClip(key, out var clip))
+                if (_disposed)
+                {
+                    return;
+                }
+
+                if (!_phrase!.TryPickClip(fretMask, out var clip))
                 {
                     return;
                 }
 
                 var pick = NextPick();
                 FadePreviousVoices(FREESTYLE_MIN_TRANSITION_SECONDS);
-                Start(Layered(clip, pick.Force), key: key, gain: pick.Gain, firstFrame: 0, brightness: pick.Brightness);
+                Start(Layered(clip, pick.Force), key: fretMask, gain: pick.Gain, firstFrame: 0, brightness: pick.Brightness);
             }
         }
 
-        public void PlayLegato(int key)
+        public void PlayLegato(int fretMask)
         {
             lock (_lock)
             {
-                if (_disposed || !_phrase!.TryPickClip(key, out var clip))
+                if (_disposed)
+                {
+                    return;
+                }
+
+                if (!_phrase!.TryPickClip(fretMask, out var clip))
                 {
                     return;
                 }
 
                 FadePreviousVoices(LEGATO_TRANSITION_SECONDS);
                 int lastFrame = (clip.HasLoop ? clip.LoopEndFrame : clip.FrameCount) - 1;
-                Start(clip, key: key, gain: 1, firstFrame: Math.Min(clip.AttackEndFrame, lastFrame),
+                Start(clip, key: fretMask, gain: 1, firstFrame: Math.Min(clip.AttackEndFrame, lastFrame),
                     fadeInSeconds: LEGATO_FADE_IN_SECONDS);
             }
         }
@@ -231,7 +251,12 @@ namespace YARG.Audio.BASS
         {
             lock (_lock)
             {
-                if (_disposed || _phrase!.IsEmpty)
+                if (_disposed)
+                {
+                    return;
+                }
+
+                if (_phrase!.IsEmpty)
                 {
                     return;
                 }
@@ -297,13 +322,13 @@ namespace YARG.Audio.BASS
                 else if (voice.WhammySemitones != root.WhammySemitones)
                 {
                     voice.WhammySemitones = root.WhammySemitones;
-                    SetVoiceVolume(voice, VoiceVolume(voice));
+                    voice.Stream.SetVolume(VoiceVolume(voice));
                     SetPitch(voice, glide: false);
                 }
             }
         }
 
-        public void Release(int fretMask)
+        public void ReleaseFrets(int fretMask)
         {
             lock (_lock)
             {
@@ -398,7 +423,7 @@ namespace YARG.Audio.BASS
             _library.Publish(token);
         }
 
-        internal void Clear()
+        internal void ResetVoices()
         {
             lock (_lock)
             {
@@ -448,7 +473,7 @@ namespace YARG.Audio.BASS
                 }
 
                 _disposed = true;
-                _library.Forget();
+                _library.Clear();
                 foreach (var voice in _voices)
                 {
                     voice.Stream.Dispose();
@@ -481,7 +506,15 @@ namespace YARG.Audio.BASS
             int layer = Math.Clamp((int) ((force + 1) / 2 * layers.Length), 0, layers.Length - 1);
             var chosen = layers[layer];
             int count = chosen.Takes.Length + 1;
-            _lastLayerTake = count > 1 ? (_lastLayerTake + 1 + _random.Next(count - 1)) % count : 0;
+            if (count > 1)
+            {
+                _lastLayerTake = (_lastLayerTake + 1 + _random.Next(count - 1)) % count;
+            }
+            else
+            {
+                _lastLayerTake = 0;
+            }
+
             return _lastLayerTake == 0 ? chosen : chosen.Takes[_lastLayerTake - 1];
         }
 
@@ -510,14 +543,21 @@ namespace YARG.Audio.BASS
             voice.Key = key;
             voice.IsLooping = clip.HasLoop && voice.IsFullyHeld(_heldFrets);
             voice.IsSustain = clip.IsSustain || voice.IsLooping;
-            voice.WhammySemitones = clip.Note >= 0 ? _phrase?.WhammyBend(clip) ?? 0 : 0;
+            voice.WhammySemitones = 0;
+            if (clip.Note >= 0 && _phrase != null)
+            {
+                voice.WhammySemitones = _phrase.WhammySemitones(clip);
+            }
             voice.Gain = gain;
             voice.PlaybackRate = clip.PlaybackRate;
             var tone = _phrase?.Tone ?? BassLeadAmpTone.Default;
-            if (tone != _synthTone && _synthAmp?.SetTone(tone) == true)
+            if (tone != _synthTone)
             {
-                _synthTone = tone;
-                _synthReverb?.SetParams(1, tone.ReverbWet, tone.ReverbRoom, SYNTH_REVERB_DAMP, 1);
+                if (_synthAmp?.SetTone(tone) == true)
+                {
+                    _synthTone = tone;
+                    _synthReverb?.SetParams(1, tone.ReverbWet, tone.ReverbRoom, SYNTH_REVERB_DAMP, 1);
+                }
             }
 
             _synthAmp?.SetGain((float) Math.Clamp(_volume() * (_phrase?.SynthGain ?? 0), 0, MAX_SYNTH_GAIN));
@@ -526,12 +566,12 @@ namespace YARG.Audio.BASS
             voice.DecayDb = 0;
             if (fadeInSeconds > 0)
             {
-                SetVoiceVolume(voice, 0);
-                SlideVoiceVolume(voice, VoiceVolume(voice), fadeInSeconds);
+                voice.Stream.SetVolume(0);
+                SlideVolume(voice.Stream, VoiceVolume(voice), fadeInSeconds);
             }
             else
             {
-                SetVoiceVolume(voice, VoiceVolume(voice));
+                voice.Stream.SetVolume(VoiceVolume(voice));
             }
 
             voice.StartOrder = ++_playCount;
@@ -728,7 +768,7 @@ namespace YARG.Audio.BASS
             }
 
             voice.DecayDb = decibels;
-            SlideVoiceVolume(voice, VoiceVolume(voice), DECAY_SLIDE_SECONDS);
+            SlideVolume(voice.Stream, VoiceVolume(voice), DECAY_SLIDE_SECONDS);
         }
 
         private void FeedLoop(PushStream stream, BassStemClip clip, ref int pushedFrames)
@@ -773,9 +813,14 @@ namespace YARG.Audio.BASS
                 if (GlobalAudioHandler.UseWhammyFx)
                 {
                     int bend = voice.WhammySemitones;
-                    semitones = bend > 0
-                        ? bend * BendProgress
-                        : -GlobalAudioHandler.WhammyPitchShiftAmount * _whammyPercent;
+                    if (bend > 0)
+                    {
+                        semitones = bend * BendProgress;
+                    }
+                    else
+                    {
+                        semitones = -GlobalAudioHandler.WhammyPitchShiftAmount * _whammyPercent;
+                    }
                 }
 
                 semitones += (DriftCents(voice) + HumanCents(voice)) / 100;
@@ -797,9 +842,16 @@ namespace YARG.Audio.BASS
 
         private static void SetFrequency(PushStream stream, float freq, double glideSeconds)
         {
-            bool set = glideSeconds > 0
-                ? Bass.ChannelSlideAttribute(stream.Handle, ChannelAttribute.Frequency, freq, (int) (glideSeconds * 1000))
-                : Bass.ChannelSetAttribute(stream.Handle, ChannelAttribute.Frequency, freq);
+            bool set;
+            if (glideSeconds > 0)
+            {
+                int glideMilliseconds = (int) (glideSeconds * 1000);
+                set = Bass.ChannelSlideAttribute(stream.Handle, ChannelAttribute.Frequency, freq, glideMilliseconds);
+            }
+            else
+            {
+                set = Bass.ChannelSetAttribute(stream.Handle, ChannelAttribute.Frequency, freq);
+            }
             if (!set)
             {
                 YargLogger.LogFormatError("Failed to set replay frequency: {0}!", Bass.LastError);
@@ -815,16 +867,6 @@ namespace YARG.Audio.BASS
         private double VoiceVolume(Voice voice)
         {
             return voice.Gain * Math.Pow(10, -voice.DecayDb / 20);
-        }
-
-        private void SetVoiceVolume(Voice voice, double volume)
-        {
-            voice.Stream.SetVolume(volume);
-        }
-
-        private void SlideVoiceVolume(Voice voice, double volume, double seconds)
-        {
-            SlideVolume(voice.Stream, volume, seconds);
         }
 
         private static void SlideVolume(PushStream stream, double volume, double seconds)

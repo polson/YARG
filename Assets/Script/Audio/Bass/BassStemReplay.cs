@@ -146,7 +146,7 @@ namespace YARG.Audio.BASS
             {
                 foreach (var soundboard in _soundboards)
                 {
-                    soundboard.Clear();
+                    soundboard.ResetVoices();
                 }
             }
         }

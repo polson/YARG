@@ -56,7 +56,8 @@ namespace YARG.Audio.BASS
         public void AlignToOnset(BassStemFormat format)
         {
             int onset = FindOnset(format, ChartFrame);
-            int start = Math.Min(onset >= 0 ? onset : ChartFrame, FrameCount - 1);
+            int start = onset >= 0 ? onset : ChartFrame;
+            start = Math.Min(start, FrameCount - 1);
             if (start > 0)
             {
                 int channels = format.Channels;
@@ -74,8 +75,9 @@ namespace YARG.Audio.BASS
         {
             int attackFrames = MeasureAttackEnd(format);
             int onsetFrame = FindNextOnset(format, attackFrames);
-            int cleanEnd = Math.Min(onsetFrame, FrameCount - format.FramesFor(BLEED_GUARD_SECONDS));
-            cleanEnd = Math.Max(cleanEnd, Math.Min(format.FramesFor(MIN_CLEAN_SECONDS), FrameCount));
+            int bleedEnd = FrameCount - format.FramesFor(BLEED_GUARD_SECONDS);
+            int minimumEnd = Math.Min(format.FramesFor(MIN_CLEAN_SECONDS), FrameCount);
+            int cleanEnd = Math.Max(Math.Min(onsetFrame, bleedEnd), minimumEnd);
             if (cleanEnd >= FrameCount)
             {
                 return;
@@ -94,7 +96,7 @@ namespace YARG.Audio.BASS
             SetLoop(bodyStart: loopStart, loopEnd: FrameCount, fadeFrames: fadeFrames, format: format);
         }
 
-        public BassStemClip PlayedAt(int note, double playbackRate)
+        public BassStemClip TransposedTo(int note, double playbackRate)
         {
             return new BassStemClip
             {
@@ -159,8 +161,10 @@ namespace YARG.Audio.BASS
             int stableBlocks = 0;
             for (int block = peakBlock + 1; block < blockCount; block++)
             {
-                bool stable = powers[block] <= powers[block - 1] * ATTACK_STABLE_POWER_RATIO &&
-                    powers[block - 1] <= powers[block] * ATTACK_STABLE_POWER_RATIO;
+                double power = powers[block];
+                double previousPower = powers[block - 1];
+                bool stable = power <= previousPower * ATTACK_STABLE_POWER_RATIO
+                    && previousPower <= power * ATTACK_STABLE_POWER_RATIO;
                 stableBlocks = stable ? stableBlocks + 1 : 0;
                 int endFrame = (block + 1) * blockFrames;
                 if (stableBlocks >= 2 && endFrame >= minAttackFrames)
@@ -211,7 +215,12 @@ namespace YARG.Audio.BASS
             }
 
             double spread = windows * sumTimeSquared - sumTime * sumTime;
-            return spread > 0 ? -(windows * sumTimeLevel - sumTime * sumLevel) / spread : double.NaN;
+            if (spread <= 0)
+            {
+                return double.NaN;
+            }
+
+            return -(windows * sumTimeLevel - sumTime * sumLevel) / spread;
         }
 
         private int FindOnset(BassStemFormat format, int chartFrame)
@@ -255,7 +264,13 @@ namespace YARG.Audio.BASS
                 }
             }
 
-            return onsetBlock < 0 ? -1 : Math.Max(0, onsetBlock * blockFrames - format.FramesFor(ONSET_PRE_SECONDS));
+            if (onsetBlock < 0)
+            {
+                return -1;
+            }
+
+            int preRollFrames = format.FramesFor(ONSET_PRE_SECONDS);
+            return Math.Max(0, onsetBlock * blockFrames - preRollFrames);
         }
 
         private double Flux(int channels, int firstFrame, int frames)

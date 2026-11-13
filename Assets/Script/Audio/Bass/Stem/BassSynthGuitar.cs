@@ -164,13 +164,13 @@ namespace YARG.Audio.BASS
                 int index = 0;
                 foreach (var takes in sample.Layers.Values)
                 {
-                    layers[index++] = PlayedAt(takes, note, rate);
+                    layers[index++] = BuildLayer(takes, note, rate);
                 }
 
                 var releases = new BassStemClip[sample.Releases.Count];
                 for (int release = 0; release < releases.Length; release++)
                 {
-                    releases[release] = sample.Releases[release].PlayedAt(note, rate);
+                    releases[release] = sample.Releases[release].TransposedTo(note, rate);
                 }
 
                 foreach (var layer in layers)
@@ -208,13 +208,13 @@ namespace YARG.Audio.BASS
             return played;
         }
 
-        private static BassStemClip PlayedAt(List<(BassStemClip Clip, float Gain)> takes, int note, double rate)
+        private static BassStemClip BuildLayer(List<(BassStemClip Clip, float Gain)> takes, int note, double rate)
         {
-            var clip = takes[0].Clip.PlayedAt(note, rate);
+            var clip = takes[0].Clip.TransposedTo(note, rate);
             clip.Takes = new BassStemClip[takes.Count - 1];
             for (int take = 1; take < takes.Count; take++)
             {
-                clip.Takes[take - 1] = takes[take].Clip.PlayedAt(note, rate);
+                clip.Takes[take - 1] = takes[take].Clip.TransposedTo(note, rate);
             }
 
             return clip;

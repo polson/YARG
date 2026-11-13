@@ -36,7 +36,7 @@ namespace YARG.Audio.BASS
             _format = format;
         }
 
-        public void Request(IReadOnlyList<(double StartSeconds, double EndSeconds)> ranges, Func<double, double> playbackTime)
+        public void RequestRegions(IReadOnlyList<(double StartSeconds, double EndSeconds)> ranges, Func<double, double> playbackTime)
         {
             var requests = new List<Region>(ranges.Count);
             foreach (var (startSeconds, endSeconds) in ranges)
@@ -147,9 +147,7 @@ namespace YARG.Audio.BASS
             var pitchClasses = new int[readings.Count];
             for (int index = 0; index < readings.Count; index++)
             {
-                pitchClasses[index] = readings[index] > 0f
-                    ? (((int) Math.Round(69 + 12 * Math.Log(readings[index] / 440.0, 2)) % 12) + 12) % 12
-                    : -1;
+                pitchClasses[index] = readings[index] > 0f ? PitchClass(readings[index]) : -1;
             }
 
             int holdHops = (int) Math.Round(HOLD_SECONDS / HOP_SECONDS);
@@ -185,10 +183,23 @@ namespace YARG.Audio.BASS
                     lastRootIndex = index;
                 }
 
-                roots[index] = index - lastRootIndex <= holdHops ? lastRoot : -1;
+                if (lastRoot >= 0 && index - lastRootIndex <= holdHops)
+                {
+                    roots[index] = lastRoot;
+                }
+                else
+                {
+                    roots[index] = -1;
+                }
             }
 
             return roots;
+        }
+
+        private static int PitchClass(float frequency)
+        {
+            double midi = 69 + 12 * Math.Log(frequency / 440.0, 2);
+            return ((int) Math.Round(midi) % 12 + 12) % 12;
         }
     }
 }

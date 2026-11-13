@@ -34,21 +34,22 @@ namespace YARG.Audio.BASS
         private const double HIGH_FRET_AVERAGE = 2.5;
         private const double COLOR_BOX_CHANCE  = 0.35;
 
-        public readonly double                                          StartTime;
-        public readonly double                                          EndTime;
-        public readonly List<BassStemClip>                              Ladder = new();
-        public readonly List<(double SongSeconds, int Note, int Fret)>  Windows = new();
-        public readonly List<(double SongSeconds, int Note)>            Anchors = new();
-        public          double                                          SynthGain;
-        public          BassLeadAmpTone                                 Tone = BassLeadAmpTone.Default;
-
         private const double PHRASE_RESET_SECONDS = 0.6;
 
+        public readonly double          StartTime;
+        public readonly double          EndTime;
+        public          BassLeadAmpTone Tone { get; private set; } = BassLeadAmpTone.Default;
+        public          double          SynthGain { get; private set; }
+        public          bool            IsEmpty => _ladder.Count == 0;
+
+        private readonly List<BassStemClip>                             _ladder = new();
+        private readonly List<(double SongSeconds, int Note, int Fret)> _windows = new();
+        private readonly List<(double SongSeconds, int Note)>           _anchors = new();
         private readonly int[]        _fretRungs = new int[FRET_COUNT];
-        private          bool         _fretRungsValid;
         private          double       _songSeconds;
         private          int          _root = -1;
         private          bool[]?      _pentatonicScale;
+        private          int[]?       _pitchClassWeights;
         private          List<int>?   _scaleRungs;
         private          List<int>?   _colorRungs;
         private          bool[]?      _colorScale;
@@ -60,7 +61,7 @@ namespace YARG.Audio.BASS
         private          int          _lastFret = -1;
         private          int          _fretBeforeLast = -1;
         private          int          _lastShift;
-        private          double       _lastPlaySeconds;
+        private          double       _lastPlaySeconds = double.MinValue;
         private readonly Dictionary<BassStemClip, int> _lastTakes = new();
         private readonly Random       _random = new();
 
@@ -70,20 +71,32 @@ namespace YARG.Audio.BASS
             EndTime = endTime;
         }
 
-        public bool IsEmpty => Ladder.Count == 0;
+        public void Publish(IReadOnlyList<BassStemClip> ladder,
+            IReadOnlyList<(double SongSeconds, int Note, int Fret)> windows,
+            IReadOnlyList<(double SongSeconds, int Note)> anchors, BassLeadAmpTone tone, double synthGain)
+        {
+            _ladder.Clear();
+            _ladder.AddRange(ladder);
+            _windows.Clear();
+            _windows.AddRange(windows);
+            _anchors.Clear();
+            _anchors.AddRange(anchors);
+            Tone = tone;
+            SynthGain = synthGain;
+        }
 
         public bool Covers(double soloTime)
         {
             return soloTime >= StartTime && soloTime <= EndTime;
         }
 
-        public void Select(double songSeconds, BassChordTrack? chords)
+        public void SetPosition(double songSeconds, BassChordTrack? chords)
         {
             _songSeconds = songSeconds;
             _root = chords?.RootAt(songSeconds) ?? -1;
         }
 
-        public int WhammyBend(BassStemClip clip)
+        public int WhammySemitones(BassStemClip clip)
         {
             if (clip.Note < 0)
             {
@@ -102,10 +115,10 @@ namespace YARG.Audio.BASS
             return DEFAULT_WHAMMY;
         }
 
-        private bool TryGetClip(int key, out BassStemClip clip)
+        private bool TryGetClip(int fretMask, out BassStemClip clip)
         {
-            int fret = Array.IndexOf(FRET_KEYS, key);
-            if (fret < 0 || Ladder.Count == 0)
+            int fret = Array.IndexOf(FRET_KEYS, fretMask);
+            if (fret < 0 || _ladder.Count == 0)
             {
                 clip = null!;
                 return false;
@@ -115,14 +128,14 @@ namespace YARG.Audio.BASS
             return true;
         }
 
-        private bool TryTakeClip(int key, out BassStemClip clip)
+        private bool TryTakeClip(int fretMask, out BassStemClip clip)
         {
-            if (!TryGetClip(key, out clip))
+            if (!TryGetClip(fretMask, out clip))
             {
                 return false;
             }
 
-            int fret = Array.IndexOf(FRET_KEYS, key);
+            int fret = Array.IndexOf(FRET_KEYS, fretMask);
             clip = NextTake(clip);
             _phraseFretTotal += fret;
             _phraseFretCount++;
@@ -133,21 +146,21 @@ namespace YARG.Audio.BASS
             return true;
         }
 
-        public bool TryPickClip(int key, out BassStemClip clip)
+        public bool TryPickClip(int fretMask, out BassStemClip clip)
         {
-            if (key == GuitarEngine.OPEN_MASK)
+            if (fretMask == GuitarEngine.OPEN_MASK)
             {
                 return TryGetRandomFretClip(out clip) || TryGetAnyClip(out clip);
             }
 
-            if (TryTakeClip(key, out clip))
+            if (TryTakeClip(fretMask, out clip))
             {
                 return true;
             }
 
-            for (int fret = 1; fret <= key; fret <<= 1)
+            for (int fret = 1; fret <= fretMask; fret <<= 1)
             {
-                if ((key & fret) != 0 && TryGetClip(fret, out clip))
+                if ((fretMask & fret) != 0 && TryGetClip(fret, out clip))
                 {
                     return true;
                 }
@@ -180,15 +193,19 @@ namespace YARG.Audio.BASS
         public bool TryGetChordClips(int fretMask, List<BassStemClip> clips)
         {
             clips.Clear();
-            if (!TryTakeClip(fretMask & -fretMask, out var root))
+            int rootFret = fretMask & -fretMask;
+            if (!TryTakeClip(rootFret, out var root))
             {
                 return false;
             }
 
             clips.Add(root);
-            var fifth = InScale(root.Note + FIFTH_SEMITONES)
-                ? LadderTake(root.Note + FIFTH_SEMITONES) ?? LadderTake(root.Note - FOURTH_SEMITONES)
-                : null;
+            BassStemClip? fifth = null;
+            if (InScale(root.Note + FIFTH_SEMITONES))
+            {
+                fifth = LadderTake(root.Note + FIFTH_SEMITONES) ?? LadderTake(root.Note - FOURTH_SEMITONES);
+            }
+
             if (fifth != null)
             {
                 clips.Add(fifth);
@@ -229,7 +246,7 @@ namespace YARG.Audio.BASS
 
         private BassStemClip? LadderTake(int note)
         {
-            foreach (var clip in Ladder)
+            foreach (var clip in _ladder)
             {
                 if (clip.Note == note)
                 {
@@ -242,7 +259,7 @@ namespace YARG.Audio.BASS
 
         private bool TryGetAnyClip(out BassStemClip clip)
         {
-            if (Ladder.Count == 0)
+            if (_ladder.Count == 0)
             {
                 clip = null!;
                 return false;
@@ -268,7 +285,7 @@ namespace YARG.Audio.BASS
 
         private BassStemClip RungClip(int fret)
         {
-            return Ladder[RungFor(fret)];
+            return _ladder[RungFor(fret)];
         }
 
         /// <summary>
@@ -279,7 +296,7 @@ namespace YARG.Audio.BASS
         private int RungFor(int fret)
         {
             fret = Math.Clamp(fret, 0, FRET_COUNT - 1);
-            if (!_fretRungsValid || _songSeconds - _lastPlaySeconds > PHRASE_RESET_SECONDS)
+            if (_songSeconds - _lastPlaySeconds > PHRASE_RESET_SECONDS)
             {
                 UpdateFretRungs();
             }
@@ -291,9 +308,12 @@ namespace YARG.Audio.BASS
         private void UpdateFretRungs()
         {
             var previous = BoxRungs();
-            int targetRung = _boxStart < 0
-                ? -1
-                : previous[Math.Clamp(_boxStart + PhraseShift(), 0, previous.Count - FRET_COUNT)];
+            int targetRung = -1;
+            if (_boxStart >= 0)
+            {
+                int shifted = Math.Clamp(_boxStart + PhraseShift(), 0, previous.Count - FRET_COUNT);
+                targetRung = previous[shifted];
+            }
             _colorBox = ChooseColorBox();
             var rungs = BoxRungs();
             int lastStart = rungs.Count - FRET_COUNT;
@@ -309,7 +329,6 @@ namespace YARG.Audio.BASS
             _fretBeforeLast = -1;
             _lastShift = 0;
             FillBox(rungs);
-            _fretRungsValid = true;
         }
 
         private void FillBox(List<int> rungs)
@@ -364,7 +383,9 @@ namespace YARG.Audio.BASS
             int nearest = 0;
             for (int index = 1; index < rungs.Count; index++)
             {
-                if (Math.Abs(Ladder[rungs[index]].Note - note) < Math.Abs(Ladder[rungs[nearest]].Note - note))
+                int distance = Math.Abs(_ladder[rungs[index]].Note - note);
+                int nearestDistance = Math.Abs(_ladder[rungs[nearest]].Note - note);
+                if (distance < nearestDistance)
                 {
                     nearest = index;
                 }
@@ -399,7 +420,7 @@ namespace YARG.Audio.BASS
             foreach (int offset in ROOT_OFFSETS)
             {
                 int start = target + offset;
-                if (start >= 0 && start <= lastStart && PitchClass(Ladder[rungs[start]].Note) == _root)
+                if (start >= 0 && start <= lastStart && PitchClass(_ladder[rungs[start]].Note) == _root)
                 {
                     return start;
                 }
@@ -427,7 +448,7 @@ namespace YARG.Audio.BASS
             var pentatonic = PentatonicScale();
             for (int fret = 0; fret < FRET_COUNT; fret++)
             {
-                if (!pentatonic[PitchClass(Ladder[rungs[start + fret]].Note)])
+                if (!pentatonic[PitchClass(_ladder[rungs[start + fret]].Note)])
                 {
                     return true;
                 }
@@ -438,13 +459,13 @@ namespace YARG.Audio.BASS
 
         private (int Note, int Fret) CurrentWindow()
         {
-            if (Windows.Count == 0)
+            if (_windows.Count == 0)
             {
-                return (Ladder[Ladder.Count / 2].Note, FRET_COUNT / 2);
+                return (_ladder[_ladder.Count / 2].Note, FRET_COUNT / 2);
             }
 
-            var (_, note, fret) = Windows[0];
-            foreach (var window in Windows)
+            var (_, note, fret) = _windows[0];
+            foreach (var window in _windows)
             {
                 if (window.SongSeconds > _songSeconds)
                 {
@@ -459,7 +480,12 @@ namespace YARG.Audio.BASS
 
         private List<int> BoxRungs()
         {
-            return _colorBox ? ColorRungs() ?? ScaleRungs() : ScaleRungs();
+            if (!_colorBox)
+            {
+                return ScaleRungs();
+            }
+
+            return ColorRungs() ?? ScaleRungs();
         }
 
         private static int FirstAtOrAbove(List<int> rungs, int ladderIndex)
@@ -478,7 +504,12 @@ namespace YARG.Audio.BASS
         private bool ChooseColorBox()
         {
             var colorScale = ColorScale();
-            if (ColorRungs() == null || colorScale == null || _random.NextDouble() >= COLOR_BOX_CHANCE)
+            if (ColorRungs() == null || colorScale == null)
+            {
+                return false;
+            }
+
+            if (_random.NextDouble() >= COLOR_BOX_CHANCE)
             {
                 return false;
             }
@@ -489,7 +520,8 @@ namespace YARG.Audio.BASS
                 for (int pitchClass = 0; pitchClass < PITCH_CLASSES; pitchClass++)
                 {
                     bool isColor = colorScale[pitchClass] && !pentatonic[pitchClass];
-                    if (isColor && PitchClass(pitchClass - _root) == 1)
+                    bool isMinorSecond = PitchClass(pitchClass - _root) == 1;
+                    if (isColor && isMinorSecond)
                     {
                         return false;
                     }
@@ -509,16 +541,13 @@ namespace YARG.Audio.BASS
 
             _colorChecked = true;
             var pentatonic = PentatonicScale();
-            var weights = new int[PITCH_CLASSES];
-            foreach (var (_, note) in Anchors)
-            {
-                weights[PitchClass(note)]++;
-            }
-
+            var weights = PitchClassWeights();
             var outside = new List<int>();
             for (int pitchClass = 0; pitchClass < PITCH_CLASSES; pitchClass++)
             {
-                if (!pentatonic[pitchClass] && weights[pitchClass] >= Anchors.Count * MIN_COLOR_SHARE && weights[pitchClass] > 0)
+                int weight = weights[pitchClass];
+                bool frequent = weight >= _anchors.Count * MIN_COLOR_SHARE && weight > 0;
+                if (!pentatonic[pitchClass] && frequent)
                 {
                     outside.Add(pitchClass);
                 }
@@ -534,7 +563,8 @@ namespace YARG.Audio.BASS
                     break;
                 }
 
-                if (colors[PitchClass(pitchClass + 1)] || colors[PitchClass(pitchClass - 1)])
+                bool nextToColor = colors[PitchClass(pitchClass + 1)] || colors[PitchClass(pitchClass - 1)];
+                if (nextToColor)
                 {
                     continue;
                 }
@@ -570,7 +600,7 @@ namespace YARG.Audio.BASS
                 return null;
             }
 
-            var rungs = new List<int>(Ladder.Count);
+            var rungs = new List<int>(_ladder.Count);
             CollectRungs(rungs, colorScale);
             if (rungs.Count < FRET_COUNT)
             {
@@ -589,13 +619,13 @@ namespace YARG.Audio.BASS
                 return _scaleRungs;
             }
 
-            var rungs = new List<int>(Ladder.Count);
+            var rungs = new List<int>(_ladder.Count);
             CollectRungs(rungs, PentatonicScale());
             FilterConsecutiveSemitones(rungs);
             if (rungs.Count < FRET_COUNT)
             {
                 rungs.Clear();
-                for (int index = 0; index < Ladder.Count; index += 2)
+                for (int index = 0; index < _ladder.Count; index += 2)
                 {
                     rungs.Add(index);
                 }
@@ -609,7 +639,8 @@ namespace YARG.Audio.BASS
         {
             for (int index = rungs.Count - 1; index >= 1; index--)
             {
-                if (Ladder[rungs[index]].Note - Ladder[rungs[index - 1]].Note < 2)
+                int semitones = _ladder[rungs[index]].Note - _ladder[rungs[index - 1]].Note;
+                if (semitones < 2)
                 {
                     rungs.RemoveAt(index);
                 }
@@ -623,12 +654,7 @@ namespace YARG.Audio.BASS
                 return _pentatonicScale;
             }
 
-            var weights = new double[PITCH_CLASSES];
-            foreach (var (_, note) in Anchors)
-            {
-                weights[PitchClass(note)]++;
-            }
-
+            var weights = PitchClassWeights();
             int bestRoot = 0;
             bool bestIsMinor = true;
             double bestScore = -1;
@@ -678,12 +704,29 @@ namespace YARG.Audio.BASS
             return (note % PITCH_CLASSES + PITCH_CLASSES) % PITCH_CLASSES;
         }
 
+        private int[] PitchClassWeights()
+        {
+            if (_pitchClassWeights != null)
+            {
+                return _pitchClassWeights;
+            }
+
+            var weights = new int[PITCH_CLASSES];
+            foreach (var (_, note) in _anchors)
+            {
+                weights[PitchClass(note)]++;
+            }
+
+            _pitchClassWeights = weights;
+            return weights;
+        }
+
         private void CollectRungs(List<int> rungs, bool[] good)
         {
             rungs.Clear();
-            for (int index = 0; index < Ladder.Count; index++)
+            for (int index = 0; index < _ladder.Count; index++)
             {
-                if (good[PitchClass(Ladder[index].Note)])
+                if (good[PitchClass(_ladder[index].Note)])
                 {
                     rungs.Add(index);
                 }

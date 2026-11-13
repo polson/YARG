@@ -81,7 +81,7 @@ namespace YARG.Audio.BASS
             _cabinets = cabinets;
         }
 
-        public void Request(List<GuitarNote> notes, Func<double, double> playbackTime)
+        public void RequestPhrases(List<GuitarNote> notes, Func<double, double> playbackTime)
         {
             var phrases = SoloPhrases(notes);
             var requests = new List<RenderJob>(phrases.Count);
@@ -113,7 +113,7 @@ namespace YARG.Audio.BASS
                 _requests = requests;
             }
 
-            _chords?.Request(requests.ConvertAll(request => (request.Phrase.StartTime, request.Phrase.EndTime)), playbackTime);
+            _chords?.RequestRegions(requests.ConvertAll(request => (request.Phrase.StartTime, request.Phrase.EndTime)), playbackTime);
         }
 
         private static List<(uint StartTick, uint EndTick)> SoloPhrases(List<GuitarNote> notes)
@@ -145,18 +145,18 @@ namespace YARG.Audio.BASS
             return phrases;
         }
 
-        public BassSoloPhrase? Select(double soloTime, double songTime)
+        public BassSoloPhrase? SelectPhrase(double soloTime, double songTime)
         {
             lock (_lock)
             {
                 _requestedSoloTime = soloTime;
                 var phrase = Find(soloTime);
-                phrase?.Select(songTime, _chords);
+                phrase?.SetPosition(songTime, _chords);
                 return phrase;
             }
         }
 
-        public void Forget()
+        public void Clear()
         {
             lock (_lock)
             {
@@ -170,7 +170,8 @@ namespace YARG.Audio.BASS
         {
             lock (_lock)
             {
-                _pending = BuildJobs(_requests, jobs);
+                BuildJobs(_requests, jobs);
+                _pending = _requests;
             }
         }
 
@@ -181,6 +182,7 @@ namespace YARG.Audio.BASS
             {
                 pending = _pending;
                 _pending = new List<RenderJob>();
+                _requests = new List<RenderJob>();
                 _published.Clear();
             }
 
@@ -218,7 +220,7 @@ namespace YARG.Audio.BASS
             }
         }
 
-        private List<RenderJob> BuildJobs(List<RenderJob> requests,
+        private void BuildJobs(List<RenderJob> requests,
             List<(long StartFrame, int FrameCount, float[] Samples)> jobs)
         {
             foreach (var job in requests)
@@ -230,8 +232,6 @@ namespace YARG.Audio.BASS
 
                 AddRegionJob(job, jobs, _format.FramesFor(MAX_SPACE_SECONDS));
             }
-
-            return requests;
         }
 
         private void AddNoteWindow(RenderJob job,
@@ -350,7 +350,12 @@ namespace YARG.Audio.BASS
             var tunings = new List<double>();
             for (int index = 0; index < clips.Count; index++)
             {
-                if (pitches[index] is not { } pitch || pitch.Bent || pitch.Voiced < ANCHOR_MIN_VOICED
+                if (pitches[index] is not { } pitch)
+                {
+                    continue;
+                }
+
+                if (pitch.Bent || pitch.Voiced < ANCHOR_MIN_VOICED
                     || pitch.Note < BassSynthGuitar.LOWEST_NOTE || pitch.Note > BassSynthGuitar.HIGHEST_NOTE)
                 {
                     continue;
@@ -368,23 +373,26 @@ namespace YARG.Audio.BASS
 
             tunings.Sort();
             double tuningCents = tunings.Count > 0 ? tunings[tunings.Count / 2] : 0;
-            phrase.Ladder.AddRange(_synth!.Ladder(tuningCents));
-            SetWindows(phrase, anchors);
+            var ladder = _synth!.Ladder(tuningCents);
+            var windows = new List<(double SongSeconds, int Note, int Fret)>();
+            var anchorNotes = new List<(double SongSeconds, int Note)>();
+            SetWindows(anchors, anchorNotes, windows);
 
             var heard = Array.FindAll(levels, level => level > 0);
             Array.Sort(heard);
             double soloLevel = heard.Length > 0 ? heard[heard.Length / 2] : DEFAULT_SOLO_LEVEL;
-            phrase.Tone = MatchSpace(job, tone);
-            LogTone(phrase.Tone);
-            double stemGain = phrase.Tone.StemGain > 0 ? phrase.Tone.StemGain : soloLevel / SYNTH_NOTE_LEVEL;
-            phrase.SynthGain = stemGain * phrase.Tone.LevelGain * phrase.Tone.ReverbLevelGain;
-            SetDecay(phrase, TypicalDecay(decays));
+            tone = MatchSpace(job, tone);
+            LogTone(tone);
+            double stemGain = tone.StemGain > 0 ? tone.StemGain : soloLevel / SYNTH_NOTE_LEVEL;
+            double synthGain = stemGain * tone.LevelGain * tone.ReverbLevelGain;
+            SetDecay(ladder, TypicalDecay(decays));
+            phrase.Publish(ladder, windows, anchorNotes, tone, synthGain);
             int singles = clips.FindAll(clip => clip.SingleNote).Count;
             YargLogger.LogFormatInfo(
                 "[SoloLevel] {0} notes ({1} single, {2} chord), stem gain {3}, tone gain {4}, reverb gain {5}, synth gain {6}, solo level {7}",
-                clips.Count, singles, clips.Count - singles, Math.Round(phrase.Tone.StemGain, 2),
-                Math.Round(phrase.Tone.LevelGain, 2), Math.Round(phrase.Tone.ReverbLevelGain, 2),
-                Math.Round(phrase.SynthGain, 4), Math.Round(soloLevel, 4));
+                clips.Count, singles, clips.Count - singles, Math.Round(tone.StemGain, 2),
+                Math.Round(tone.LevelGain, 2), Math.Round(tone.ReverbLevelGain, 2),
+                Math.Round(synthGain, 4), Math.Round(soloLevel, 4));
             YargLogger.LogFormatInfo("[SoloSynth] {0} measured pitches, {1} chord anchors, tuning {2} cents, solo level {3}",
                 measured, anchors.Count - measured, Math.Round(tuningCents), Math.Round(soloLevel, 4));
         }
@@ -397,7 +405,12 @@ namespace YARG.Audio.BASS
             for (int index = 0; index < clips.Count; index++)
             {
                 var clip = clips[index].Clip;
-                if (pitches[index] is not { } pitch || pitch.Bent || pitch.Voiced < PITCH_MIN_VOICED
+                if (pitches[index] is not { } pitch)
+                {
+                    continue;
+                }
+
+                if (pitch.Bent || pitch.Voiced < PITCH_MIN_VOICED
                     || pitch.Note < BassSynthGuitar.LOWEST_NOTE || pitch.Note > BassSynthGuitar.HIGHEST_NOTE
                     || clip.FrameCount < minFrames)
                 {
@@ -507,9 +520,9 @@ namespace YARG.Audio.BASS
             }
         }
 
-        private static void SetDecay(BassSoloPhrase phrase, double decay)
+        private static void SetDecay(List<BassStemClip> ladder, double decay)
         {
-            foreach (var clip in phrase.Ladder)
+            foreach (var clip in ladder)
             {
                 clip.DecayDbPerSecond = decay;
                 foreach (var take in clip.Takes)
@@ -650,12 +663,13 @@ namespace YARG.Audio.BASS
             return false;
         }
 
-        private static void SetWindows(BassSoloPhrase phrase, List<(double SongSeconds, int Note, int Fret)> anchors)
+        private static void SetWindows(List<(double SongSeconds, int Note, int Fret)> anchors,
+            List<(double SongSeconds, int Note)> anchorNotes, List<(double SongSeconds, int Note, int Fret)> windows)
         {
             anchors.Sort((left, right) => left.SongSeconds.CompareTo(right.SongSeconds));
             foreach (var anchor in anchors)
             {
-                phrase.Anchors.Add((anchor.SongSeconds, anchor.Note));
+                anchorNotes.Add((anchor.SongSeconds, anchor.Note));
             }
 
             var neighbours = new List<int>(ANCHOR_NEIGHBOURS * 2 + 1);
@@ -671,23 +685,28 @@ namespace YARG.Audio.BASS
                 }
 
                 neighbours.Sort();
-                if (Math.Abs(anchor.Note - neighbours[neighbours.Count / 2]) >= ANCHOR_OUTLIER_SEMITONES)
+                int medianNote = neighbours[neighbours.Count / 2];
+                if (Math.Abs(anchor.Note - medianNote) >= ANCHOR_OUTLIER_SEMITONES)
                 {
                     continue;
                 }
 
-                if (phrase.Windows.Count > 0 && anchor.SongSeconds - phrase.Windows[^1].SongSeconds < MIN_WINDOW_SECONDS)
+                if (windows.Count > 0 && anchor.SongSeconds - windows[^1].SongSeconds < MIN_WINDOW_SECONDS)
                 {
                     continue;
                 }
 
                 int fret = anchor.Fret >= 0 ? anchor.Fret : BassSoloPhrase.FRET_COUNT / 2;
-                if (phrase.Windows.Count > 0 && phrase.Windows[^1].Note == anchor.Note && phrase.Windows[^1].Fret == fret)
+                if (windows.Count > 0)
                 {
-                    continue;
+                    var previous = windows[^1];
+                    if (previous.Note == anchor.Note && previous.Fret == fret)
+                    {
+                        continue;
+                    }
                 }
 
-                phrase.Windows.Add((anchor.SongSeconds, anchor.Note, fret));
+                windows.Add((anchor.SongSeconds, anchor.Note, fret));
             }
         }
 
@@ -754,7 +773,12 @@ namespace YARG.Audio.BASS
 
         private static RenderJob TakeNext(List<RenderJob> queue, double soloTime)
         {
-            int index = Math.Max(queue.FindIndex(job => job.Phrase.Covers(soloTime)), 0);
+            int index = queue.FindIndex(job => job.Phrase.Covers(soloTime));
+            if (index < 0)
+            {
+                index = 0;
+            }
+
             var job = queue[index];
             queue.RemoveAt(index);
             return job;

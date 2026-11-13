@@ -64,7 +64,7 @@ namespace YARG.Gameplay.Player
 
         public void ReleaseFrets(int fretMask)
         {
-            _soundboard.Release(fretMask);
+            _soundboard.ReleaseFrets(fretMask);
         }
 
         public void StopVoices()
@@ -141,14 +141,15 @@ namespace YARG.Gameplay.Player
                 sustainMask |= playMask == 0 ? GuitarEngine.OPEN_MASK : playMask;
             }
 
-            bool soloAudio = _soundboard.SelectPhrase(soloTime.Value, currentTime);
+            bool soloAudio = _soundboard.TrySelectPhrase(soloTime.Value, currentTime);
             _stemMutedBySolo = soloAudio;
             _setStemMuted(soloAudio);
             _soundboard.SetHeldFrets(sustainMask);
             _soundboard.SetWhammyPitch(whammyAxis);
             if ((strummed || hammerOn) && soloAudio)
             {
-                StartPhrase(strummed, hammerOn, playMask, heldMask == 0, currentTime);
+                StartPhrase(strummed: strummed, hammerOn: hammerOn, playMask: playMask, fretless: heldMask == 0,
+                    currentTime: currentTime);
             }
         }
 
@@ -160,7 +161,12 @@ namespace YARG.Gameplay.Player
                 return null;
             }
 
-            return currentTime >= freestyleTime.Value - MUTE_LEAD_SECONDS ? freestyleTime : null;
+            if (currentTime >= freestyleTime.Value - MUTE_LEAD_SECONDS)
+            {
+                return freestyleTime;
+            }
+
+            return null;
         }
 
         private void Stop()
@@ -197,18 +203,22 @@ namespace YARG.Gameplay.Player
             }
             else
             {
-                int fretMask = HighestFret(playMask);
-                int key = fretMask == 0 ? GuitarEngine.OPEN_MASK : fretMask;
+                int playedMask = HighestFret(playMask);
+                if (playedMask == 0)
+                {
+                    playedMask = GuitarEngine.OPEN_MASK;
+                }
+
                 if (strummed)
                 {
-                    _soundboard.Play(key);
+                    _soundboard.PlayNote(playedMask);
                 }
                 else
                 {
-                    _soundboard.PlayLegato(key);
+                    _soundboard.PlayLegato(playedMask);
                 }
 
-                _onPlayed(key);
+                _onPlayed(playedMask);
             }
 
             _phraseMask = playMask == 0 ? GuitarEngine.OPEN_MASK : playMask;
