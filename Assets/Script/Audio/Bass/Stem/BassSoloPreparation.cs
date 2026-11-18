@@ -16,7 +16,6 @@ namespace YARG.Audio.BASS
     {
         private const double PITCH_MAX_MEASURE_SECONDS = 0.4;
         private const double LEVEL_SECONDS             = 0.3;
-        private const float  PITCH_MIN_VOICED          = 0.8f;
         private const float  ANCHOR_MIN_VOICED         = 0.6f;
         private const float  PITCH_AGREE_CENTS         = 35f;
         private const int    ANCHOR_NEIGHBOURS         = 2;
@@ -216,7 +215,7 @@ namespace YARG.Audio.BASS
                     continue;
                 }
 
-                if (pitch.Bent || pitch.Voiced < PITCH_MIN_VOICED
+                if (pitch.Voiced < ANCHOR_MIN_VOICED
                     || pitch.Note < BassSynthGuitar.LOWEST_NOTE || pitch.Note > BassSynthGuitar.HIGHEST_NOTE
                     || clip.FrameCount < minFrames)
                 {
