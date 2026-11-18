@@ -100,6 +100,15 @@ namespace YARG.Gameplay.Visuals
             _color = color;
         }
 
+        public void SetColor(Color color)
+        {
+            _color = color;
+            if (Initialized)
+            {
+                _innerMaterial.color = color;
+            }
+        }
+
         public void SetEmissionColor(float normalizedTime)
         {
             SetEmissionColor(_color, normalizedTime);

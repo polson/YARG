@@ -190,7 +190,8 @@ namespace YARG.Audio.BASS
             double stemGain = tone.StemGain > 0 ? tone.StemGain : soloLevel / SYNTH_NOTE_LEVEL;
             double synthGain = stemGain * tone.LevelGain * tone.ReverbLevelGain;
             SetDecay(ladder, TypicalDecay(decays));
-            var phrase = new BassSoloPhrase(job.StartTime, job.EndTime, ladder, windows, anchorNotes, tone, synthGain);
+            var phrase = new BassSoloPhrase(job.StartTime, job.EndTime, ladder, windows, anchorNotes, _backingChords,
+                tone, synthGain);
             int singles = clips.FindAll(clip => clip.SingleNote).Count;
             YargLogger.LogFormatInfo(
                 "[SoloLevel] {0} notes ({1} single, {2} chord), stem gain {3}, tone gain {4}, reverb gain {5}, synth gain {6}, solo level {7}",

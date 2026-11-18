@@ -32,6 +32,10 @@ namespace YARG.Gameplay.Player
         private const double DEDICATED_OPEN_FLASH_HOLD_DURATION = 0.05;
 
         private const int SHIFT_INDICATOR_MEASURES_BEFORE = 5;
+        private const float  SOLO_LOW_HUE                = 0.62f;
+        private const float  SOLO_HIGH_HUE               = 0f;
+        private const float  SOLO_SATURATION             = 0.85f;
+        private const float  SOLO_FRET_INNER_BRIGHTNESS  = 0.6f;
 
         public bool UsingOpenLane { get; private set; }
 
@@ -119,6 +123,10 @@ namespace YARG.Gameplay.Player
         private double _fretPulseStartTime;
 
         private List<int> _activeFrets = new(5);
+
+        private Color? _soloTint;
+        private (double Start, double End)? _soloLanes;
+        private readonly BoxFretColors _boxFretColors = new();
 
         [Header("Five Fret Specific")]
         [SerializeField]
@@ -348,6 +356,7 @@ namespace YARG.Gameplay.Player
 
             base.UpdateVisuals(visualTime);
             UpdateRangeShift(visualTime);
+            UpdateSoloColors(visualTime);
             UpdateFretArray();
         }
 
@@ -453,6 +462,96 @@ namespace YARG.Gameplay.Player
 
         }
 
+        protected override void StartBRE(double timeStart, double timeEnd)
+        {
+            base.StartBRE(timeStart, timeEnd);
+            _soloLanes = IsSoloPhrase(timeStart, timeEnd) ? (timeStart, timeEnd) : null;
+        }
+
+        private bool IsSoloPhrase(double timeStart, double timeEnd)
+        {
+            foreach (var phrase in NoteTrack.Phrases)
+            {
+                if (phrase.Type == PhraseType.Solo && phrase.Time == timeStart && phrase.TimeEnd == timeEnd)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void UpdateSoloColors(double visualTime)
+        {
+            if (_freestyle == null || !ShowsFreestyleLanes)
+            {
+                return;
+            }
+
+            if (_soloLanes is not (double soloStart, double soloEnd) || visualTime > soloEnd
+                || !_freestyle.TryGetBox(soloStart, soloEnd, out int start, out int lastStart))
+            {
+                RestoreFretColors();
+                return;
+            }
+
+            var color = SoloBoxColor(start, lastStart);
+            foreach (var lane in BRELanes)
+            {
+                if (lane != null && lane.gameObject.activeSelf && lane.ElementTime == soloStart)
+                {
+                    lane.SetColor(color);
+                }
+            }
+
+            if (!Engine.IsFreestyleActive)
+            {
+                RestoreFretColors();
+                return;
+            }
+
+            if (_soloTint == color)
+            {
+                return;
+            }
+
+            _soloTint = color;
+            var inner = color * SOLO_FRET_INNER_BRIGHTNESS;
+            inner.a = 1f;
+            _boxFretColors.Top = color.ToSystemColor();
+            _boxFretColors.Inner = inner.ToSystemColor();
+            _fretArray.RecolorFrets(_boxFretColors);
+        }
+
+        private void RestoreFretColors()
+        {
+            if (_soloTint == null)
+            {
+                return;
+            }
+
+            _soloTint = null;
+            _fretArray.RecolorFrets(Player.ColorProfile.FiveFretGuitar);
+        }
+
+        private sealed class BoxFretColors : ColorProfile.IFretColorProvider
+        {
+            public System.Drawing.Color Top;
+            public System.Drawing.Color Inner;
+
+            public System.Drawing.Color GetFretColor(int index) => Top;
+
+            public System.Drawing.Color GetFretInnerColor(int index) => Inner;
+
+            public System.Drawing.Color GetParticleColor(int index) => Top;
+        }
+
+        private static Color SoloBoxColor(int start, int lastStart)
+        {
+            float height = lastStart > 0 ? Mathf.Clamp01((float) start / lastStart) : 0.5f;
+            return Color.HSVToRGB(Mathf.Lerp(SOLO_LOW_HUE, SOLO_HIGH_HUE, height), SOLO_SATURATION, 1f);
+        }
+
         protected virtual void UpdateFretArray()
         {
             for (var action = GuitarAction.GreenFret; action <= GetFretActionMax(); action++)
@@ -517,6 +616,8 @@ namespace YARG.Gameplay.Player
         protected override void ResetVisuals()
         {
             base.ResetVisuals();
+            _soloLanes = null;
+            RestoreFretColors();
             _freestyle?.Reset();
 
             StrikelineAnimator.SetSustaining(false);

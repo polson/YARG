@@ -100,9 +100,29 @@ namespace YARG.Audio.BASS
             {
                 _requestedSoloTime = soloTime;
                 var phrase = Find(soloTime);
-                phrase?.SetPosition(songTime, _backingChords);
+                phrase?.SetPosition(songTime);
                 return phrase;
             }
+        }
+
+        public bool TryGetBox(double startTime, double endTime, out int start, out int lastStart)
+        {
+            lock (_lock)
+            {
+                foreach (var phrase in _published)
+                {
+                    if (!phrase.IsEmpty && phrase.StartTime <= endTime && phrase.EndTime >= startTime)
+                    {
+                        start = phrase.BoxStart;
+                        lastStart = phrase.LastBoxStart;
+                        return true;
+                    }
+                }
+            }
+
+            start = 0;
+            lastStart = 0;
+            return false;
         }
 
         public void Clear()

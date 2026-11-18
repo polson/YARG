@@ -7,50 +7,43 @@ namespace YARG.Audio.BASS
 {
     /// <summary>
     /// Maps the five frets onto the solo's note ladder for the current phrase, keeping repeated frets
-    /// stable, adjacent frets apart and the box inside the solo's scale.
+    /// stable, adjacent frets apart and the box inside the solo's scale. The box starts where the
+    /// recorded solo begins and moves only when the player steps onto an edge fret.
     /// </summary>
     internal sealed class BassSoloFretBox
     {
         private const int FRET_COUNT = BassSoloPhrase.FRET_COUNT;
 
-        private static readonly int[] ROOT_OFFSETS  = { 0, -1, 1 };
-        private static readonly int[] COLOR_OFFSETS = { 0, -1, 1, -2, 2 };
+        private static readonly int[] ROOT_OFFSETS = { 0, -1, 1 };
 
-        private const int    BOX_SHIFT_RUNGS   = 3;
-        private const int    EDGE_SHIFT_RUNGS  = 3;
-        private const double LOW_FRET_AVERAGE  = 1.5;
-        private const double HIGH_FRET_AVERAGE = 2.5;
-        private const double COLOR_BOX_CHANCE  = 0.35;
-
-        private const double PHRASE_RESET_SECONDS = 0.6;
+        private const int EDGE_SHIFT_RUNGS = 2;
 
         private readonly BassSoloScale _scale;
-        private readonly Random        _random;
         private readonly IReadOnlyList<(double SongSeconds, int Note, int Fret)> _windows;
 
-        private readonly int[]  _fretRungs = new int[FRET_COUNT];
-        private          double _songSeconds;
-        private          int    _root = -1;
-        private          bool   _colorBox;
-        private          int    _boxStart = -1;
-        private          int    _phraseFretTotal;
-        private          int    _phraseFretCount;
-        private          int    _lastFret = -1;
-        private          int    _fretBeforeLast = -1;
-        private          double _lastPlaySeconds = double.MinValue;
+        private double _songSeconds;
+        private int    _boxStart;
+        private int    _lastFret = -1;
+        private int    _fretBeforeLast = -1;
 
         public BassSoloFretBox(BassSoloScale scale, IReadOnlyList<(double SongSeconds, int Note, int Fret)> windows,
-            Random random)
+            double startSeconds, BassChordTrack? backingChords)
         {
             _scale = scale;
             _windows = windows;
-            _random = random;
+            if (scale.ScaleRungs.Count >= FRET_COUNT)
+            {
+                _boxStart = PlaceBox(startSeconds, backingChords);
+            }
         }
 
-        public void SetPosition(double songSeconds, BassChordTrack? backingChords)
+        public int Start => _boxStart;
+
+        public int LastStart => Math.Max(0, _scale.ScaleRungs.Count - FRET_COUNT);
+
+        public void SetPosition(double songSeconds)
         {
             _songSeconds = songSeconds;
-            _root = backingChords?.RootAt(songSeconds) ?? -1;
         }
 
         public BassStemClip RungClip(int fret)
@@ -60,100 +53,55 @@ namespace YARG.Audio.BASS
 
         public void NoteTaken(int fret, BassStemClip clip)
         {
-            _phraseFretTotal += fret;
-            _phraseFretCount++;
-            FollowRun(fret);
-            var (windowNote, _) = CurrentWindow();
-            YargLogger.LogFormatDebug("[SoloFret] {0:0.00}s fret {1} note {2} window {3} root {4}",
-                _songSeconds, fret, clip.Note, windowNote, _root);
+            FollowFret(fret);
+            var (windowNote, _) = WindowAt(_songSeconds);
+            YargLogger.LogFormatDebug("[SoloFret] {0:0.00}s fret {1} note {2} window {3} box {4}",
+                _songSeconds, fret, clip.Note, windowNote, _boxStart);
         }
 
         /// <summary>
-        /// Locks the five frets to stable scale positions during an active phrase so that
+        /// Locks the five frets to stable scale positions between box shifts so that
         /// hitting the same fret repeatedly is guaranteed to sound the exact same note,
         /// and adjacent frets never share a pitch.
         /// </summary>
         private int RungFor(int fret)
         {
-            if (_songSeconds - _lastPlaySeconds > PHRASE_RESET_SECONDS)
-            {
-                UpdateFretRungs();
-            }
-
-            _lastPlaySeconds = _songSeconds;
-            return _fretRungs[fret];
+            return _scale.ScaleRungs[_boxStart + fret];
         }
 
-        private void UpdateFretRungs()
-        {
-            var previous = BoxRungs();
-            int targetRung = -1;
-            if (_boxStart >= 0)
-            {
-                int shifted = Math.Clamp(_boxStart + PhraseShift(), 0, previous.Count - FRET_COUNT);
-                targetRung = previous[shifted];
-            }
-            _colorBox = ChooseColorBox();
-            var rungs = BoxRungs();
-            int lastStart = rungs.Count - FRET_COUNT;
-            int target = targetRung < 0 ? WindowStart(rungs) : FirstAtOrAbove(rungs, targetRung);
-            _boxStart = RootAlignedStart(rungs, Math.Clamp(target, 0, lastStart), lastStart);
-            if (_colorBox)
-            {
-                _boxStart = ColorAlignedStart(rungs, _boxStart, lastStart);
-            }
-            _phraseFretTotal = 0;
-            _phraseFretCount = 0;
-            _lastFret = -1;
-            _fretBeforeLast = -1;
-            FillBox(rungs);
-        }
-
-        private void FillBox(List<int> rungs)
-        {
-            for (int f = 0; f < FRET_COUNT; f++)
-            {
-                _fretRungs[f] = rungs[_boxStart + f];
-            }
-        }
-
-        private void FollowRun(int fret)
+        private void FollowFret(int fret)
         {
             int beforePrevious = _fretBeforeLast;
             int previous = _lastFret;
             _fretBeforeLast = previous;
             _lastFret = fret;
-            if (beforePrevious < 0)
+            if (previous < 0)
             {
                 return;
             }
 
-            if (fret == FRET_COUNT - 1 && beforePrevious < previous && previous < fret)
+            int top = FRET_COUNT - 1;
+            if (fret == top && previous < top && beforePrevious != top)
             {
-                ShiftBox(EDGE_SHIFT_RUNGS);
+                _boxStart = Math.Min(_boxStart + EDGE_SHIFT_RUNGS, LastStart);
             }
-            else if (fret == 0 && beforePrevious > previous && previous > fret)
+            else if (fret == 0 && previous > 0 && beforePrevious != 0)
             {
-                ShiftBox(-EDGE_SHIFT_RUNGS);
+                _boxStart = Math.Max(_boxStart - EDGE_SHIFT_RUNGS, 0);
             }
         }
 
-        private void ShiftBox(int rungCount)
+        private int PlaceBox(double songSeconds, BassChordTrack? backingChords)
         {
-            var rungs = BoxRungs();
-            int start = Math.Clamp(_boxStart + rungCount, 0, rungs.Count - FRET_COUNT);
-            if (start == _boxStart)
-            {
-                return;
-            }
-
-            _boxStart = start;
-            FillBox(rungs);
+            int root = backingChords?.RootAt(songSeconds) ?? -1;
+            var rungs = _scale.ScaleRungs;
+            int lastStart = rungs.Count - FRET_COUNT;
+            return RootAlignedStart(rungs, Math.Clamp(WindowStart(rungs, songSeconds), 0, lastStart), lastStart, root);
         }
 
-        private int WindowStart(List<int> rungs)
+        private int WindowStart(List<int> rungs, double songSeconds)
         {
-            var (note, windowFret) = CurrentWindow();
+            var (note, windowFret) = WindowAt(songSeconds);
             int nearest = 0;
             for (int index = 1; index < rungs.Count; index++)
             {
@@ -168,25 +116,9 @@ namespace YARG.Audio.BASS
             return nearest - windowFret;
         }
 
-        private int PhraseShift()
+        private int RootAlignedStart(List<int> rungs, int target, int lastStart, int root)
         {
-            if (_phraseFretCount == 0)
-            {
-                return 0;
-            }
-
-            double average = (double) _phraseFretTotal / _phraseFretCount;
-            if (average >= HIGH_FRET_AVERAGE)
-            {
-                return BOX_SHIFT_RUNGS;
-            }
-
-            return average <= LOW_FRET_AVERAGE ? -BOX_SHIFT_RUNGS : 0;
-        }
-
-        private int RootAlignedStart(List<int> rungs, int target, int lastStart)
-        {
-            if (_root < 0)
+            if (root < 0)
             {
                 return target;
             }
@@ -194,7 +126,7 @@ namespace YARG.Audio.BASS
             foreach (int offset in ROOT_OFFSETS)
             {
                 int start = target + offset;
-                if (start >= 0 && start <= lastStart && BassSoloScale.PitchClass(_scale.NoteAt(rungs[start])) == _root)
+                if (start >= 0 && start <= lastStart && BassSoloScale.PitchClass(_scale.NoteAt(rungs[start])) == root)
                 {
                     return start;
                 }
@@ -203,34 +135,7 @@ namespace YARG.Audio.BASS
             return target;
         }
 
-        private int ColorAlignedStart(List<int> rungs, int start, int lastStart)
-        {
-            foreach (int offset in COLOR_OFFSETS)
-            {
-                int candidate = start + offset;
-                if (candidate >= 0 && candidate <= lastStart && HasColorNote(rungs, candidate))
-                {
-                    return candidate;
-                }
-            }
-
-            return start;
-        }
-
-        private bool HasColorNote(List<int> rungs, int start)
-        {
-            for (int fret = 0; fret < FRET_COUNT; fret++)
-            {
-                if (!_scale.Pentatonic[BassSoloScale.PitchClass(_scale.NoteAt(rungs[start + fret]))])
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private (int Note, int Fret) CurrentWindow()
+        private (int Note, int Fret) WindowAt(double songSeconds)
         {
             if (_windows.Count == 0)
             {
@@ -240,7 +145,7 @@ namespace YARG.Audio.BASS
             var (_, note, fret) = _windows[0];
             foreach (var window in _windows)
             {
-                if (window.SongSeconds > _songSeconds)
+                if (window.SongSeconds > songSeconds)
                 {
                     break;
                 }
@@ -249,55 +154,6 @@ namespace YARG.Audio.BASS
             }
 
             return (note, fret);
-        }
-
-        private List<int> BoxRungs()
-        {
-            return _colorBox ? _scale.ColorRungs! : _scale.ScaleRungs;
-        }
-
-        private static int FirstAtOrAbove(List<int> rungs, int ladderIndex)
-        {
-            for (int index = 0; index < rungs.Count; index++)
-            {
-                if (rungs[index] >= ladderIndex)
-                {
-                    return index;
-                }
-            }
-
-            return rungs.Count - 1;
-        }
-
-        private bool ChooseColorBox()
-        {
-            var colorScale = _scale.ColorScale;
-            if (colorScale == null)
-            {
-                return false;
-            }
-
-            if (_random.NextDouble() >= COLOR_BOX_CHANCE)
-            {
-                return false;
-            }
-
-            var pentatonic = _scale.Pentatonic;
-            if (_root >= 0)
-            {
-                for (int pitchClass = 0; pitchClass < BassSoloScale.PITCH_CLASSES; pitchClass++)
-                {
-                    bool isColor = colorScale[pitchClass] && !pentatonic[pitchClass];
-                    bool isMinorSecond = BassSoloScale.PitchClass(pitchClass - _root) == 1;
-                    if (isColor && isMinorSecond)
-                    {
-                        return false;
-                    }
-                }
-            }
-
-            YargLogger.LogFormatDebug("[SoloFret] {0:0.00}s switching to the solo's color box", _songSeconds);
-            return true;
         }
     }
 }

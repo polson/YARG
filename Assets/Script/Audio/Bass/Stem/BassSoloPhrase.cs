@@ -35,7 +35,8 @@ namespace YARG.Audio.BASS
 
         public BassSoloPhrase(double startTime, double endTime, List<BassStemClip> ladder,
             IReadOnlyList<(double SongSeconds, int Note, int Fret)> windows,
-            IReadOnlyList<(double SongSeconds, int Note)> anchors, BassLeadAmpTone tone, double synthGain)
+            IReadOnlyList<(double SongSeconds, int Note)> anchors, BassChordTrack? backingChords,
+            BassLeadAmpTone tone, double synthGain)
         {
             StartTime = startTime;
             EndTime = endTime;
@@ -43,17 +44,21 @@ namespace YARG.Audio.BASS
             Tone = tone;
             SynthGain = synthGain;
             _scale = new BassSoloScale(ladder, anchors);
-            _box = new BassSoloFretBox(_scale, windows, _random);
+            _box = new BassSoloFretBox(_scale, windows, startTime, backingChords);
         }
+
+        public int BoxStart => _box.Start;
+
+        public int LastBoxStart => _box.LastStart;
 
         public bool Covers(double soloTime)
         {
             return soloTime >= StartTime && soloTime <= EndTime;
         }
 
-        public void SetPosition(double songSeconds, BassChordTrack? backingChords)
+        public void SetPosition(double songSeconds)
         {
-            _box.SetPosition(songSeconds, backingChords);
+            _box.SetPosition(songSeconds);
         }
 
         public int WhammySemitones(BassStemClip clip)

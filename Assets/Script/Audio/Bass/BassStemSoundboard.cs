@@ -121,6 +121,11 @@ namespace YARG.Audio.BASS
             return phrase is { IsEmpty: false };
         }
 
+        public bool TryGetBox(double startTime, double endTime, out int start, out int lastStart)
+        {
+            return _library.TryGetBox(startTime, endTime, out start, out lastStart);
+        }
+
         public void PlayNote(int fretMask)
         {
             lock (_lock)

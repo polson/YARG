@@ -60,6 +60,11 @@ namespace YARG.Gameplay.Player
             _soundboard.RequestPhrases(notes, playbackTime);
         }
 
+        public bool TryGetBox(double startTime, double endTime, out int start, out int lastStart)
+        {
+            return _soundboard.TryGetBox(startTime, endTime, out start, out lastStart);
+        }
+
         public void ReleaseFrets(int fretMask)
         {
             _soundboard.ReleaseFrets(fretMask);
