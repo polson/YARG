@@ -3,6 +3,7 @@
 #include "dsp/FreeverbDsp.h"
 #include "dsp/LeadAmpDsp.h"
 #include "dsp/Loudness.h"
+#include "dsp/ParallelFor.h"
 
 #include <algorithm>
 #include <cmath>
@@ -40,6 +41,7 @@ constexpr float REVERB_WIDTH = 1.0f;
 constexpr float MAX_REVERB_WET = 1.5f;
 constexpr float FIT_START_WET = 0.5f;
 constexpr int FIT_STEPS = 12;
+constexpr int FIT_PARALLEL_STEPS = 3;
 constexpr double CALIBRATION_NOTE_SECONDS = 0.4;
 constexpr double CALIBRATION_RELEASE_SECONDS = 0.015;
 constexpr double CALIBRATION_SECONDS = 1.2;
@@ -165,15 +167,37 @@ private:
 
 template <typename Measure>
 float bisect(float low, float high, double target, bool rising, Measure measure) {
-    for (int step = 0; step < FIT_STEPS; ++step) {
-        const float middle = 0.5f * (low + high);
-        double value = 0.0;
-        measure(middle, value);
-        if ((value < target) == rising) {
-            low = middle;
-        } else {
-            high = middle;
+    for (int step = 0; step < FIT_STEPS;) {
+        const int depth = std::min(FIT_PARALLEL_STEPS, FIT_STEPS - step);
+        const std::size_t count = (std::size_t{1} << depth) - 1;
+        std::vector<float> lows(count), highs(count), middles(count);
+        std::vector<double> values(count, 0.0);
+        lows[0] = low;
+        highs[0] = high;
+        for (std::size_t node = 0; node < count; ++node) {
+            middles[node] = 0.5f * (lows[node] + highs[node]);
+            if (2 * node + 2 < count) {
+                lows[2 * node + 1] = lows[node];
+                highs[2 * node + 1] = middles[node];
+                lows[2 * node + 2] = middles[node];
+                highs[2 * node + 2] = highs[node];
+            }
         }
+        yarg::audio::forEachParallel(count, [&](std::size_t node) {
+            measure(middles[node], values[node]);
+        });
+
+        std::size_t node = 0;
+        for (int level = 0; level < depth; ++level) {
+            const bool rises = (values[node] < target) == rising;
+            if (rises) {
+                low = middles[node];
+            } else {
+                high = middles[node];
+            }
+            node = 2 * node + (rises ? 2 : 1);
+        }
+        step += depth;
     }
     return 0.5f * (low + high);
 }

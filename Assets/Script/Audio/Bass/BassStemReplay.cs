@@ -21,6 +21,7 @@ namespace YARG.Audio.BASS
         private const int PRERENDER_SHUTDOWN_TIMEOUT_MS = 1000;
         private const int CHUNK_FRAMES                 = 16384;
         private const int FLOAT_BYTES                  = sizeof(float);
+        private const double SKIP_GAP_SECONDS          = 5;
 
         private readonly AudioManager               _manager;
         private readonly Func<double>               _normalizationGain;
@@ -119,6 +120,11 @@ namespace YARG.Audio.BASS
                 try
                 {
                     var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+                    if (soundboards.Count > 0)
+                    {
+                        _ = Task.Run(() => BassSynthGuitar.Shared(_format));
+                    }
+
                     if (!Decode(bytes, indices, _format, jobs, token))
                     {
                         return;
@@ -271,11 +277,30 @@ namespace YARG.Audio.BASS
                 var buffer = new float[CHUNK_FRAMES * sourceChannels];
                 long position = SeekTo(handle, jobs.Count > 0 ? jobs[0].StartFrame : 0, format);
                 int firstJob = 0;
+                int nextJob = 0;
+                long startedEnd = 0;
+                bool canSkip = true;
+                int skipFrames = format.FramesFor(SKIP_GAP_SECONDS);
                 while (position < endFrame)
                 {
                     if (token.IsCancellationRequested)
                     {
                         return false;
+                    }
+
+                    while (nextJob < jobs.Count && jobs[nextJob].StartFrame <= position)
+                    {
+                        startedEnd = Math.Max(startedEnd, jobs[nextJob].StartFrame + jobs[nextJob].FrameCount);
+                        nextJob++;
+                    }
+
+                    if (canSkip && position >= startedEnd && nextJob < jobs.Count
+                        && jobs[nextJob].StartFrame - position > skipFrames)
+                    {
+                        long skipped = SeekTo(handle, jobs[nextJob].StartFrame, format);
+                        canSkip = skipped > position;
+                        position = skipped;
+                        continue;
                     }
 
                     int byteCount = buffer.Length * FLOAT_BYTES;
@@ -322,8 +347,7 @@ namespace YARG.Audio.BASS
             long bytes = Bass.ChannelSeconds2Bytes(handle, (double) frame / format.Frequency);
             if (!Bass.ChannelSetPosition(handle, bytes))
             {
-                YargLogger.LogFormatWarning("Failed to seek stem pre-render, decoding from the start: {0}!", Bass.LastError);
-                return 0;
+                YargLogger.LogFormatWarning("Failed to seek stem pre-render, decoding through: {0}!", Bass.LastError);
             }
 
             return (long) Math.Round(Bass.ChannelBytes2Seconds(handle, Bass.ChannelGetPosition(handle)) * format.Frequency);

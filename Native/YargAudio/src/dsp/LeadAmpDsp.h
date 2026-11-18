@@ -102,6 +102,7 @@ private:
     int channels_;
     float sampleRate_;
     std::array<Biquad, FILTER_COUNT> filters_{};
+    std::array<bool, TONE_BANDS> toneActive_{};
     float couplingCoefficient_;
     float interstageCoefficient_;
     float echoToneCoefficient_;

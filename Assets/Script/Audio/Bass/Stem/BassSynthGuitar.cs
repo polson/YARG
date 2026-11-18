@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading.Tasks;
 using ManagedBass;
 using YARG.Core.Logging;
 using YARG.Helpers;
@@ -64,9 +65,32 @@ namespace YARG.Audio.BASS
             }
         }
 
+        private static readonly object _cacheLock = new();
+        private static readonly Dictionary<(int Frequency, int Channels), WeakReference<BassSynthGuitar>> _cache = new();
+
         private readonly List<Sample> _samples;
 
-        internal static BassSynthGuitar? Load(BassStemFormat format)
+        internal static BassSynthGuitar? Shared(BassStemFormat format)
+        {
+            lock (_cacheLock)
+            {
+                var key = (format.Frequency, format.Channels);
+                if (_cache.TryGetValue(key, out var cached) && cached.TryGetTarget(out var synth))
+                {
+                    return synth;
+                }
+
+                synth = Load(format);
+                if (synth != null)
+                {
+                    _cache[key] = new WeakReference<BassSynthGuitar>(synth);
+                }
+
+                return synth;
+            }
+        }
+
+        private static BassSynthGuitar? Load(BassStemFormat format)
         {
             string folder = Path.Combine(PathHelper.StreamingAssetsPath, FOLDER);
             if (!Directory.Exists(folder))
@@ -75,8 +99,7 @@ namespace YARG.Audio.BASS
                 return null;
             }
 
-            var notes = new List<(int Note, int Layer, float[] Mono, int Frequency)>();
-            var releases = new List<(int Note, float[] Mono, int Frequency)>();
+            var files = new List<(string Path, int Note, int Layer, bool Release)>();
             var paths = Directory.GetFiles(folder, "*.opus");
             Array.Sort(paths, StringComparer.Ordinal);
             foreach (string path in paths)
@@ -94,7 +117,22 @@ namespace YARG.Audio.BASS
                     continue;
                 }
 
-                var mono = Decode(path, out int frequency);
+                files.Add((path, note, layer, release));
+            }
+
+            var decoded = new (float[]? Mono, int Frequency)[files.Count];
+            Parallel.For(0, files.Count, LoadOptions(), index =>
+            {
+                var mono = Decode(files[index].Path, out int frequency);
+                decoded[index] = (mono, frequency);
+            });
+
+            var notes = new List<(int Note, int Layer, float[] Mono, int Frequency)>();
+            var releases = new List<(int Note, float[] Mono, int Frequency)>();
+            for (int index = 0; index < files.Count; index++)
+            {
+                var (_, note, layer, release) = files[index];
+                var (mono, frequency) = decoded[index];
                 if (mono == null)
                 {
                     continue;
@@ -113,6 +151,14 @@ namespace YARG.Audio.BASS
             return Create(notes, releases, format);
         }
 
+        private static ParallelOptions LoadOptions()
+        {
+            return new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2),
+            };
+        }
+
         private BassSynthGuitar(List<Sample> samples)
         {
             _samples = samples;
@@ -121,10 +167,20 @@ namespace YARG.Audio.BASS
         private static BassSynthGuitar? Create(IReadOnlyList<(int Note, int Layer, float[] Mono, int Frequency)> recordings,
             IReadOnlyList<(int Note, float[] Mono, int Frequency)> releases, BassStemFormat format)
         {
-            var samples = new List<Sample>();
-            foreach (var (note, layer, mono, frequency) in recordings)
+            var clips = new (BassStemClip? Clip, float Gain)[recordings.Count];
+            Parallel.For(0, recordings.Count, LoadOptions(), index =>
             {
+                var (note, _, mono, frequency) = recordings[index];
                 var clip = Clip(note, mono, frequency, format, out float gain);
+                clips[index] = (clip, gain);
+            });
+
+            var samples = new List<Sample>();
+            for (int index = 0; index < recordings.Count; index++)
+            {
+                int note = recordings[index].Note;
+                int layer = recordings[index].Layer;
+                var (clip, gain) = clips[index];
                 if (clip == null)
                 {
                     continue;

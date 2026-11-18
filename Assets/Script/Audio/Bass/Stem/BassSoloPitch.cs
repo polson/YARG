@@ -67,6 +67,7 @@ namespace YARG.Audio.BASS
             }
 
             double running = 0;
+            int found = -1;
             _difference[0] = 1;
             for (int lag = 1; lag <= _maxLag + 1; lag++)
             {
@@ -74,21 +75,22 @@ namespace YARG.Audio.BASS
                 double difference = windowEnergy + laggedEnergy - 2 * Correlate(mono, start, lag);
                 running += difference;
                 _difference[lag] = running > 0 ? difference * lag / running : 1;
-            }
 
-            for (int lag = _minLag; lag <= _maxLag; lag++)
-            {
-                if (_difference[lag] >= THRESHOLD)
+                if (found >= 0)
                 {
-                    continue;
+                    if (found < _maxLag && _difference[lag] < _difference[found])
+                    {
+                        found = lag;
+                        continue;
+                    }
+
+                    return (float) (_sampleRate / RefineLag(found));
                 }
 
-                while (lag < _maxLag && _difference[lag + 1] < _difference[lag])
+                if (lag >= _minLag && lag <= _maxLag && _difference[lag] < THRESHOLD)
                 {
-                    lag++;
+                    found = lag;
                 }
-
-                return (float) (_sampleRate / RefineLag(lag));
             }
 
             return 0f;

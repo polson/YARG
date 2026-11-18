@@ -37,7 +37,6 @@ namespace YARG.Audio.BASS
         private          int    _phraseFretCount;
         private          int    _lastFret = -1;
         private          int    _fretBeforeLast = -1;
-        private          int    _lastShift;
         private          double _lastPlaySeconds = double.MinValue;
 
         public BassSoloFretBox(BassSoloScale scale, IReadOnlyList<(double SongSeconds, int Note, int Fret)> windows,
@@ -107,7 +106,6 @@ namespace YARG.Audio.BASS
             _phraseFretCount = 0;
             _lastFret = -1;
             _fretBeforeLast = -1;
-            _lastShift = 0;
             FillBox(rungs);
         }
 
@@ -121,26 +119,22 @@ namespace YARG.Audio.BASS
 
         private void FollowRun(int fret)
         {
-            int previous = _lastFret;
             int beforePrevious = _fretBeforeLast;
-            int lastShift = _lastShift;
+            int previous = _lastFret;
             _fretBeforeLast = previous;
             _lastFret = fret;
-            _lastShift = 0;
-            if (previous < 0 || beforePrevious == fret)
+            if (beforePrevious < 0)
             {
                 return;
             }
 
-            if (fret == FRET_COUNT - 1 && previous < fret && lastShift >= 0)
+            if (fret == FRET_COUNT - 1 && beforePrevious < previous && previous < fret)
             {
                 ShiftBox(EDGE_SHIFT_RUNGS);
-                _lastShift = 1;
             }
-            else if (fret == 0 && previous > fret && lastShift <= 0)
+            else if (fret == 0 && beforePrevious > previous && previous > fret)
             {
                 ShiftBox(-EDGE_SHIFT_RUNGS);
-                _lastShift = -1;
             }
         }
 

@@ -76,7 +76,7 @@ namespace YARG.Audio.BASS
             if (_synth == null)
             {
                 var stopwatch = Stopwatch.StartNew();
-                _synth = BassSynthGuitar.Load(_format);
+                _synth = BassSynthGuitar.Shared(_format);
                 YargLogger.LogFormatInfo("[SoloSynth] guitar samples {0} in {1} ms",
                     _synth != null ? "loaded" : "failed to load", stopwatch.ElapsedMilliseconds);
             }
@@ -94,6 +94,7 @@ namespace YARG.Audio.BASS
                 clips.Add((clip, singleNote, fret));
             }
 
+            var stopwatch = Stopwatch.StartNew();
             var options = new ParallelOptions
             {
                 MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2),
@@ -130,13 +131,19 @@ namespace YARG.Audio.BASS
                 return null;
             }
 
-            return PrepareSynth(job, clips, pitches, levels, decays);
+            long analysisMs = stopwatch.ElapsedMilliseconds;
+            var phrase = PrepareSynth(job, clips, pitches, levels, decays, out long toneMs, out long spaceMs);
+            YargLogger.LogFormatInfo("[SoloPrep] {0} notes analysed in {1} ms, tone matched in {2} ms, space matched in {3} ms, total {4} ms",
+                clips.Count, analysisMs, toneMs, spaceMs, stopwatch.ElapsedMilliseconds);
+            return phrase;
         }
 
         private BassSoloPhrase PrepareSynth(BassSoloPhraseLibrary.RenderJob job, List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,
-            PitchReading?[] pitches, double[] levels, double[] decays)
+            PitchReading?[] pitches, double[] levels, double[] decays, out long toneMs, out long spaceMs)
         {
+            var stopwatch = Stopwatch.StartNew();
             var tone = MatchTone(clips, pitches);
+            toneMs = stopwatch.ElapsedMilliseconds;
             if (tone == null)
             {
                 YargLogger.LogInfo("[SoloSynth] no notes usable for a tone match, using the default amp tone");
@@ -176,7 +183,9 @@ namespace YARG.Audio.BASS
 
             var heard = new List<double>(Array.FindAll(levels, level => level > 0));
             double soloLevel = heard.SortedMedian(fallback: DEFAULT_SOLO_LEVEL);
+            stopwatch.Restart();
             tone = MatchSpace(job, tone);
+            spaceMs = stopwatch.ElapsedMilliseconds;
             LogTone(tone);
             double stemGain = tone.StemGain > 0 ? tone.StemGain : soloLevel / SYNTH_NOTE_LEVEL;
             double synthGain = stemGain * tone.LevelGain * tone.ReverbLevelGain;

@@ -2,6 +2,7 @@
 
 #include "BitCastCompat.h"
 #include "dsp/Loudness.h"
+#include "dsp/ParallelFor.h"
 
 #include <algorithm>
 #include <array>
@@ -353,6 +354,13 @@ void LeadAmp::setTone(const yarg_lead_amp_tone& tone) noexcept {
     }
     for (int band = 0; band < TONE_BANDS; ++band) {
         filters_[TONE_FIRST + band] = toneBand(sampleRate_, band, tone.bands_db[band]);
+        const bool active = tone.bands_db[band] != 0.0f;
+        if (active && !toneActive_[band]) {
+            for (auto& state : states_) {
+                state.filters[TONE_FIRST + band] = {};
+            }
+        }
+        toneActive_[band] = active;
     }
 }
 
@@ -480,8 +488,8 @@ void LeadAmp::process(float* samples, std::size_t frames, float gain) noexcept {
             } else {
                 amp = convolve(state, amp);
             }
-            for (int band = TONE_FIRST; band < FILTER_COUNT; ++band) {
-                amp = run(band, state, amp);
+            for (int band = 0; band < TONE_BANDS; ++band) {
+                if (toneActive_[band]) amp = run(TONE_FIRST + band, state, amp);
             }
 
             int read = echoIndex_ - state.echoFrames;
@@ -752,28 +760,49 @@ std::optional<double> typicalFade(const std::vector<std::vector<float>>& notes, 
     return sum / static_cast<double>(fades.size() - 2 * trim);
 }
 
-ToneMeasure measure(const std::vector<std::vector<float>>& notes, float sampleRate) {
+struct NoteSpectrum {
+    std::array<double, LeadAmp::TONE_BANDS> bands{};
+    double total = 0.0;
+    double level = 0.0;
+};
+
+NoteSpectrum noteSpectrum(const std::vector<float>& note, float sampleRate) {
     const auto frames = [sampleRate](float seconds) {
         return static_cast<std::size_t>(seconds * sampleRate);
     };
+    NoteSpectrum spectrum;
+    const float* samples = note.data();
+    const std::size_t length = note.size();
+    spectrum.level = kWeightedLevel(samples, std::min(length, frames(MATCH_LEVEL_SECONDS)), sampleRate);
+    const auto analysed = std::min(length, frames(MATCH_ANALYSIS_SECONDS));
+    for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+        spectrum.bands[band] = bandEnergy(samples, analysed, sampleRate, LeadAmp::toneHz(band));
+        spectrum.total += spectrum.bands[band];
+    }
+    return spectrum;
+}
+
+ToneMeasure measure(const std::vector<std::vector<float>>& notes, float sampleRate, bool parallel = false) {
+    std::vector<NoteSpectrum> noteSpectra(notes.size());
+    const auto work = [&](std::size_t index) {
+        noteSpectra[index] = noteSpectrum(notes[index], sampleRate);
+    };
+    if (parallel) {
+        forEachParallel(notes.size(), work);
+    } else {
+        for (std::size_t index = 0; index < notes.size(); ++index) {
+            work(index);
+        }
+    }
+
     ToneMeasure tone;
     std::vector<double> levels;
     int spectra = 0;
-    for (const auto& note : notes) {
-        const float* samples = note.data();
-        const std::size_t length = note.size();
-        levels.push_back(kWeightedLevel(samples, std::min(length, frames(MATCH_LEVEL_SECONDS)), sampleRate));
-
-        std::array<double, LeadAmp::TONE_BANDS> bands{};
-        double total = 0.0;
-        const auto spectrum = std::min(length, frames(MATCH_ANALYSIS_SECONDS));
+    for (const auto& spectrum : noteSpectra) {
+        levels.push_back(spectrum.level);
+        if (!(spectrum.total > 0.0)) continue;
         for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
-            bands[band] = bandEnergy(samples, spectrum, sampleRate, LeadAmp::toneHz(band));
-            total += bands[band];
-        }
-        if (!(total > 0.0)) continue;
-        for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
-            tone.bands[band] += bands[band] / total;
+            tone.bands[band] += spectrum.bands[band] / spectrum.total;
         }
         ++spectra;
     }
@@ -808,9 +837,11 @@ std::vector<std::vector<float>> render(const std::vector<MatchNote>& notes, floa
 
 std::vector<std::vector<float>> equalize(std::vector<std::vector<float>> notes, float sampleRate,
     const std::array<float, LeadAmp::TONE_BANDS>& bandsDb) {
-    for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
-        const auto filter = LeadAmp::toneBand(sampleRate, band, bandsDb[band]);
-        for (auto& note : notes) {
+    forEachParallel(notes.size(), [&](std::size_t index) {
+        auto& note = notes[index];
+        for (int band = 0; band < LeadAmp::TONE_BANDS; ++band) {
+            if (bandsDb[band] == 0.0f) continue;
+            const auto filter = LeadAmp::toneBand(sampleRate, band, bandsDb[band]);
             float z1 = 0.0f, z2 = 0.0f;
             for (float& sample : note) {
                 const float output = filter.b0 * sample + z1;
@@ -819,7 +850,7 @@ std::vector<std::vector<float>> equalize(std::vector<std::vector<float>> notes, 
                 sample = output;
             }
         }
-    }
+    });
     return notes;
 }
 
@@ -1072,32 +1103,38 @@ int leadAmpMatch(float sampleRate, const Cabinet* cabinets, std::size_t cabinetC
         }
         if (notes.size() < MATCH_MIN_NOTES) return YARG_AUDIO_ERROR_INVALID_STATE;
 
-        const auto target = measure(stemNotes, sampleRate);
+        const auto target = measure(stemNotes, sampleRate, true);
         const Cabinet* defaultCabinet = cabinetCount > 0 ? &cabinets[0] : nullptr;
-        const double defaultLevel = measure(render(notes, sampleRate, defaultCabinet, 1.0f), sampleRate).level;
+        const double defaultLevel = measure(render(notes, sampleRate, defaultCabinet, 1.0f), sampleRate, true).level;
 
         const auto masks = fadeMasks(stemNotes, sampleRate);
         const auto targetFade = typicalFade(stemNotes, masks, sampleRate);
         const auto fitDriveOn = [&](const Cabinet* cabinet, float wahStart, float wahEnd) {
             if (!targetFade) return MATCH_FALLBACK_DRIVE;
+            std::array<std::optional<double>, std::size(MATCH_DRIVES)> heard{};
+            forEachParallel(heard.size(), [&](std::size_t index) {
+                heard[index] = typicalFade(render(notes, sampleRate, cabinet, MATCH_DRIVES[index], wahStart,
+                    wahEnd), masks, sampleRate);
+            });
             std::array<double, std::size(MATCH_DRIVES)> fades{};
             for (std::size_t index = 0; index < fades.size(); ++index) {
-                const auto heard = typicalFade(render(notes, sampleRate, cabinet, MATCH_DRIVES[index], wahStart,
-                    wahEnd), masks, sampleRate);
-                if (!heard) return MATCH_FALLBACK_DRIVE;
-                fades[index] = *heard;
+                if (!heard[index]) return MATCH_FALLBACK_DRIVE;
+                fades[index] = *heard[index];
             }
             return std::clamp(fitDrive(*targetFade, fades).value_or(MATCH_FALLBACK_DRIVE), LeadAmp::MIN_DRIVE,
                 LeadAmp::MAX_DRIVE);
         };
         const auto closestCabinet = [&](float drive) {
+            std::vector<double> distances(cabinetCount, HUGE_VAL);
+            forEachParallel(cabinetCount, [&](std::size_t index) {
+                distances[index] = toneDistance(target, measure(render(notes, sampleRate, &cabinets[index], drive),
+                    sampleRate));
+            });
             std::size_t chosen = 0;
             double closest = HUGE_VAL;
             for (std::size_t index = 0; index < cabinetCount; ++index) {
-                const double distance = toneDistance(target, measure(render(notes, sampleRate, &cabinets[index], drive),
-                    sampleRate));
-                if (distance < closest) {
-                    closest = distance;
+                if (distances[index] < closest) {
+                    closest = distances[index];
                     chosen = index;
                 }
             }
@@ -1143,11 +1180,11 @@ int leadAmpMatch(float sampleRate, const Cabinet* cabinets, std::size_t cabinetC
 
         std::array<float, LeadAmp::TONE_BANDS> bands{};
         const auto amped = render(notes, sampleRate, cabinet, fitted, wahStart, wahEnd);
-        auto rendered = measure(amped, sampleRate);
+        auto rendered = measure(amped, sampleRate, true);
         const auto trusted = trustedBands(rendered);
         for (int pass = 0; pass < MATCH_TONE_PASSES; ++pass) {
             correct(bands, trusted, target, rendered);
-            rendered = measure(equalize(amped, sampleRate, bands), sampleRate);
+            rendered = measure(equalize(amped, sampleRate, bands), sampleRate, true);
         }
 
         const auto range = rangeNotes(sampleRate);
@@ -1185,7 +1222,7 @@ int leadAmpMatch(float sampleRate, const Cabinet* cabinets, std::size_t cabinetC
                 lowered = true;
             }
             if (!lowered) break;
-            rendered = measure(equalize(amped, sampleRate, bands), sampleRate);
+            rendered = measure(equalize(amped, sampleRate, bands), sampleRate, true);
         }
 
         double levelGain = leveled ? defaultLevel / rendered.level : 1.0;
