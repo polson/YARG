@@ -465,14 +465,15 @@ namespace YARG.Gameplay.Player
         protected override void StartBRE(double timeStart, double timeEnd)
         {
             base.StartBRE(timeStart, timeEnd);
-            _soloLanes = IsSoloPhrase(timeStart, timeEnd) ? (timeStart, timeEnd) : null;
+            _soloLanes = IsBigRockEnding(timeStart, timeEnd) ? null : (timeStart, timeEnd);
+            UpdateSoloColors(GameManager.VisualTime);
         }
 
-        private bool IsSoloPhrase(double timeStart, double timeEnd)
+        private bool IsBigRockEnding(double timeStart, double timeEnd)
         {
             foreach (var phrase in NoteTrack.Phrases)
             {
-                if (phrase.Type == PhraseType.Solo && phrase.Time == timeStart && phrase.TimeEnd == timeEnd)
+                if (phrase.Type == PhraseType.BigRockEnding && phrase.Time <= timeEnd && phrase.TimeEnd >= timeStart)
                 {
                     return true;
                 }
@@ -483,18 +484,20 @@ namespace YARG.Gameplay.Player
 
         private void UpdateSoloColors(double visualTime)
         {
-            if (_freestyle == null || !ShowsFreestyleLanes)
+            if (!ShowsFreestyleLanes)
             {
                 return;
             }
 
-            if (_soloLanes is not (double soloStart, double soloEnd) || visualTime > soloEnd
-                || !_freestyle.TryGetBox(soloStart, soloEnd, out int start, out int lastStart))
+            if (_soloLanes is not (double soloStart, double soloEnd) || visualTime > soloEnd)
             {
                 RestoreFretColors();
                 return;
             }
 
+            int start = 0;
+            int lastStart = 0;
+            _freestyle?.TryGetBox(soloStart, soloEnd, out start, out lastStart);
             var color = SoloBoxColor(start, lastStart);
             foreach (var lane in BRELanes)
             {
