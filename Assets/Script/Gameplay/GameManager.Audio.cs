@@ -4,6 +4,7 @@ using DG.Tweening;
 using DG.Tweening.Core;
 using DG.Tweening.Plugins.Options;
 using UnityEngine;
+using YARG.Audio.BASS;
 using YARG.Core.Audio;
 using YARG.Settings;
 
@@ -12,6 +13,7 @@ namespace YARG.Gameplay
     public partial class GameManager
     {
         private const double DEFAULT_VOLUME = 1.0;
+
         public class StemState
         {
             private SongStem _stem;
@@ -211,6 +213,52 @@ namespace YARG.Gameplay
             // Set the pitch
             float percentActive = state.SetWhammyPitch(percent);
             GlobalAudioHandler.SetWhammyPitchSetting(stem, percentActive);
+        }
+
+        private void StartStemPrerenders()
+        {
+            for (int index = 0; index < _mixer.Channels.Count; index++)
+            {
+                if (_mixer.Channels[index] is BassStemChannel channel)
+                {
+                    channel.Replay?.StartPrerender();
+                }
+            }
+        }
+
+        private void PumpStemSoundboards()
+        {
+            for (int index = 0; index < _mixer.Channels.Count; index++)
+            {
+                if (_mixer.Channels[index] is BassStemChannel channel)
+                {
+                    channel.Replay?.Pump();
+                }
+            }
+        }
+
+        internal BassStemSoundboard CreateStemSoundboard(SongStem stem)
+        {
+            if (stem == _backgroundStem)
+            {
+                return null;
+            }
+
+            var replay = GetStemChannel(stem)?.Replay;
+            if (replay == null)
+            {
+                return null;
+            }
+
+            var backingChords = stem == SongStem.Bass || _backgroundStem == SongStem.Bass
+                ? null
+                : GetStemChannel(SongStem.Bass)?.Replay?.CreateBackingChordTrack();
+            return replay.CreateSoundboard(() => _stemStates[stem].Volume, backingChords);
+        }
+
+        private BassStemChannel GetStemChannel(SongStem stem)
+        {
+            return _mixer?[stem] as BassStemChannel;
         }
     }
 }

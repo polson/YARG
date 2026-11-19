@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace YARG.Audio.PitchDetection
@@ -49,6 +50,7 @@ namespace YARG.Audio.PitchDetection
         private long _sampleReadPosition;
 
         private readonly FilterInfo[] _filters;
+        private readonly List<float>  _pitches = new();
 
         public PitchTracker(float sampleRate, float detectLevelThreshold = 0.01f)
         {
@@ -120,12 +122,25 @@ namespace YARG.Audio.PitchDetection
         /// <param name="input">Input Buffer. Samples must be in the range -1.0 to 1.0</param>
         public float? ProcessBuffer(ReadOnlySpan<float> input)
         {
+            _pitches.Clear();
+            ProcessBuffer(input, _pitches);
+            for (int index = _pitches.Count - 1; index >= 0; index--)
+            {
+                if (_pitches[index] > 0f)
+                {
+                    return _pitches[index];
+                }
+            }
+
+            return null;
+        }
+
+        public void ProcessBuffer(ReadOnlySpan<float> input, List<float> pitches)
+        {
             if (input == null)
             {
                 throw new ArgumentNullException(nameof(input), "Input buffer cannot be null");
             }
-
-            float? detectedPitch = null;
 
             int samplesProcessed = 0;
             while (samplesProcessed < input.Length)
@@ -151,6 +166,7 @@ namespace YARG.Audio.PitchDetection
 
                     if (pitch1 <= 0f)
                     {
+                        pitches.Add(0f);
                         continue;
                     }
 
@@ -164,21 +180,17 @@ namespace YARG.Audio.PitchDetection
 
                     if (pitch2 <= 0f)
                     {
+                        pitches.Add(0f);
                         continue;
                     }
 
                     var fDiff = Mathf.Max(pitch1, pitch2) / Mathf.Min(pitch1, pitch2) - 1;
 
-                    if (fDiff < _maxOverlapDiff)
-                    {
-                        detectedPitch = (pitch1 + pitch2) * 0.5f;
-                    }
+                    pitches.Add(fDiff < _maxOverlapDiff ? (pitch1 + pitch2) * 0.5f : 0f);
                 }
 
                 samplesProcessed += frameCount;
             }
-
-            return detectedPitch;
         }
 
         /// <summary>

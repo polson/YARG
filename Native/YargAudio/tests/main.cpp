@@ -9,12 +9,16 @@ int main() {
     runFreeverbDspTests();
     runDattorroReverbDspTests();
     runNoiseGateDspTests();
+    runOverdriveDspTests();
+    runLeadAmpDspTests();
+    runSoloSpaceTests();
     runNoiseMorphTests();
     runYargStretchTests();
     runSineSynthDspTests();
     runScheduledSampleSourceTests();
     runNativeOneShotStreamTests();
     runStretchTempoStreamTests();
+    runStretchRenderTests();
     runRenderAheadMixerTests();
     runReadAheadStreamTests();
     std::cout << "YargAudio native tests passed\n";

@@ -173,14 +173,14 @@ namespace YARG.Audio.BASS
         ///     Attaches a decode push stream to the output mixer. The stream's volume already lives on its
         ///     channel handle, so it survives the re-attach across output device changes.
         /// </summary>
-        public bool AttachPushStream(BassPushStream stream, OutputChannel? outputChannel)
+        public bool AttachSource(IBassDecodeSource source, OutputChannel? outputChannel)
         {
-            return AddToOutputMixer(stream.Handle, outputChannel);
+            return AddToOutputMixer(source.SourceHandle, outputChannel);
         }
 
-        public void DetachPushStream(BassPushStream stream)
+        public void DetachSource(IBassDecodeSource source)
         {
-            if (!BassMix.MixerRemoveChannel(stream.Handle) && Bass.LastError != Errors.Handle)
+            if (!BassMix.MixerRemoveChannel(source.SourceHandle) && Bass.LastError != Errors.Handle)
             {
                 YargLogger.LogFormatError("Failed to remove push stream from output mixer: {0}", Bass.LastError);
             }

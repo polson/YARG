@@ -1,4 +1,6 @@
+using System;
 using ManagedBass;
+using ManagedBass.Fx;
 using ManagedBass.Mix;
 using UnityEngine;
 using YARG.Audio.BASS.Effects;
@@ -20,13 +22,16 @@ namespace YARG.Audio.BASS
         private          bool   _isReverbing;
         private readonly long   _length;
 
-        internal BassStemChannel(AudioManager manager, SongStem stem, bool clampStemVolume, int sourceStream, in PitchShiftParametersStruct pitchParams, in StreamHandle streamHandles, in StreamHandle reverbHandles)
+        internal BassStemChannel(AudioManager manager, SongStem stem, bool clampStemVolume, int sourceStream, in PitchShiftParametersStruct pitchParams, in StreamHandle streamHandles, in StreamHandle reverbHandles, Func<double> normalizationGain)
             : base(manager, stem, clampStemVolume)
         {
             _sourceHandle = sourceStream;
             _streamHandles = streamHandles;
             _reverbHandles = reverbHandles;
             _pitchParams = pitchParams;
+            Replay = BassStemReplay.IsFreestyleStem(stem)
+                ? new BassStemReplay(manager, streamHandles.Stream, normalizationGain)
+                : null;
 
             _length = Bass.ChannelGetLength(_streamHandles.Stream);
             if (_length < 0)
@@ -46,6 +51,13 @@ namespace YARG.Audio.BASS
         {
             // Calculate shift
             float shift = Mathf.Pow(2, -(GlobalAudioHandler.WhammyPitchShiftAmount * percent) / 12);
+            ApplyPitchShift(shift);
+        }
+
+        internal BassStemReplay Replay { get; }
+
+        private void ApplyPitchShift(float shift)
+        {
             _pitchParams.fPitchShift = shift;
 
             // If we have pitch effect, pitch
@@ -103,6 +115,7 @@ namespace YARG.Audio.BASS
 
             // Publish after the mixer seek so the next DSP callback cannot retain pre-seek tail.
             _reverbDsp?.RequestReset();
+            Replay?.ResetAfterSeek();
         }
 
         protected override void SetVolume_Internal(double volume)
@@ -178,6 +191,7 @@ namespace YARG.Audio.BASS
 
         protected override void DisposeUnmanagedResources()
         {
+            Replay?.Dispose();
             _reverbDsp?.Dispose();
             _reverbDsp = null;
         }

@@ -16,7 +16,7 @@ namespace YARG.Audio.BASS
     {
         private readonly HashSet<BassMonitor>  _monitors = new();
         private readonly HashSet<BassSong>     _songs    = new();
-        private readonly List<BassPushStream>  _pushStreams = new();
+        private readonly List<IBassDecodeSource> _sources = new();
         // Songs are added and removed from song-scan worker threads (length probing loads audio)
         // while the main thread enumerates them. Guards _songs and _finishedReadAheadStats.
         private readonly object                _songsLock = new();
@@ -49,12 +49,12 @@ namespace YARG.Audio.BASS
             }
 
             _monitors.Clear();
-            foreach (var stream in _pushStreams)
+            foreach (var source in _sources)
             {
-                stream.Disposed -= OnPushStreamDisposed;
+                source.Disposed -= OnSourceDisposed;
             }
 
-            _pushStreams.Clear();
+            _sources.Clear();
         }
 
         public bool Connect(BassOutput output, int deviceId)
@@ -69,9 +69,9 @@ namespace YARG.Audio.BASS
             _outputDeviceId = deviceId;
             output.SetVolume(_volume);
 
-            if (!AttachSongs(output) || !AttachPushStreams(output) || !AttachMonitors(deviceId))
+            if (!AttachSongs(output) || !AttachSources(output) || !AttachMonitors(deviceId))
             {
-                DetachPushStreams();
+                DetachSources();
                 DetachSongs();
                 _output = null;
                 _outputDeviceId = -1;
@@ -90,73 +90,64 @@ namespace YARG.Audio.BASS
             }
 
             DetachMonitors();
-            DetachPushStreams();
+            DetachSources();
             DetachSongs();
             _output = null;
             _outputDeviceId = -1;
         }
 
-        internal void AddPushStream(BassPushStream stream, OutputChannel? outputChannel)
+        internal bool AddSource(IBassDecodeSource source, OutputChannel? outputChannel)
         {
-            if (_pushStreams.Contains(stream))
+            if (_sources.Contains(source))
             {
-                YargLogger.LogFormatError("Push stream {0} is already registered", stream.Handle);
-                return;
-            }
-
-            if (_output != null && !AttachPushStream(stream, outputChannel))
-            {
-                stream.Dispose();
-                return;
-            }
-
-            _pushStreams.Add(stream);
-            stream.Disposed += OnPushStreamDisposed;
-        }
-
-        internal void RemovePushStream(BassPushStream stream)
-        {
-            if (!_pushStreams.Remove(stream))
-            {
-                return;
-            }
-
-            stream.Disposed -= OnPushStreamDisposed;
-            if (_output != null)
-            {
-                _output.DetachPushStream(stream);
-            }
-        }
-
-        private void OnPushStreamDisposed(BassPushStream stream)
-        {
-            if (!_pushStreams.Remove(stream))
-            {
-                return;
-            }
-
-            stream.Disposed -= OnPushStreamDisposed;
-            if (_output != null)
-            {
-                _output.DetachPushStream(stream);
-            }
-        }
-
-        private bool AttachPushStream(BassPushStream stream, OutputChannel? outputChannel)
-        {
-            return _output!.AttachPushStream(stream, outputChannel);
-        }
-
-        private bool AttachPushStreams(BassOutput output)
-        {
-            if (_pushStreams.Count == 0)
-            {
+                YargLogger.LogFormatError("Decode source {0} is already registered", source.SourceHandle);
                 return true;
             }
 
-            foreach (var stream in _pushStreams)
+            if (_output != null && !_output.AttachSource(source, outputChannel))
             {
-                if (!AttachPushStream(stream, null))
+                source.Dispose();
+                return false;
+            }
+
+            _sources.Add(source);
+            source.Disposed += OnSourceDisposed;
+            return true;
+        }
+
+        internal void RemoveSource(IBassDecodeSource source)
+        {
+            if (!_sources.Remove(source))
+            {
+                return;
+            }
+
+            source.Disposed -= OnSourceDisposed;
+            if (_output != null)
+            {
+                _output.DetachSource(source);
+            }
+        }
+
+        private void OnSourceDisposed(IBassDecodeSource source)
+        {
+            if (!_sources.Remove(source))
+            {
+                return;
+            }
+
+            source.Disposed -= OnSourceDisposed;
+            if (_output != null)
+            {
+                _output.DetachSource(source);
+            }
+        }
+
+        private bool AttachSources(BassOutput output)
+        {
+            foreach (var source in _sources)
+            {
+                if (!output.AttachSource(source, null))
                 {
                     return false;
                 }
@@ -165,16 +156,16 @@ namespace YARG.Audio.BASS
             return true;
         }
 
-        private void DetachPushStreams()
+        private void DetachSources()
         {
             if (_output == null)
             {
                 return;
             }
 
-            foreach (var stream in _pushStreams)
+            foreach (var source in _sources)
             {
-                _output.DetachPushStream(stream);
+                _output.DetachSource(source);
             }
         }
 
