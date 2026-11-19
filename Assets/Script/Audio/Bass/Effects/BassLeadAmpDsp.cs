@@ -137,6 +137,7 @@ namespace YARG.Audio.BASS.Effects
             public float EchoLevel;
             public float LevelGain;
             public float StemGain;
+            public uint  DriveMeasured;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -148,6 +149,8 @@ namespace YARG.Audio.BASS.Effects
             public float ReverbWet;
             public float ReverbRoom;
             public float LevelGain;
+            public uint  EchoMeasured;
+            public uint  ReverbMeasured;
         }
     }
 
@@ -168,6 +171,28 @@ namespace YARG.Audio.BASS.Effects
             LevelGain = 1,
         }, DEFAULT_REVERB_WET, DEFAULT_REVERB_ROOM, 1);
 
+        private const float  LEAD_DRIVE   = 2;
+        private const string LEAD_CABINET = "129398__jesterdyne__4x12-classic";
+
+        private static readonly float[] LEAD_BANDS_DB =
+        {
+            -3, -3, -2, 0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 2, 0, 0, 0, 0, 0, 0, 0, -3, -3, 0, 0,
+        };
+
+        internal static BassLeadAmpTone Lead(BassCabinetSet? cabinets)
+        {
+            int cabinet = cabinets != null ? Array.IndexOf(cabinets.Names, LEAD_CABINET) : -1;
+            return new BassLeadAmpTone(new BassLeadAmpDsp.LeadAmpToneParams
+            {
+                Cabinet = (uint) Math.Max(cabinet, 0),
+                Drive = LEAD_DRIVE,
+                BandsDb = (float[]) LEAD_BANDS_DB.Clone(),
+                EchoSeconds = DEFAULT_ECHO_SECONDS,
+                EchoLevel = DEFAULT_ECHO_LEVEL,
+                LevelGain = 1,
+            }, DEFAULT_REVERB_WET, DEFAULT_REVERB_ROOM, 1);
+        }
+
         public readonly int     Cabinet;
         public readonly float   Drive;
         public readonly float[] BandsDb;
@@ -180,11 +205,14 @@ namespace YARG.Audio.BASS.Effects
         public readonly float   ReverbWet;
         public readonly float   ReverbRoom;
         public readonly float   ReverbLevelGain;
+        public readonly bool    DriveMeasured;
+        public readonly bool    EchoMeasured;
+        public readonly bool    ReverbMeasured;
 
         public bool HasWah => WahStartHz > 0;
 
         internal BassLeadAmpTone(BassLeadAmpDsp.LeadAmpToneParams tone, float reverbWet, float reverbRoom,
-            float reverbLevelGain)
+            float reverbLevelGain, bool echoMeasured = false, bool reverbMeasured = false)
         {
             Cabinet = (int) tone.Cabinet;
             Drive = tone.Drive;
@@ -198,6 +226,9 @@ namespace YARG.Audio.BASS.Effects
             ReverbWet = reverbWet;
             ReverbRoom = reverbRoom;
             ReverbLevelGain = reverbLevelGain;
+            DriveMeasured = tone.DriveMeasured != 0;
+            EchoMeasured = echoMeasured;
+            ReverbMeasured = reverbMeasured;
         }
 
         internal BassLeadAmpDsp.LeadAmpToneParams ToNative()
@@ -214,6 +245,7 @@ namespace YARG.Audio.BASS.Effects
                 EchoLevel = EchoLevel,
                 LevelGain = LevelGain,
                 StemGain = StemGain,
+                DriveMeasured = DriveMeasured ? 1u : 0u,
             };
         }
 
@@ -222,7 +254,8 @@ namespace YARG.Audio.BASS.Effects
             var native = ToNative();
             native.EchoSeconds = space.EchoSeconds;
             native.EchoLevel = space.EchoLevel;
-            return new BassLeadAmpTone(native, space.ReverbWet, space.ReverbRoom, space.LevelGain);
+            return new BassLeadAmpTone(native, space.ReverbWet, space.ReverbRoom, space.LevelGain,
+                space.EchoMeasured != 0, space.ReverbMeasured != 0);
         }
     }
 }

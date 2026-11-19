@@ -18,7 +18,7 @@
 extern "C" {
 #endif
 
-#define YARG_AUDIO_ABI_VERSION 34u
+#define YARG_AUDIO_ABI_VERSION 35u
 #define YARG_LEAD_AMP_TONE_BANDS 25
 
 typedef struct yarg_stretch_stream yarg_stretch_stream;
@@ -56,7 +56,8 @@ typedef struct yarg_one_shot_config {
 /* Lead amp settings. cabinet indexes the cabinets given at attach. bands_db holds one correction gain
    per third-octave band starting at 62.5 Hz. Each pick sweeps the wah from wah_start_hz towards
    wah_end_hz; both zero turns it off. level_gain and stem_gain are only written by
-   yarg_lead_amp_match. stem_gain scales the default tone up to the stem level. */
+   yarg_lead_amp_match. stem_gain scales the default tone up to the stem level. drive_measured is
+   written by yarg_lead_amp_match and is zero when the drive fell back to its default. */
 typedef struct yarg_lead_amp_tone {
     uint32_t size;
     uint32_t cabinet;
@@ -68,10 +69,11 @@ typedef struct yarg_lead_amp_tone {
     float echo_level;
     float level_gain;
     float stem_gain;
+    uint32_t drive_measured;
 } yarg_lead_amp_tone;
 /* Room a solo was recorded in: the amp echo and the Freeverb wet level and room size. level_gain is
    written by yarg_solo_space_match and scales the dry signal so it sounds as loud with the reverb
-   as it did without. */
+   as it did without. echo_measured and reverb_measured are zero when that part kept its default. */
 typedef struct yarg_solo_space {
     uint32_t size;
     float echo_seconds;
@@ -79,6 +81,8 @@ typedef struct yarg_solo_space {
     float reverb_wet;
     float reverb_room;
     float level_gain;
+    uint32_t echo_measured;
+    uint32_t reverb_measured;
 } yarg_solo_space;
 /* One segment of a tone schedule, in song seconds and MIDI pitch. A segment with equal start
    and end pitch is held; unequal pitches are interpolated linearly across the segment. */

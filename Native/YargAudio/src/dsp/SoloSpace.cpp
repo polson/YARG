@@ -220,6 +220,7 @@ void fitReverb(float sampleRate, double slope, double drop, double sustain, yarg
     room = fitRoom();
     space.reverb_wet = wet;
     space.reverb_room = room;
+    space.reverb_measured = 1;
 }
 
 float reverbLevelGain(float sampleRate, float wet, float room) {
@@ -260,6 +261,8 @@ float reverbLevelGain(float sampleRate, float wet, float room) {
 
 int measureSpace(float sampleRate, const float* region, std::uint64_t frames, const double* pickSeconds,
     std::size_t pickCount, yarg_solo_space* space) {
+    space->echo_measured = 0;
+    space->reverb_measured = 0;
     const auto frameLength = static_cast<std::size_t>(FRAME_SECONDS * sampleRate);
     const double regionSeconds = static_cast<double>(frames) / sampleRate;
     const int minLag = static_cast<int>(std::ceil(ECHO_SEARCH_SECONDS / FRAME_SECONDS));
@@ -298,6 +301,7 @@ int measureSpace(float sampleRate, const float* region, std::uint64_t frames, co
         gapLevels.push_back(std::move(decibels));
     }
     if (gapLevels.size() < MIN_GAPS) return YARG_AUDIO_ERROR_INVALID_STATE;
+    space->echo_measured = 1;
 
     int echoLag = -1;
     double echoScore = 0.0;

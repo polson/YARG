@@ -145,8 +145,8 @@ namespace YARG.Audio.BASS
             toneMs = stopwatch.ElapsedMilliseconds;
             if (tone == null)
             {
-                YargLogger.LogInfo("[SoloSynth] no notes usable for a tone match, using the default amp tone");
-                tone = BassLeadAmpTone.Default;
+                YargLogger.LogInfo("[SoloSynth] no notes usable for a tone match, using the fallback lead tone");
+                tone = BassLeadAmpTone.Lead(_cabinets);
             }
 
             var anchors = new List<(double SongSeconds, int Note, int Fret)>();
@@ -277,12 +277,18 @@ namespace YARG.Audio.BASS
             string cabinet = _cabinets != null && tone.Cabinet < _cabinets.Count ? _cabinets.Names[tone.Cabinet] : "none";
             YargLogger.LogFormatInfo(
                 "[SoloTone] cabinet {0}, drive {1}, bands {2} dB, wah {3}, echo {4}, reverb wet {5} room {6}, level gain {7}, reverb level gain {8}",
-                cabinet, Math.Round(tone.Drive, 2),
+                cabinet, $"{Math.Round(tone.Drive, 2)}{Measured(tone.DriveMeasured)}",
                 string.Join(" ", Array.ConvertAll(tone.BandsDb, band => Math.Round(band, 1))),
                 tone.HasWah ? $"{Math.Round(tone.WahStartHz)} to {Math.Round(tone.WahEndHz)} Hz" : "off",
-                tone.EchoLevel > 0 ? $"{Math.Round(tone.EchoSeconds, 2)} s at {Math.Round(tone.EchoLevel, 2)}" : "off",
-                Math.Round(tone.ReverbWet, 2), Math.Round(tone.ReverbRoom, 2), Math.Round(tone.LevelGain, 2),
-                Math.Round(tone.ReverbLevelGain, 2));
+                (tone.EchoLevel > 0 ? $"{Math.Round(tone.EchoSeconds, 2)} s at {Math.Round(tone.EchoLevel, 2)}" : "off")
+                + Measured(tone.EchoMeasured),
+                Math.Round(tone.ReverbWet, 2), $"{Math.Round(tone.ReverbRoom, 2)}{Measured(tone.ReverbMeasured)}",
+                Math.Round(tone.LevelGain, 2), Math.Round(tone.ReverbLevelGain, 2));
+        }
+
+        private static string Measured(bool measured)
+        {
+            return measured ? string.Empty : " (default)";
         }
 
         private void AddChordAnchors(List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,

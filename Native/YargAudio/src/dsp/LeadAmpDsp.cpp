@@ -1109,7 +1109,9 @@ int leadAmpMatch(float sampleRate, const Cabinet* cabinets, std::size_t cabinetC
 
         const auto masks = fadeMasks(stemNotes, sampleRate);
         const auto targetFade = typicalFade(stemNotes, masks, sampleRate);
+        bool driveMeasured = false;
         const auto fitDriveOn = [&](const Cabinet* cabinet, float wahStart, float wahEnd) {
+            driveMeasured = false;
             if (!targetFade) return MATCH_FALLBACK_DRIVE;
             std::array<std::optional<double>, std::size(MATCH_DRIVES)> heard{};
             forEachParallel(heard.size(), [&](std::size_t index) {
@@ -1121,8 +1123,10 @@ int leadAmpMatch(float sampleRate, const Cabinet* cabinets, std::size_t cabinetC
                 if (!heard[index]) return MATCH_FALLBACK_DRIVE;
                 fades[index] = *heard[index];
             }
-            return std::clamp(fitDrive(*targetFade, fades).value_or(MATCH_FALLBACK_DRIVE), LeadAmp::MIN_DRIVE,
-                LeadAmp::MAX_DRIVE);
+            const auto drive = fitDrive(*targetFade, fades);
+            if (!drive) return MATCH_FALLBACK_DRIVE;
+            driveMeasured = true;
+            return std::clamp(*drive, LeadAmp::MIN_DRIVE, LeadAmp::MAX_DRIVE);
         };
         const auto closestCabinet = [&](float drive) {
             std::vector<double> distances(cabinetCount, HUGE_VAL);
@@ -1237,6 +1241,7 @@ int leadAmpMatch(float sampleRate, const Cabinet* cabinets, std::size_t cabinetC
 
         tone->cabinet = static_cast<std::uint32_t>(chosen);
         tone->drive = fitted;
+        tone->drive_measured = driveMeasured ? 1u : 0u;
         tone->wah_start_hz = wahStart;
         tone->wah_end_hz = wahEnd;
         std::copy(bands.begin(), bands.end(), tone->bands_db);
