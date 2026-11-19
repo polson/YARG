@@ -187,7 +187,7 @@ namespace YARG.Gameplay.Player
             if (!Player.IsReplay)
             {
                 EngineParams = GetEnginePreset().Create(StarMultiplierThresholds, SoloBonusStarMultiplierThresholds, isBass,
-                    SettingsManager.Settings.FreestyleSolos.Value);
+                    Player.Profile.IsModifierActive(Modifier.FreestyleSolos));
             }
             else
             {

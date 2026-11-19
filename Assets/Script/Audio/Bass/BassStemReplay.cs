@@ -2,12 +2,14 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ManagedBass;
 using YARG.Core.Audio;
+using YARG.Core.Game;
 using YARG.Core.Logging;
-using YARG.Settings;
+using YARG.Player;
 
 namespace YARG.Audio.BASS
 {
@@ -216,7 +218,8 @@ namespace YARG.Audio.BASS
         {
             var state = GlobalVariables.State;
             bool replayRequests = (state.IsReplay || state.PlayingWithReplay) && state.ReplayFreestyleSolos;
-            return replayRequests || SettingsManager.Settings.FreestyleSolos.Value;
+            return replayRequests || PlayerContainer.Players.Any(player =>
+                !player.SittingOut && player.Profile.IsModifierActive(Modifier.FreestyleSolos));
         }
 
         public static byte[]? CopyStream(Stream original)

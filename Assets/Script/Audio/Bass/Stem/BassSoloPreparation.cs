@@ -287,14 +287,14 @@ namespace YARG.Audio.BASS
         {
             string cabinet = _cabinets != null && tone.Cabinet < _cabinets.Count ? _cabinets.Names[tone.Cabinet] : "none";
             YargLogger.LogFormatInfo(
-                "[SoloTone] {9}: cabinet {0}, drive {1}, bands {2} dB, wah {3}, echo {4}, reverb wet {5} room {6}, level gain {7}, reverb level gain {8}",
-                cabinet, $"{Math.Round(tone.Drive, 2)}{Measured(tone.DriveMeasured)}",
+                "[SoloTone] {0}: cabinet {1}, drive {2}, bands {3} dB, wah {4}, echo {5}, reverb wet {6} room {7}, level gain {8}, reverb level gain {9}",
+                source, cabinet, $"{Math.Round(tone.Drive, 2)}{Measured(tone.DriveMeasured)}",
                 string.Join(" ", Array.ConvertAll(tone.BandsDb, band => Math.Round(band, 1))),
                 tone.HasWah ? $"{Math.Round(tone.WahStartHz)} to {Math.Round(tone.WahEndHz)} Hz" : "off",
                 (tone.EchoLevel > 0 ? $"{Math.Round(tone.EchoSeconds, 2)} s at {Math.Round(tone.EchoLevel, 2)}" : "off")
                 + Measured(tone.EchoMeasured),
                 Math.Round(tone.ReverbWet, 2), $"{Math.Round(tone.ReverbRoom, 2)}{Measured(tone.ReverbMeasured)}",
-                Math.Round(tone.LevelGain, 2), Math.Round(tone.ReverbLevelGain, 2), source);
+                Math.Round(tone.LevelGain, 2), Math.Round(tone.ReverbLevelGain, 2));
         }
 
         private static string Measured(bool measured)

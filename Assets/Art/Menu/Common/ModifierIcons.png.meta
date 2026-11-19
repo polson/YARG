@@ -220,7 +220,7 @@ TextureImporter:
       edges: []
       weights: []
     - serializedVersion: 2
-      name: ModifierIcons_5
+      name: FreestyleSolos
       rect:
         serializedVersion: 2
         x: 512
@@ -482,7 +482,7 @@ TextureImporter:
       Ghosting: 960618387
       HoposToTaps: 1309754347
       InfiniteFrontEnd: -1660463282
-      ModifierIcons_5: -1436843964
+      FreestyleSolos: -1436843964
       NoKicks: -1200274759
       NoStarPowerOverlap: 1497401919
       NoVocalPercussion: 1841026791

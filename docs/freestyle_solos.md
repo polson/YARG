@@ -151,9 +151,11 @@ This is the part worth knowing when reading the audio classes.
 
 Three separate switches must agree:
 
-1. `SettingsManager.Settings.FreestyleSolos` must be on for a normal session.
+1. For a normal session, a player who is not sitting out must have the `Modifier.FreestyleSolos`
+   modifier. It is offered on five-fret guitar tracks and copied into that player's
+   `GuitarEngineParameters.FreestyleSolos`.
 2. For a replay, `GlobalVariables.State.ReplayFreestyleSolos` is set from the recorded frame's
-   `GuitarEngineParameters.FreestyleSolos`, and that decides instead of the live setting.
+   `GuitarEngineParameters.FreestyleSolos`, and that decides instead of the live modifiers.
 3. The stem must be one of `AudioHelpers.PitchBendAllowedStems`: guitar, bass or rhythm. Drums,
    vocals, keys and the backing track do not get freestyle audio.
 

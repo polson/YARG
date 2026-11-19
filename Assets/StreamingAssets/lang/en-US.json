@@ -66,7 +66,8 @@
             "NoDynamics": "No Dynamics",
             "NoVocalPercussion" : "No Percussion",
             "RangeCompress": "No Range Shifts",
-            "OpensToGreens": "Opens To Greens"
+            "OpensToGreens": "Opens To Greens",
+            "FreestyleSolos": "Freestyle Solos"
         },
         "SortAttribute": {
             "Album": "Album",
@@ -1228,10 +1229,6 @@
             "OverstrumAndOverhitSoundEffects": {
                 "Name": "Overstrum/Overhit Sound Effects",
                 "Description": "Enables the overstrum/overhit sound effect."
-            },
-            "FreestyleSolos": {
-                "Name": "Freestyle Solos",
-                "Description": "If enabled, guitar solo notes are hidden and you can strum any frets to play your own solo. Solo notes are scored as if hit perfectly."
             },
             "AlwaysOnDrumSFX": {
                 "Name": "Always-On Drum SFX",
