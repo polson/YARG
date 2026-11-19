@@ -130,20 +130,21 @@ namespace YARG.Audio.BASS
                         return;
                     }
 
-                    YargLogger.LogFormatInfo("[SoloPrep] decoded in {0} ms", stopwatch.ElapsedMilliseconds);
+                    long decodeMs = stopwatch.ElapsedMilliseconds;
                     foreach (var chordTrack in backingChordTracks)
                     {
-                        var chordStopwatch = System.Diagnostics.Stopwatch.StartNew();
                         chordTrack.Analyze(token);
-                        YargLogger.LogFormatInfo("[SoloChords] bass roots tracked in {0} ms", chordStopwatch.ElapsedMilliseconds);
                     }
+
+                    long chordsMs = stopwatch.ElapsedMilliseconds - decodeMs;
 
                     foreach (var soundboard in soundboards)
                     {
                         soundboard.PublishPhrases(token);
                     }
 
-                    YargLogger.LogFormatInfo("[SoloPrep] ready in {0} ms", stopwatch.ElapsedMilliseconds);
+                    YargLogger.LogFormatInfo("[SoloPrep] ready in {0} ms (decoded in {1} ms, chords tracked in {2} ms)",
+                        stopwatch.ElapsedMilliseconds, decodeMs, chordsMs);
                 }
                 catch (Exception ex)
                 {

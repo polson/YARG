@@ -81,12 +81,7 @@ namespace YARG.Audio.BASS.Effects
                 };
                 int result = YargAudioBindings.SoloSpaceMatch(sampleRate, region, (ulong) (region?.Length ?? 0),
                     pickSeconds, pickSeconds.Length, ref space);
-                if (result == INVALID_STATE)
-                {
-                    YargLogger.LogFormatInfo("Solo space kept its defaults: {0} picks had too few gaps",
-                        pickSeconds.Length);
-                }
-                else if (result != 0)
+                if (result != 0 && result != INVALID_STATE)
                 {
                     YargLogger.LogFormatInfo("Solo space match failed for {0} picks: result {1}",
                         pickSeconds.Length, result);

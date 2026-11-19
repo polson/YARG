@@ -55,6 +55,8 @@ namespace YARG.Audio.BASS
             _box = new BassSoloFretBox(_scale, windows, startTime, backingChords);
         }
 
+        public string ScaleDescription => _scale.Description;
+
         public int BoxStart => _box.Start;
 
         public int LastBoxStart => _box.LastStart;

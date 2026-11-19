@@ -1,6 +1,5 @@
 #nullable enable
 using System.Collections.Generic;
-using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
 {
@@ -34,8 +33,8 @@ namespace YARG.Audio.BASS
             var (root, minor) = fromChordRoots ? KeyFromRoots(weights) : BestPentatonic(weights);
             Pentatonic = ScaleOn(root, minor ? MINOR_PENTATONIC : MAJOR_PENTATONIC);
             ScaleRungs = PentatonicRungs();
-            YargLogger.LogInfo($"[SoloScale] {NOTE_NAMES[root]} {(minor ? "minor" : "major")} pentatonic from "
-                + $"{notes.Count} {(fromChordRoots ? "chord roots" : "notes")}");
+            Description = $"{NOTE_NAMES[root]} {(minor ? "minor" : "major")} pentatonic from "
+                + $"{notes.Count} {(fromChordRoots ? "chord roots" : "notes")}";
             if (fromChordRoots)
             {
                 return;
@@ -57,6 +56,7 @@ namespace YARG.Audio.BASS
             ColorRungs = colorRungs;
         }
 
+        public string     Description { get; }
         public bool[]     Pentatonic { get; }
         public bool[]?    ColorScale { get; }
         public List<int>  ScaleRungs { get; }

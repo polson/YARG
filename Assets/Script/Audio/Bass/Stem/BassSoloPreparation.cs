@@ -76,8 +76,11 @@ namespace YARG.Audio.BASS
             {
                 var stopwatch = Stopwatch.StartNew();
                 _synth = BassSynthGuitar.Shared(_format);
-                YargLogger.LogFormatInfo("[SoloSynth] guitar samples {0} in {1} ms",
-                    _synth != null ? "loaded" : "failed to load", stopwatch.ElapsedMilliseconds);
+                if (_synth == null)
+                {
+                    YargLogger.LogFormatWarning("[SoloSynth] guitar samples failed to load after {0} ms",
+                        stopwatch.ElapsedMilliseconds);
+                }
             }
 
             return _synth != null;
@@ -131,23 +134,17 @@ namespace YARG.Audio.BASS
             }
 
             long analysisMs = stopwatch.ElapsedMilliseconds;
-            var phrase = PrepareSynth(job, clips, pitches, levels, decays, out long toneMs, out long spaceMs);
-            YargLogger.LogFormatInfo("[SoloPrep] {0} notes analysed in {1} ms, tone matched in {2} ms, space matched in {3} ms, total {4} ms",
-                clips.Count, analysisMs, toneMs, spaceMs, stopwatch.ElapsedMilliseconds);
-            return phrase;
+            return PrepareSynth(job, clips, pitches, levels, decays, analysisMs, stopwatch);
         }
 
         private BassSoloPhrase PrepareSynth(BassSoloPhraseLibrary.RenderJob job, List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,
-            PitchReading?[] pitches, double[] levels, double[] decays, out long toneMs, out long spaceMs)
+            PitchReading?[] pitches, double[] levels, double[] decays, long analysisMs, Stopwatch total)
         {
             var stopwatch = Stopwatch.StartNew();
-            var tone = MatchTone(clips, pitches);
-            toneMs = stopwatch.ElapsedMilliseconds;
-            if (tone == null)
-            {
-                YargLogger.LogInfo("[SoloSynth] no notes usable for a tone match, using the fallback lead tone");
-                tone = BassLeadAmpTone.Lead(_cabinets);
-            }
+            var tone = MatchTone(clips, pitches, out int toneNotes);
+            long toneMs = stopwatch.ElapsedMilliseconds;
+            bool toneMatched = tone != null;
+            tone ??= BassLeadAmpTone.Lead(_cabinets);
 
             var anchors = new List<(double SongSeconds, int Note, int Fret)>();
             var scaleNotes = new List<int>();
@@ -200,26 +197,24 @@ namespace YARG.Audio.BASS
             double soloLevel = heard.SortedMedian(fallback: DEFAULT_SOLO_LEVEL);
             stopwatch.Restart();
             tone = MatchSpace(job, tone);
-            spaceMs = stopwatch.ElapsedMilliseconds;
-            LogTone(tone);
+            long spaceMs = stopwatch.ElapsedMilliseconds;
+            LogTone(tone, toneMatched ? $"matched on {toneNotes} notes" : "fallback lead tone");
             double stemGain = tone.StemGain > 0 ? tone.StemGain : soloLevel / SYNTH_NOTE_LEVEL;
             double synthGain = stemGain * tone.LevelGain * tone.ReverbLevelGain;
             SetDecay(ladder, TypicalDecay(decays));
             var phrase = new BassSoloPhrase(job.StartTime, job.EndTime, ladder, windows, scaleNotes, scaleFromRoots,
                 _backingChords, tone, synthGain);
             int singles = clips.FindAll(clip => clip.SingleNote).Count;
-            YargLogger.LogFormatInfo(
-                "[SoloLevel] {0} notes ({1} single, {2} chord), stem gain {3}, tone gain {4}, reverb gain {5}, synth gain {6}, solo level {7}",
-                clips.Count, singles, clips.Count - singles, Math.Round(tone.StemGain, 2),
-                Math.Round(tone.LevelGain, 2), Math.Round(tone.ReverbLevelGain, 2),
-                Math.Round(synthGain, 4), Math.Round(soloLevel, 4));
-            YargLogger.LogFormatInfo("[SoloSynth] {0} measured pitches, {1} chord anchors, tuning {2} cents, solo level {3}",
-                measured, anchors.Count - measured, Math.Round(tuningCents), Math.Round(soloLevel, 4));
+            YargLogger.LogInfo($"[Solo] {clips.Count} notes ({singles} single, {clips.Count - singles} chord), "
+                + $"{measured} measured pitches, {anchors.Count - measured} chord anchors, {phrase.ScaleDescription}, "
+                + $"tuning {Math.Round(tuningCents)} cents, stem gain {Math.Round(tone.StemGain, 2)}, "
+                + $"synth gain {Math.Round(synthGain, 4)}, solo level {Math.Round(soloLevel, 4)}, "
+                + $"prepared in {total.ElapsedMilliseconds} ms (analysis {analysisMs}, tone {toneMs}, space {spaceMs})");
             return phrase;
         }
 
         private BassLeadAmpTone? MatchTone(List<(BassStemClip Clip, bool SingleNote, int Fret)> clips,
-            PitchReading?[] pitches)
+            PitchReading?[] pitches, out int pickedCount)
         {
             int minFrames = _format.FramesFor(TONE_MIN_NOTE_SECONDS);
             var picked = new List<(BassStemClip Clip, double Hz)>();
@@ -261,7 +256,7 @@ namespace YARG.Audio.BASS
 
             var tone = BassLeadAmpDsp.Match(_format.Frequency, _cabinets, stem.ToArray(), di.ToArray(),
                 noteFrames.ToArray());
-            YargLogger.LogFormatInfo("[SoloTone] {0} on {1} notes", tone != null ? "matched" : "skipped", picked.Count);
+            pickedCount = picked.Count;
             return tone;
         }
 
@@ -288,18 +283,18 @@ namespace YARG.Audio.BASS
             return BassLeadAmpDsp.MatchSpace(tone, _format.Frequency, region, picks.ToArray());
         }
 
-        private void LogTone(BassLeadAmpTone tone)
+        private void LogTone(BassLeadAmpTone tone, string source)
         {
             string cabinet = _cabinets != null && tone.Cabinet < _cabinets.Count ? _cabinets.Names[tone.Cabinet] : "none";
             YargLogger.LogFormatInfo(
-                "[SoloTone] cabinet {0}, drive {1}, bands {2} dB, wah {3}, echo {4}, reverb wet {5} room {6}, level gain {7}, reverb level gain {8}",
+                "[SoloTone] {9}: cabinet {0}, drive {1}, bands {2} dB, wah {3}, echo {4}, reverb wet {5} room {6}, level gain {7}, reverb level gain {8}",
                 cabinet, $"{Math.Round(tone.Drive, 2)}{Measured(tone.DriveMeasured)}",
                 string.Join(" ", Array.ConvertAll(tone.BandsDb, band => Math.Round(band, 1))),
                 tone.HasWah ? $"{Math.Round(tone.WahStartHz)} to {Math.Round(tone.WahEndHz)} Hz" : "off",
                 (tone.EchoLevel > 0 ? $"{Math.Round(tone.EchoSeconds, 2)} s at {Math.Round(tone.EchoLevel, 2)}" : "off")
                 + Measured(tone.EchoMeasured),
                 Math.Round(tone.ReverbWet, 2), $"{Math.Round(tone.ReverbRoom, 2)}{Measured(tone.ReverbMeasured)}",
-                Math.Round(tone.LevelGain, 2), Math.Round(tone.ReverbLevelGain, 2));
+                Math.Round(tone.LevelGain, 2), Math.Round(tone.ReverbLevelGain, 2), source);
         }
 
         private static string Measured(bool measured)
