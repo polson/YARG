@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using YARG.Audio.BASS.Effects;
 using YARG.Core.Engine.Guitar;
+using YARG.Core.Input;
 
 namespace YARG.Audio.BASS
 {
@@ -12,9 +13,16 @@ namespace YARG.Audio.BASS
     /// </summary>
     internal sealed class BassSoloPhrase
     {
-        public const int FRET_COUNT = 5;
+        public const int FRET_COUNT      = 5;
+        public const int SOLO_FRET_SHIFT = (int) GuitarAction.SoloGreenFret;
+        public const int SOLO_FRET_MASK  = 0b11111 << SOLO_FRET_SHIFT;
 
-        private static readonly int[] FRET_KEYS = { 1, 2, 4, 8, 16 };
+        private static readonly int[] FRET_KEYS =
+        {
+            1, 2, 4, 8, 16,
+            1 << SOLO_FRET_SHIFT, 2 << SOLO_FRET_SHIFT, 4 << SOLO_FRET_SHIFT, 8 << SOLO_FRET_SHIFT,
+            16 << SOLO_FRET_SHIFT,
+        };
 
         private const int FIFTH_SEMITONES  = 7;
         private const int FOURTH_SEMITONES = 5;
@@ -35,7 +43,7 @@ namespace YARG.Audio.BASS
 
         public BassSoloPhrase(double startTime, double endTime, List<BassStemClip> ladder,
             IReadOnlyList<(double SongSeconds, int Note, int Fret)> windows,
-            IReadOnlyList<(double SongSeconds, int Note)> anchors, BassChordTrack? backingChords,
+            IReadOnlyList<int> scaleNotes, bool scaleFromRoots, BassChordTrack? backingChords,
             BassLeadAmpTone tone, double synthGain)
         {
             StartTime = startTime;
@@ -43,7 +51,7 @@ namespace YARG.Audio.BASS
             _ladder = ladder;
             Tone = tone;
             SynthGain = synthGain;
-            _scale = new BassSoloScale(ladder, anchors);
+            _scale = new BassSoloScale(ladder, scaleNotes, scaleFromRoots);
             _box = new BassSoloFretBox(_scale, windows, startTime, backingChords);
         }
 

@@ -1,5 +1,6 @@
 #nullable enable
 using System.Collections.Generic;
+using YARG.Core.Logging;
 
 namespace YARG.Audio.BASS
 {
@@ -12,6 +13,9 @@ namespace YARG.Audio.BASS
 
         private static readonly int[] MINOR_PENTATONIC = { 0, 3, 5, 7, 10 };
         private static readonly int[] MAJOR_PENTATONIC = { 0, 2, 4, 7, 9 };
+        private static readonly int[] KEY_ROOT_WEIGHTS = { 5, 0, 2, 0, 1, 4, 0, 4, 0, 3, 0, 0 };
+
+        private static readonly string[] NOTE_NAMES = { "C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B" };
 
         internal const int PITCH_CLASSES = 12;
 
@@ -23,13 +27,21 @@ namespace YARG.Audio.BASS
 
         private readonly IReadOnlyList<BassStemClip> _ladder;
 
-        public BassSoloScale(IReadOnlyList<BassStemClip> ladder, IReadOnlyList<(double SongSeconds, int Note)> anchors)
+        public BassSoloScale(IReadOnlyList<BassStemClip> ladder, IReadOnlyList<int> notes, bool fromChordRoots)
         {
             _ladder = ladder;
-            var weights = PitchClassWeights(anchors);
-            Pentatonic = BestPentatonic(weights);
+            var weights = PitchClassWeights(notes);
+            var (root, minor) = fromChordRoots ? KeyFromRoots(weights) : BestPentatonic(weights);
+            Pentatonic = ScaleOn(root, minor ? MINOR_PENTATONIC : MAJOR_PENTATONIC);
             ScaleRungs = PentatonicRungs();
-            var colorScale = ColorScaleFrom(weights, anchors.Count);
+            YargLogger.LogInfo($"[SoloScale] {NOTE_NAMES[root]} {(minor ? "minor" : "major")} pentatonic from "
+                + $"{notes.Count} {(fromChordRoots ? "chord roots" : "notes")}");
+            if (fromChordRoots)
+            {
+                return;
+            }
+
+            var colorScale = ColorScaleFrom(weights, notes.Count);
             if (colorScale == null)
             {
                 return;
@@ -104,7 +116,29 @@ namespace YARG.Audio.BASS
             return rungs;
         }
 
-        private static bool[] BestPentatonic(int[] weights)
+        private static (int Root, bool Minor) KeyFromRoots(int[] rootWeights)
+        {
+            int bestKey = 0;
+            int bestScore = -1;
+            for (int key = 0; key < PITCH_CLASSES; key++)
+            {
+                int score = 0;
+                for (int pitchClass = 0; pitchClass < PITCH_CLASSES; pitchClass++)
+                {
+                    score += rootWeights[pitchClass] * KEY_ROOT_WEIGHTS[PitchClass(pitchClass - key)];
+                }
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestKey = key;
+                }
+            }
+
+            return (bestKey, false);
+        }
+
+        private static (int Root, bool Minor) BestPentatonic(int[] weights)
         {
             int bestRoot = 0;
             bool bestIsMinor = true;
@@ -139,11 +173,15 @@ namespace YARG.Audio.BASS
                 }
             }
 
+            return (bestRoot, bestIsMinor);
+        }
+
+        private static bool[] ScaleOn(int root, int[] intervals)
+        {
             var scale = new bool[PITCH_CLASSES];
-            int[] intervals = bestIsMinor ? MINOR_PENTATONIC : MAJOR_PENTATONIC;
             foreach (int interval in intervals)
             {
-                scale[(bestRoot + interval) % PITCH_CLASSES] = true;
+                scale[(root + interval) % PITCH_CLASSES] = true;
             }
 
             return scale;
@@ -207,10 +245,10 @@ namespace YARG.Audio.BASS
             }
         }
 
-        private static int[] PitchClassWeights(IReadOnlyList<(double SongSeconds, int Note)> anchors)
+        private static int[] PitchClassWeights(IReadOnlyList<int> notes)
         {
             var weights = new int[PITCH_CLASSES];
-            foreach (var (_, note) in anchors)
+            foreach (int note in notes)
             {
                 weights[PitchClass(note)]++;
             }

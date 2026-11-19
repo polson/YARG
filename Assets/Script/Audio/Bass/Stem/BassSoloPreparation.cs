@@ -150,6 +150,7 @@ namespace YARG.Audio.BASS
             }
 
             var anchors = new List<(double SongSeconds, int Note, int Fret)>();
+            var scaleNotes = new List<int>();
             var tunings = new List<double>();
             for (int index = 0; index < clips.Count; index++)
             {
@@ -158,8 +159,14 @@ namespace YARG.Audio.BASS
                     continue;
                 }
 
-                if (pitch.Bent || pitch.Voiced < ANCHOR_MIN_VOICED
+                if (pitch.Voiced < ANCHOR_MIN_VOICED
                     || pitch.Note < BassSynthGuitar.LOWEST_NOTE || pitch.Note > BassSynthGuitar.HIGHEST_NOTE)
+                {
+                    continue;
+                }
+
+                scaleNotes.Add(pitch.Note);
+                if (pitch.Bent)
                 {
                     continue;
                 }
@@ -174,11 +181,20 @@ namespace YARG.Audio.BASS
                 AddChordAnchors(clips, anchors);
             }
 
+            bool scaleFromRoots = scaleNotes.Count < MIN_SYNTH_ANCHORS && anchors.Count > measured;
+            if (scaleFromRoots)
+            {
+                scaleNotes.Clear();
+                for (int index = measured; index < anchors.Count; index++)
+                {
+                    scaleNotes.Add(anchors[index].Note);
+                }
+            }
+
             double tuningCents = tunings.SortedMedian(fallback: 0);
             var ladder = _synth!.Ladder(tuningCents);
             var windows = new List<(double SongSeconds, int Note, int Fret)>();
-            var anchorNotes = new List<(double SongSeconds, int Note)>();
-            SetWindows(anchors, anchorNotes, windows);
+            SetWindows(anchors, windows);
 
             var heard = new List<double>(Array.FindAll(levels, level => level > 0));
             double soloLevel = heard.SortedMedian(fallback: DEFAULT_SOLO_LEVEL);
@@ -189,8 +205,8 @@ namespace YARG.Audio.BASS
             double stemGain = tone.StemGain > 0 ? tone.StemGain : soloLevel / SYNTH_NOTE_LEVEL;
             double synthGain = stemGain * tone.LevelGain * tone.ReverbLevelGain;
             SetDecay(ladder, TypicalDecay(decays));
-            var phrase = new BassSoloPhrase(job.StartTime, job.EndTime, ladder, windows, anchorNotes, _backingChords,
-                tone, synthGain);
+            var phrase = new BassSoloPhrase(job.StartTime, job.EndTime, ladder, windows, scaleNotes, scaleFromRoots,
+                _backingChords, tone, synthGain);
             int singles = clips.FindAll(clip => clip.SingleNote).Count;
             YargLogger.LogFormatInfo(
                 "[SoloLevel] {0} notes ({1} single, {2} chord), stem gain {3}, tone gain {4}, reverb gain {5}, synth gain {6}, solo level {7}",
@@ -430,14 +446,9 @@ namespace YARG.Audio.BASS
         }
 
         private static void SetWindows(List<(double SongSeconds, int Note, int Fret)> anchors,
-            List<(double SongSeconds, int Note)> anchorNotes, List<(double SongSeconds, int Note, int Fret)> windows)
+            List<(double SongSeconds, int Note, int Fret)> windows)
         {
             anchors.Sort((left, right) => left.SongSeconds.CompareTo(right.SongSeconds));
-            foreach (var anchor in anchors)
-            {
-                anchorNotes.Add((anchor.SongSeconds, anchor.Note));
-            }
-
             var neighbours = new List<int>(ANCHOR_NEIGHBOURS * 2 + 1);
             for (int anchorIndex = 0; anchorIndex < anchors.Count; anchorIndex++)
             {

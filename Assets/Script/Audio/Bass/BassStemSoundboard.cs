@@ -192,9 +192,9 @@ namespace YARG.Audio.BASS
                 }
 
                 double fretGain = pick.Gain / Math.Sqrt(BassSoloPhrase.FretCount(fretMask));
-                for (int fret = 1; fret < GuitarEngine.OPEN_MASK; fret <<= 1)
+                for (int fret = 1; fret <= fretMask; fret <<= 1)
                 {
-                    if ((fretMask & fret) == 0)
+                    if ((fretMask & fret) == 0 || fret == GuitarEngine.OPEN_MASK)
                     {
                         continue;
                     }

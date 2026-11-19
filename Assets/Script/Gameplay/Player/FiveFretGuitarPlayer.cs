@@ -656,6 +656,12 @@ namespace YARG.Gameplay.Player
             }
         }
 
+        private static int FreestyleFretMask(GuitarAction action, int fretMask)
+        {
+            bool soloFret = action >= GuitarAction.SoloGreenFret && action <= GuitarAction.SoloOrangeFret;
+            return soloFret ? fretMask << BassSoloPhrase.SOLO_FRET_SHIFT : fretMask;
+        }
+
         private void LightFreestyleLanes(int fretMask)
         {
             if (!ShowsFreestyleLanes || !Engine.IsFreestyleActive)
@@ -1061,13 +1067,13 @@ namespace YARG.Gameplay.Player
 
                 if (fretMask != 0)
                 {
-                    _freestyle?.QueueTap(fretMask);
+                    _freestyle?.QueueTap(FreestyleFretMask(action, fretMask));
                     LightFreestyleLanes(fretMask);
                 }
             }
             else if (fretMask != 0)
             {
-                _freestyle?.ReleaseFrets(fretMask);
+                _freestyle?.ReleaseFrets(FreestyleFretMask(action, fretMask));
             }
 
             // Update the whammy factor

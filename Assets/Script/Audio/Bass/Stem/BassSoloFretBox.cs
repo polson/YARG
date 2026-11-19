@@ -25,6 +25,7 @@ namespace YARG.Audio.BASS
         private int    _boxStart;
         private int    _lastFret = -1;
         private int    _fretBeforeLast = -1;
+        private bool   _soloFretsUsed;
 
         public BassSoloFretBox(BassSoloScale scale, IReadOnlyList<(double SongSeconds, int Note, int Fret)> windows,
             double startSeconds, BassChordTrack? backingChords)
@@ -48,12 +49,24 @@ namespace YARG.Audio.BASS
 
         public BassStemClip RungClip(int fret)
         {
+            if (fret >= FRET_COUNT && !_soloFretsUsed)
+            {
+                _soloFretsUsed = true;
+                _boxStart = Math.Min(_boxStart, NormalLastStart);
+            }
+
             return _scale.ClipAt(RungFor(fret));
         }
 
+        private int NormalLastStart => _soloFretsUsed ? Math.Max(0, LastStart - FRET_COUNT) : LastStart;
+
         public void NoteTaken(int fret, BassStemClip clip)
         {
-            FollowFret(fret);
+            if (fret < FRET_COUNT)
+            {
+                FollowFret(fret);
+            }
+
             var (windowNote, _) = WindowAt(_songSeconds);
             YargLogger.LogFormatDebug("[SoloFret] {0:0.00}s fret {1} note {2} window {3} box {4}",
                 _songSeconds, fret, clip.Note, windowNote, _boxStart);
@@ -66,7 +79,7 @@ namespace YARG.Audio.BASS
         /// </summary>
         private int RungFor(int fret)
         {
-            return _scale.ScaleRungs[_boxStart + fret];
+            return _scale.ScaleRungs[Math.Min(_boxStart + fret, _scale.ScaleRungs.Count - 1)];
         }
 
         private void FollowFret(int fret)
@@ -83,7 +96,7 @@ namespace YARG.Audio.BASS
             int top = FRET_COUNT - 1;
             if (fret == top && previous < top && beforePrevious != top)
             {
-                _boxStart = Math.Min(_boxStart + EDGE_SHIFT_RUNGS, LastStart);
+                _boxStart = Math.Min(_boxStart + EDGE_SHIFT_RUNGS, NormalLastStart);
             }
             else if (fret == 0 && previous > 0 && beforePrevious != 0)
             {

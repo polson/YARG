@@ -41,7 +41,7 @@ namespace YARG.Gameplay.Player
             _currentEngine = currentEngine;
             _setStemMuted = setStemMuted;
             _onPlayed = onPlayed;
-            _fretRowMask = fretRowMask;
+            _fretRowMask = fretRowMask | BassSoloPhrase.SOLO_FRET_MASK;
             _hopoLeniency = new EngineTimer("Freestyle HOPO Leniency", hopoLeniency);
         }
 
@@ -121,7 +121,7 @@ namespace YARG.Gameplay.Player
                 return;
             }
 
-            int heldMask = engine.PlayerButtonMask & _fretRowMask;
+            int heldMask = engine.InputButtonMask & _fretRowMask;
             bool fretsChanged = heldMask != _lastHeldMask;
             EndPhraseIfLifted(wasHeld: _lastHeldMask != 0, currentTime: currentTime, songSpeed: songSpeed);
             _lastHeldMask = heldMask;
@@ -209,7 +209,7 @@ namespace YARG.Gameplay.Player
             if (strummed && playMask != 0)
             {
                 _soundboard.PlayStrum(playMask);
-                _onPlayed(playMask);
+                _onPlayed(LaneMask(playMask));
             }
             else
             {
@@ -228,7 +228,7 @@ namespace YARG.Gameplay.Player
                     _soundboard.PlayLegato(playedMask);
                 }
 
-                _onPlayed(playedMask);
+                _onPlayed(LaneMask(playedMask));
             }
 
             _phraseMask = playMask == 0 ? GuitarEngine.OPEN_MASK : playMask;
@@ -244,6 +244,11 @@ namespace YARG.Gameplay.Player
             {
                 _hopoLeniency.Reset();
             }
+        }
+
+        private static int LaneMask(int fretMask)
+        {
+            return (fretMask & ~BassSoloPhrase.SOLO_FRET_MASK) | (fretMask >> BassSoloPhrase.SOLO_FRET_SHIFT);
         }
 
         private int HighestFret(int noteMask)
