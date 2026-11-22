@@ -691,10 +691,27 @@ namespace YARG.Input
             _menuInputAggregator.UnsuppressController();
         }
 
+        public bool HasGameplayBindingsForMode(GameMode mode)
+        {
+            foreach (var controller in _controllers)
+            {
+                if (GetBindingSetForController(controller, mode) is not null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private ReusableBindingSet GetBindingSetForController(InputDevice controller, bool menu)
         {
+            return GetBindingSetForController(controller, menu ? GameMode.Menu : Profile.GameMode);
+        }
+
+        private ReusableBindingSet GetBindingSetForController(InputDevice controller, GameMode mode)
+        {
             var family = LayoutHelper.InputDeviceToControllerFamily(controller);
-            var mode = menu ? GameMode.Menu : Profile.GameMode;
 
             if (_preferredBindsByContext.TryGetValue((mode, family), out var preferredBindingSet))
             {

@@ -31,6 +31,8 @@ namespace YARG.Input
 
         public static event MenuInputEvent MenuInput;
 
+        public static Func<InputDevice, bool> UnclaimedDevicePressed;
+
         private static double _latestInputTime;
 
         /// <summary>
@@ -258,20 +260,33 @@ namespace YARG.Input
                 // Don't ask me why, but we get events with no controls changed, so we have to check that there
                 // was a change in addition to checking if it was a noisy control that did change
                 bool controlChanged = false;
+                bool buttonPressed = false;
 
                 foreach (var control in eventPtr.EnumerateChangedControls())
                 {
-                    if (control.noisy || control is not ButtonControl)
+                    if (control.noisy || control is not ButtonControl button)
                     {
                         continue;
                     }
                     controlChanged = true;
-                    break;
+
+                    if (button.IsValueConsideredPressed(button.ReadValueFromEvent(eventPtr)))
+                    {
+                        buttonPressed = true;
+                        break;
+                    }
                 }
 
                 if (controlChanged)
                 {
-                    eventPtr.handled = PlayerContainer.TryConnectProfile(device);
+                    if (UnclaimedDevicePressed == null)
+                    {
+                        eventPtr.handled = PlayerContainer.TryConnectProfile(device);
+                    }
+                    else if (buttonPressed)
+                    {
+                        eventPtr.handled = UnclaimedDevicePressed(device);
+                    }
                 }
             }
 

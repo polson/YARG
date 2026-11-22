@@ -103,5 +103,39 @@ namespace YARG.Menu.DifficultySelect
         {
             _selectionFill.color = fillColor;
         }
+
+        private Color? _headerBaseColor;
+        private Color? _bodyBaseColor;
+
+        public void SetTextColor(Color color)
+        {
+            _headerBaseColor ??= _header.color;
+            _bodyBaseColor ??= _body.color;
+            _header.color = color;
+            _body.color = color;
+        }
+
+        public void ResetTextColor()
+        {
+            if (_headerBaseColor is { } header)
+            {
+                _header.color = header;
+            }
+
+            if (_bodyBaseColor is { } body)
+            {
+                _body.color = body;
+            }
+        }
+
+        public void UseCompactText(float fontSize)
+        {
+            foreach (var label in new[] { _header, _body })
+            {
+                label.fontSize = fontSize;
+                label.textWrappingMode = TextWrappingModes.NoWrap;
+                label.overflowMode = TextOverflowModes.Ellipsis;
+            }
+        }
     }
 }

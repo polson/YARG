@@ -22,6 +22,7 @@ using YARG.Menu.Filters;
 using YARG.Menu.MusicLibrary;
 using YARG.Player;
 using YARG.Playlists;
+using YARG.Settings;
 using YARG.Song;
 
 namespace YARG.Menu.DifficultySelect
@@ -150,10 +151,22 @@ namespace YARG.Menu.DifficultySelect
         private ScrollRect _scrollRect;
         private Scrollbar _scrollbar;
 
+        private BandSelectMenu _band;
+
         private void OnEnable()
         {
             string subHeaderKey = GlobalVariables.State.IsPractice ? "Practice" : "Quickplay";
             _subHeader.text = Localize.Key("Menu.Main.Options", subHeaderKey);
+
+            bool useBand = SettingsManager.Settings.OvershellJoinFlow.Value;
+            _container.GetComponentInParent<ScrollRect>(true).transform.parent.gameObject.SetActive(!useBand);
+            _loadingPhrase.gameObject.SetActive(!useBand);
+
+            if (useBand)
+            {
+                OpenBand();
+                return;
+            }
 
             // Set navigation scheme
             _ = Navigator.Instance.PushScheme(new NavigationScheme(new()
@@ -849,7 +862,7 @@ namespace YARG.Menu.DifficultySelect
             _itemModifiers.Add(modifier);
         }
 
-        private static bool SupportsLeftyFlip(GameMode mode)
+        internal static bool SupportsLeftyFlip(GameMode mode)
             => mode is GameMode.FiveFretGuitar or GameMode.SixFretGuitar
                 or GameMode.FourLaneDrums or GameMode.FiveLaneDrums or GameMode.EliteDrums;
 
@@ -997,9 +1010,13 @@ namespace YARG.Menu.DifficultySelect
 
             // Get the possible modifiers (split the enum into multiple) and
             // make sure current modifiers are valid, and remove the invalid ones
-            _possibleModifiers.Clear();
+            _excusableModifiers = CollectPossibleModifiers(profile, _possibleModifiers);
+        }
+
+        internal static Modifier CollectPossibleModifiers(YargProfile profile, List<Modifier> possibleModifiers)
+        {
+            possibleModifiers.Clear();
             var (possible, excusable) = profile.GameMode.PossibleModifiers(profile.CurrentInstrument);
-            _excusableModifiers = excusable;
 
             foreach (var modifier in EnumExtensions<Modifier>.Values)
             {
@@ -1015,14 +1032,15 @@ namespace YARG.Menu.DifficultySelect
                     continue;
                 }
 
-                _possibleModifiers.Add(modifier);
+                possibleModifiers.Add(modifier);
 
-                if (profile.IsModifierActive(modifier) && !_possibleModifiers.Contains(modifier))
+                if (profile.IsModifierActive(modifier) && !possibleModifiers.Contains(modifier))
                 {
                     profile.RemoveModifiers(modifier);
                 }
             }
 
+            return excusable;
         }
 
         private void ChangePlayer(int add)
@@ -1085,14 +1103,7 @@ namespace YARG.Menu.DifficultySelect
                     }
                 }
 
-                // This will always work (as it's set up in the input field)
-                // The max speed that the game can keep up with is 5000%
-                float speed = float.Parse(_speedInput.text.TrimEnd('%')) / 100f;
-                speed = Mathf.Clamp(speed, 0.1f, 50.0f);
-                _songSpeed = speed;
-                GlobalVariables.State.SongSpeed = speed;
-
-                GlobalVariables.Instance.LoadScene(SceneIndex.Gameplay);
+                LoadGameplay();
                 return;
             }
 
@@ -1214,7 +1225,60 @@ namespace YARG.Menu.DifficultySelect
 
         private void OnDisable()
         {
+            if (_band != null && _band.IsOpen)
+            {
+                _band.Close();
+                return;
+            }
+
             Navigator.Instance.PopScheme();
+        }
+
+        private void OpenBand()
+        {
+            _speedInput.text = $"{Mathf.RoundToInt(_songSpeed * 100f)}%";
+            _songTitleText.text = GlobalVariables.State.CurrentSong.Name;
+            _artistText.text = GlobalVariables.State.CurrentSong.Artist;
+            _sourceIcon.sprite = SongSources.SourceToIcon(GlobalVariables.State.CurrentSong.Source);
+            _sourceIcon.gameObject.SetActive(_sourceIcon.sprite != null);
+            ShowWarning(null);
+
+            if (_difficultyRing != null)
+            {
+                _difficultyRing.gameObject.SetActive(false);
+            }
+
+            _songList = Setlist.IsPlaying
+                ? Setlist.ResolveSongs()
+                : new List<SongEntry> { GlobalVariables.State.CurrentSong };
+
+            if (_band == null)
+            {
+                _band = gameObject.AddComponent<BandSelectMenu>();
+                _band.Initialize(new BandSelectMenu.Assets
+                {
+                    Root = (RectTransform) transform,
+                    ItemPrefab = _difficultyItemPrefab,
+                    ReadyPrefab = _difficultyGreenPrefab,
+                    SmallPrefab = _difficultyItemSmallRedPrefab,
+                    ModifierPrefab = _modifierItemPrefab,
+                    TextTemplate = _loadingPhrase,
+                });
+            }
+
+            _band.Open(_songList, LoadGameplay);
+        }
+
+        private void LoadGameplay()
+        {
+            // This will always work (as it's set up in the input field)
+            // The max speed that the game can keep up with is 5000%
+            float speed = float.Parse(_speedInput.text.TrimEnd('%')) / 100f;
+            speed = Mathf.Clamp(speed, 0.1f, 50.0f);
+            _songSpeed = speed;
+            GlobalVariables.State.SongSpeed = speed;
+
+            GlobalVariables.Instance.LoadScene(SceneIndex.Gameplay);
         }
 
         private DifficultyItem CreateItem(string header, string body, bool selected, DifficultyItem difficultyItem, UnityAction a, bool interactable = true)
@@ -1280,7 +1344,7 @@ namespace YARG.Menu.DifficultySelect
             return Localize.Key("Menu.DifficultySelect", key);
         }
 
-        private string GetInstrumentDisplayName(Instrument instrument, GameMode gameMode)
+        internal static string GetInstrumentDisplayName(Instrument instrument, GameMode gameMode)
         {
             var name = instrument.ToLocalizedName();
             // When in 6-fret mode, indicate when a 5-fret instrument is being used
@@ -1322,6 +1386,11 @@ namespace YARG.Menu.DifficultySelect
                 }
             }
 
+            return SongHasInstrument(entry, instrument);
+        }
+
+        internal static bool SongHasInstrument(SongEntry entry, Instrument instrument)
+        {
             return entry.HasInstrument(instrument) || instrument switch
             {
                 // Allow 5 -> 4-lane conversions to be played on 4-lane
@@ -1333,7 +1402,7 @@ namespace YARG.Menu.DifficultySelect
             };
         }
 
-        private bool HasPlayableDifficulty(SongEntry entry, in Instrument instrument, in Difficulty difficulty)
+        internal static bool HasPlayableDifficulty(SongEntry entry, in Instrument instrument, in Difficulty difficulty)
         {
             // For vocals, insert special difficulties
             if (instrument is Instrument.Vocals or Instrument.Harmony or Instrument.PartyVocals)

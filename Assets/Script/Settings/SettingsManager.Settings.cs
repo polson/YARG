@@ -886,6 +886,7 @@ namespace YARG.Settings
                 ? TempoEngine.YargStretch
                 : TempoEngine.BassFx;
             public ToggleSetting SaveScoresWithBots { get; } = new(false);
+            public ToggleSetting OvershellJoinFlow { get; } = new(false);
             public SliderSetting FontScaling { get; } = new(0f, 0f, 100f, FontScalingCallback);
 
             public DropdownSetting<AudioOutputMode> OutputMode { get; } = new(AudioOutputMode.Shared,
