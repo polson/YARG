@@ -152,6 +152,8 @@ namespace YARG.Menu.DifficultySelect
         private Scrollbar _scrollbar;
 
         private BandSelectMenu _band;
+        private TextMeshProUGUI _headerText;
+        private string _classicHeaderText;
 
         private void OnEnable()
         {
@@ -159,6 +161,17 @@ namespace YARG.Menu.DifficultySelect
             _subHeader.text = Localize.Key("Menu.Main.Options", subHeaderKey);
 
             bool useBand = SettingsManager.Settings.OvershellJoinFlow.Value;
+
+            if (_headerText == null)
+            {
+                _headerText = transform.Find("GenericHeader/Double Header Text/Header")?.GetComponent<TextMeshProUGUI>();
+                _classicHeaderText = _headerText != null ? _headerText.text : null;
+            }
+
+            if (_headerText != null)
+            {
+                _headerText.text = useBand ? LocalizeHeader("Band.Title") : _classicHeaderText;
+            }
             _container.GetComponentInParent<ScrollRect>(true).transform.parent.gameObject.SetActive(!useBand);
             _loadingPhrase.gameObject.SetActive(!useBand);
 

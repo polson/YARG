@@ -91,6 +91,7 @@ namespace YARG.Menu.DifficultySelect
             layout.childForceExpandHeight = false;
 
             Layout = Root.AddComponent<LayoutElement>();
+            Layout.flexibleWidth = 0f;
 
             Nav = Root.AddComponent<NavigationGroup>();
             Nav.SelectionChanged += OnSelectionChanged;
@@ -690,7 +691,9 @@ namespace YARG.Menu.DifficultySelect
             if (row.TryGetComponent<VerticalLayoutGroup>(out var layout))
             {
                 layout.childControlWidth = true;
-                layout.padding = new RectOffset(4, 4, layout.padding.top, layout.padding.bottom);
+                layout.childAlignment = TextAnchor.MiddleCenter;
+                layout.spacing = 0f;
+                layout.padding = new RectOffset(4, 4, 0, 0);
             }
         }
 

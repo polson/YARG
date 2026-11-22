@@ -359,6 +359,7 @@
             "WarningPlayerNoInputDevice": "This player has no input device assigned! Assign one from the Profiles menu.",
             "WarningVocalistNoMicrophone": "This vocalist has no microphone assigned! Assign one from the Profiles menu.",
             "Band": {
+                "Title": "Select Difficulty",
                 "JoinPrompt": "Press a button on your instrument to join",
                 "Full": "Full ({0} of {0})",
                 "ChooseProfile": "Choose Profile",

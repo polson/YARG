@@ -111,6 +111,7 @@ namespace YARG.Menu.DifficultySelect
             _joinSlot.AddComponent<Image>().color = JOIN_SLOT_COLOR;
             _joinSlotLayout = _joinSlot.AddComponent<LayoutElement>();
             _joinSlotLayout.preferredHeight = JOIN_SLOT_HEIGHT;
+            _joinSlotLayout.flexibleWidth = 0f;
 
             _joinText = CreateText(_joinSlot.transform, 24f, TextAlignmentOptions.Center);
             var joinRect = _joinText.rectTransform;
@@ -167,11 +168,9 @@ namespace YARG.Menu.DifficultySelect
                 new NavigationScheme.Entry(MenuAction.Red, "Menu.Common.Back", OnBack,
                     onHoldHandler: _ => MenuManager.Instance.PopMenu(),
                     holdSeconds: EXIT_HOLD_SECONDS, showHeldState: true),
-                new NavigationScheme.Entry(MenuAction.Left, "Menu.Common.Left", ctx => MoveFocus(ctx, -1),
-                    hide: true),
-                new NavigationScheme.Entry(MenuAction.Right, "Menu.Common.Right", ctx => MoveFocus(ctx, 1),
-                    hide: true),
             }, false));
+
+            Navigator.Instance.NavigationEvent += OnNavigationEvent;
 
             InputManager.UnclaimedDevicePressed = OnUnclaimedDevicePressed;
             PlayerContainer.PlayerAdded += OnPlayerAdded;
@@ -196,6 +195,7 @@ namespace YARG.Menu.DifficultySelect
 
             PlayerContainer.PlayerAdded -= OnPlayerAdded;
             PlayerContainer.PlayerRemoved -= OnPlayerRemoved;
+            Navigator.Instance.NavigationEvent -= OnNavigationEvent;
 
             foreach (var column in _columns.ToList())
             {
@@ -435,9 +435,16 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        private void MoveFocus(NavigationContext context, int direction)
+        private void OnNavigationEvent(NavigationContext context)
         {
-            if (context.Player is not null || _columns.Count == 0)
+            int direction = context.Action switch
+            {
+                MenuAction.Left  => -1,
+                MenuAction.Right => 1,
+                _                => 0,
+            };
+
+            if (direction == 0 || context.Player is not null || _columns.Count == 0)
             {
                 return;
             }
