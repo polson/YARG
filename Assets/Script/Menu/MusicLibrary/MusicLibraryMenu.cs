@@ -331,7 +331,7 @@ namespace YARG.Menu.MusicLibrary
             GlobalVariables.State.PlayingWithReplay = false;
 
             // Show no player warning
-            _noPlayerWarning.SetActive(PlayerContainer.Players.Count <= 0);
+            _noPlayerWarning.SetActive(NeedsPlayers);
 
             // Make sure sort is not by play count if there are only bots
             if (PlayerContainer.OnlyHasBotsActive() &&
@@ -1615,15 +1615,18 @@ namespace YARG.Menu.MusicLibrary
 
         private void OnPlayerAdded(YargPlayer player)
         {
-            _noPlayerWarning.SetActive(PlayerContainer.Players.Count <= 0);
+            _noPlayerWarning.SetActive(NeedsPlayers);
             _needsReload = true;
         }
 
         private void OnPlayerRemoved(YargPlayer player)
         {
-            _noPlayerWarning.SetActive(PlayerContainer.Players.Count <= 0);
+            _noPlayerWarning.SetActive(NeedsPlayers);
             _needsReload = true;
         }
+
+        public static bool NeedsPlayers =>
+            PlayerContainer.Players.Count <= 0 && !SettingsManager.Settings.OvershellJoinFlow.Value;
 
         public static void ResetMainLibraryIndex()
         {

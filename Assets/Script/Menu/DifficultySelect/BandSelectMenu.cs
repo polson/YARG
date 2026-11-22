@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using DG.Tweening;
 using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -10,6 +11,7 @@ using YARG.Core.Extensions;
 using YARG.Core.Game;
 using YARG.Core.Input;
 using YARG.Core.Song;
+using YARG.Gameplay.HUD;
 using YARG.Gameplay.Visuals;
 using YARG.Helpers;
 using YARG.Input;
@@ -32,21 +34,31 @@ namespace YARG.Menu.DifficultySelect
             public DifficultyItem  SmallPrefab;
             public ModifierItem    ModifierPrefab;
             public TextMeshProUGUI TextTemplate;
+            public TrackPlayerMenu CardPrefab;
+            public Scrollbar       ScrollbarPrefab;
+            public Sprite          ProfileGenericSprite;
+            public Sprite          ProfileBotSprite;
+            public Sprite          AvatarMask;
         }
 
         internal static readonly Color READY_COLOR = new Color32(0x00, 0xD3, 0xFF, 0xFF);
 
         private const int MAX_PLAYERS = HighwayCameraRendering.MAX_MATRICES;
 
-        private const float MAX_COLUMN_WIDTH = 380f;
+        private const float MAX_COLUMN_WIDTH = 460f;
         private const float SHORT_LABEL_WIDTH = 230f;
         private const float HIDE_NAME_WIDTH = 190f;
         private const float COLUMN_SPACING = 16f;
-        private const float JOIN_SLOT_HEIGHT = 180f;
+        internal const float SLIDE_DISTANCE = 900f;
+        internal const float SLIDE_SECONDS = 0.3f;
+        private const float JOIN_SLOT_HEIGHT = 90f;
+        private const float JOIN_FONT_SIZE = 30f;
         private const float START_DELAY = 1f;
         private const float EXIT_HOLD_SECONDS = 0.6f;
 
-        private static readonly Color JOIN_SLOT_COLOR = new(0f, 0f, 0f, 0.35f);
+        private const float HELP_BAR_HEIGHT = 75f;
+        private const float OFFSCREEN_DEPTH = 36f;
+        internal const float CARD_BOTTOM_INSET = HELP_BAR_HEIGHT + OFFSCREEN_DEPTH + 10f;
 
         private static readonly GameMode[] NEW_PROFILE_MODES =
         {
@@ -66,6 +78,8 @@ namespace YARG.Menu.DifficultySelect
         private RectTransform _band;
         private GameObject _joinSlot;
         private LayoutElement _joinSlotLayout;
+        private RectTransform _joinCard;
+        private readonly Dictionary<RectTransform, Tween> _shifts = new();
         private TextMeshProUGUI _joinText;
         private TextMeshProUGUI _footer;
 
@@ -74,6 +88,7 @@ namespace YARG.Menu.DifficultySelect
         private int _focusIndex;
         private float _startTimer = -1f;
         private bool _suppressPlayerEvents;
+        private readonly List<InputDevice> _pendingJoins = new();
 
         internal Assets Prefabs { get; private set; }
         internal IReadOnlyList<SongEntry> Songs => _songs;
@@ -95,39 +110,46 @@ namespace YARG.Menu.DifficultySelect
             _band.SetParent(assets.Root, false);
             _band.anchorMin = Vector2.zero;
             _band.anchorMax = Vector2.one;
-            _band.offsetMin = new Vector2(50f, 230f);
-            _band.offsetMax = new Vector2(-50f, -180f);
+            _band.offsetMin = new Vector2(50f, -OFFSCREEN_DEPTH);
+            _band.offsetMax = new Vector2(-50f, -280f);
 
             var row = bandObject.AddComponent<HorizontalLayoutGroup>();
             row.childAlignment = TextAnchor.LowerCenter;
             row.spacing = COLUMN_SPACING;
             row.childControlWidth = true;
-            row.childControlHeight = true;
+            row.childControlHeight = false;
             row.childForceExpandWidth = false;
             row.childForceExpandHeight = false;
 
             _joinSlot = new GameObject("Join Slot", typeof(RectTransform));
             _joinSlot.transform.SetParent(_band, false);
-            _joinSlot.AddComponent<Image>().color = JOIN_SLOT_COLOR;
+            ((RectTransform) _joinSlot.transform).sizeDelta = Vector2.zero;
             _joinSlotLayout = _joinSlot.AddComponent<LayoutElement>();
-            _joinSlotLayout.preferredHeight = JOIN_SLOT_HEIGHT;
             _joinSlotLayout.flexibleWidth = 0f;
 
-            _joinText = CreateText(_joinSlot.transform, 24f, TextAlignmentOptions.Center);
+            var joinCard = CreateCard(_joinSlot.transform);
+            joinCard.transform.Find("Background/Header Gradient").gameObject.SetActive(false);
+            joinCard.transform.Find("Options").gameObject.SetActive(false);
+            _joinCard = (RectTransform) joinCard.transform;
+            PlaceCard(_joinCard);
+            _joinCard.sizeDelta = new Vector2(0f, JOIN_SLOT_HEIGHT + CARD_BOTTOM_INSET);
+
+            _joinText = CreateText(_joinCard, JOIN_FONT_SIZE, TextAlignmentOptions.Center);
+            _joinText.color = Color.white;
             var joinRect = _joinText.rectTransform;
             joinRect.anchorMin = Vector2.zero;
             joinRect.anchorMax = Vector2.one;
             joinRect.pivot = new Vector2(0.5f, 0.5f);
-            joinRect.offsetMin = new Vector2(10f, 10f);
+            joinRect.offsetMin = new Vector2(10f, CARD_BOTTOM_INSET);
             joinRect.offsetMax = new Vector2(-10f, -10f);
 
-            _footer = CreateText(assets.Root, 28f, TextAlignmentOptions.Left);
+            _footer = CreateText(assets.Root, 28f, TextAlignmentOptions.MidlineLeft);
             var footerRect = _footer.rectTransform;
-            footerRect.anchorMin = Vector2.zero;
-            footerRect.anchorMax = new Vector2(0.7f, 0f);
-            footerRect.pivot = Vector2.zero;
-            footerRect.offsetMin = new Vector2(50f, 170f);
-            footerRect.offsetMax = new Vector2(0f, 220f);
+            footerRect.anchorMin = new Vector2(0f, 1f);
+            footerRect.anchorMax = new Vector2(0.6f, 1f);
+            footerRect.pivot = new Vector2(0f, 1f);
+            footerRect.offsetMin = new Vector2(50f, -265f);
+            footerRect.offsetMax = new Vector2(0f, -165f);
 
             bandObject.SetActive(false);
             _footer.gameObject.SetActive(false);
@@ -154,7 +176,7 @@ namespace YARG.Menu.DifficultySelect
             UpdateLabelSizes(PlayerContainer.Players.Count + 1);
             foreach (var player in PlayerContainer.Players)
             {
-                AddColumn(player).OpenForSong();
+                AddColumn(player, true).OpenForSong();
             }
 
             _ = Navigator.Instance.PushScheme(new NavigationScheme(new()
@@ -167,7 +189,7 @@ namespace YARG.Menu.DifficultySelect
                     ctx => ColumnFor(ctx.Player)?.Nav.ConfirmSelection()),
                 new NavigationScheme.Entry(MenuAction.Red, "Menu.Common.Back", OnBack,
                     onHoldHandler: _ => MenuManager.Instance.PopMenu(),
-                    holdSeconds: EXIT_HOLD_SECONDS, showHeldState: true),
+                    holdSeconds: EXIT_HOLD_SECONDS),
             }, false));
 
             Navigator.Instance.NavigationEvent += OnNavigationEvent;
@@ -187,6 +209,7 @@ namespace YARG.Menu.DifficultySelect
             }
 
             IsOpen = false;
+            _pendingJoins.Clear();
 
             if (InputManager.UnclaimedDevicePressed == OnUnclaimedDevicePressed)
             {
@@ -232,7 +255,23 @@ namespace YARG.Menu.DifficultySelect
 
         private void Update()
         {
-            if (!IsOpen || _startTimer < 0f)
+            if (!IsOpen)
+            {
+                return;
+            }
+
+            if (_pendingJoins.Count > 0)
+            {
+                var devices = _pendingJoins.ToList();
+                _pendingJoins.Clear();
+
+                foreach (var device in devices)
+                {
+                    Join(device);
+                }
+            }
+
+            if (_startTimer < 0f)
             {
                 return;
             }
@@ -252,17 +291,13 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            bool joining = _columns.Any(c => c.IsJoining);
-            bool editing = _columns.Any(c => c.IsEditingInstrument);
-            bool showSlot = !joining && (IsFull || !editing);
-
-            _joinSlot.SetActive(showSlot);
+            _joinSlot.SetActive(true);
             _joinSlot.transform.SetAsLastSibling();
             _joinText.text = IsFull
                 ? Localize.KeyFormat("Menu.DifficultySelect.Band.Full", MAX_PLAYERS)
                 : Localize.Key("Menu.DifficultySelect.Band.JoinPrompt");
 
-            int slots = _columns.Count + (showSlot ? 1 : 0);
+            int slots = _columns.Count + 1;
             if (UpdateLabelSizes(slots))
             {
                 foreach (var column in _columns)
@@ -273,11 +308,12 @@ namespace YARG.Menu.DifficultySelect
 
             float width = GetColumnWidth(slots);
             _joinSlotLayout.preferredWidth = width;
+            _joinCard.sizeDelta = new Vector2(width, _joinCard.sizeDelta.y);
 
             _focusIndex = Mathf.Clamp(_focusIndex, 0, Mathf.Max(0, _columns.Count - 1));
             for (int i = 0; i < _columns.Count; i++)
             {
-                _columns[i].Layout.preferredWidth = width;
+                _columns[i].SetWidth(width);
                 _columns[i].SetFocused(i == _focusIndex && !PlayerContainer.HasConnectedKeyboardProfile());
             }
 
@@ -355,7 +391,6 @@ namespace YARG.Menu.DifficultySelect
         internal void ChooseJoinProfile(BandColumn column, YargProfile profile)
         {
             var device = column.JoinDevice;
-            profile ??= CreateProfileFor(device);
 
             if (profile != column.Player.Profile)
             {
@@ -372,7 +407,6 @@ namespace YARG.Menu.DifficultySelect
                 if (player is null)
                 {
                     RemoveColumn(column);
-                    OnColumnChanged();
                     return;
                 }
 
@@ -397,7 +431,6 @@ namespace YARG.Menu.DifficultySelect
             }
 
             RemoveColumn(column);
-            OnColumnChanged();
         }
 
         internal void Disconnect(BandColumn column)
@@ -419,19 +452,18 @@ namespace YARG.Menu.DifficultySelect
             }
 
             RemoveColumn(column);
-            OnColumnChanged();
         }
 
         private void OnBack(NavigationContext context)
         {
             var column = ColumnFor(context.Player);
-            if (column is not null)
-            {
-                column.Back();
-            }
-            else if (context.Player is null && _columns.Count == 0)
+            if (context.Player is null && (column is null || column.IsAtTopLevel))
             {
                 MenuManager.Instance.PopMenu();
+            }
+            else
+            {
+                column?.Back();
             }
         }
 
@@ -470,10 +502,30 @@ namespace YARG.Menu.DifficultySelect
                 return false;
             }
 
-            if (!IsOpen || DialogManager.Instance.IsDialogShowing || IsFull ||
-                _columns.Any(c => c.IsJoining || c.IsEditingInstrument))
+            if (!IsOpen || DialogManager.Instance.IsDialogShowing || IsFull)
             {
+                return device is not Keyboard;
+            }
+
+            if (device is Keyboard)
+            {
+                Join(device);
                 return true;
+            }
+
+            if (!_pendingJoins.Contains(device))
+            {
+                _pendingJoins.Add(device);
+            }
+
+            return false;
+        }
+
+        private void Join(InputDevice device)
+        {
+            if (!IsOpen || IsFull || PlayerContainer.IsControllerTaken(device))
+            {
+                return;
             }
 
             var profile = PlayerContainer.GetProfileForDevice(device) ?? PlayerContainer.Profiles
@@ -496,12 +548,14 @@ namespace YARG.Menu.DifficultySelect
                     PlayerContainer.RemoveProfile(created);
                 }
 
-                return true;
+                return;
             }
 
-            AddColumn(player).BeginJoin(device, owned, created);
+            var before = CaptureCardPositions();
+            var column = AddColumn(player, false);
+            column.BeginJoin(device, owned, created);
             OnColumnChanged();
-            return true;
+            ShiftCards(before, column, SLIDE_SECONDS);
         }
 
         private YargPlayer AttachPlayer(YargProfile profile, InputDevice device, out bool owned)
@@ -581,8 +635,10 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            AddColumn(player).OpenForSong();
+            var before = CaptureCardPositions();
+            AddColumn(player, true).OpenForSong();
             OnColumnChanged();
+            ShiftCards(before, null, 0f);
         }
 
         private void OnPlayerRemoved(YargPlayer player)
@@ -599,12 +655,11 @@ namespace YARG.Menu.DifficultySelect
             }
 
             RemoveColumn(column);
-            OnColumnChanged();
         }
 
-        private BandColumn AddColumn(YargPlayer player)
+        private BandColumn AddColumn(YargPlayer player, bool slideIn)
         {
-            var column = new BandColumn(this, _band, player);
+            var column = new BandColumn(this, _band, player, slideIn);
             _columns.Add(column);
             _joinSlot.transform.SetAsLastSibling();
             return column;
@@ -612,14 +667,95 @@ namespace YARG.Menu.DifficultySelect
 
         private void RemoveColumn(BandColumn column)
         {
+            var before = CaptureCardPositions();
             _columns.Remove(column);
-            column.Destroy();
+            _shifts.Remove(column.Card);
+            column.DismissAndDestroy();
+            OnColumnChanged();
+            ShiftCards(before, null, SLIDE_SECONDS);
+        }
+
+        private Dictionary<RectTransform, float> CaptureCardPositions()
+        {
+            var positions = new Dictionary<RectTransform, float>();
+            foreach (var column in _columns)
+            {
+                positions[column.Card] = CardPosition(column.Card);
+            }
+
+            positions[_joinCard] = CardPosition(_joinCard);
+            return positions;
+        }
+
+        private void ShiftCards(Dictionary<RectTransform, float> before, BandColumn joined, float delay)
+        {
+            if (joined is not null)
+            {
+                before[joined.Card] = before[_joinCard];
+                before.Remove(_joinCard);
+            }
+
+            LayoutRebuilder.ForceRebuildLayoutImmediate(_band);
+
+            foreach (var column in _columns)
+            {
+                ShiftCard(column.Card, before, delay);
+            }
+
+            ShiftCard(_joinCard, before, delay);
+
+            if (joined is not null)
+            {
+                LayoutRebuilder.ForceRebuildLayoutImmediate(joined.Card);
+                joined.RiseFrom(_joinCard.rect.height - joined.Card.rect.height);
+
+                _joinCard.DOKill();
+                _joinCard.anchoredPosition = new Vector2(0f, -SLIDE_DISTANCE);
+                _joinCard.DOAnchorPosY(0f, SLIDE_SECONDS)
+                    .SetDelay(SLIDE_SECONDS * 2f)
+                    .SetEase(Ease.OutCubic)
+                    .SetUpdate(true);
+            }
+        }
+
+        private void ShiftCard(RectTransform card, Dictionary<RectTransform, float> before, float delay)
+        {
+            if (_shifts.TryGetValue(card, out var running))
+            {
+                running.Kill();
+                _shifts.Remove(card);
+            }
+
+            float offset = before.TryGetValue(card, out float position)
+                ? position - SlotPosition(card)
+                : 0f;
+
+            card.anchoredPosition = new Vector2(offset, card.anchoredPosition.y);
+            if (Mathf.Abs(offset) < 0.5f)
+            {
+                card.anchoredPosition = new Vector2(0f, card.anchoredPosition.y);
+                return;
+            }
+
+            _shifts[card] = card.DOAnchorPosX(0f, SLIDE_SECONDS)
+                .SetDelay(delay)
+                .SetEase(Ease.OutCubic)
+                .SetUpdate(true);
+        }
+
+        private static float SlotPosition(RectTransform card)
+        {
+            return card.parent.localPosition.x;
+        }
+
+        private static float CardPosition(RectTransform card)
+        {
+            return SlotPosition(card) + card.anchoredPosition.x;
         }
 
         private void UpdateStatus()
         {
             int ready = _columns.Count(c => c.IsDecided && !c.IsSittingOut);
-            int playing = _columns.Count(c => !c.IsSittingOut);
             bool allDecided = _columns.Count > 0 && _columns.All(c => c.IsDecided);
 
             if (_columns.Count == 0)
@@ -636,7 +772,7 @@ namespace YARG.Menu.DifficultySelect
             }
             else
             {
-                _footer.text = Localize.KeyFormat("Menu.DifficultySelect.Band.ReadyCount", ready, playing);
+                _footer.text = string.Empty;
             }
 
             if (allDecided && ready > 0)
@@ -744,11 +880,21 @@ namespace YARG.Menu.DifficultySelect
             return candidates;
         }
 
+        internal float MaxCardHeight => _band.rect.height;
+
         private float GetColumnWidth(int slots)
         {
             slots = Mathf.Max(1, slots);
             float available = _band.rect.width - COLUMN_SPACING * (slots - 1);
             return Mathf.Min(MAX_COLUMN_WIDTH, available / slots);
+        }
+
+        internal static void PlaceCard(RectTransform card)
+        {
+            card.anchorMin = new Vector2(0.5f, 0f);
+            card.anchorMax = new Vector2(0.5f, 0f);
+            card.pivot = new Vector2(0.5f, 0f);
+            card.anchoredPosition = Vector2.zero;
         }
 
         private bool UpdateLabelSizes(int slots)
@@ -761,6 +907,20 @@ namespace YARG.Menu.DifficultySelect
             ShortLabels = shortLabels;
             HideNames = hideNames;
             return changed;
+        }
+
+        internal GameObject CreateCard(Transform parent)
+        {
+            var menu = Instantiate(Prefabs.CardPrefab, parent);
+            var card = menu.gameObject;
+            DestroyImmediate(menu);
+
+            card.name = "Card";
+            card.transform.localScale = Vector3.one;
+            card.transform.Find("Border").gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+            card.transform.Find("Background").gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+            card.SetActive(true);
+            return card;
         }
 
         private TextMeshProUGUI CreateText(Transform parent, float fontSize, TextAlignmentOptions alignment)

@@ -503,6 +503,11 @@ MonoBehaviour:
   _coloredItemPrefab: {fileID: 4916285037412960123, guid: f2a9c4e6b8d04642a8c0e2d4f6b8a3d5, type: 3}
   _ringsItemPrefab: {fileID: 6038417295061472385, guid: d3f5a7c9e1b34642a8c0e2d4f6b8a6e8, type: 3}
   _modifierItemPrefab: {fileID: 3419815060514877507, guid: 6c928df38839ed24eaa659f76c62da6b, type: 3}
+  _cardPrefab: {fileID: 7944909741338334048, guid: fdcc142f62d08694da561b9589b7da7b, type: 3}
+  _scrollbarPrefab: {fileID: 7797295169623578800, guid: 39d10333b1c21384fa99cee4bf5e6ddc, type: 3}
+  _profileGenericSprite: {fileID: 21300000, guid: 6c06aca89bc095245ba69514188d3fce, type: 3}
+  _profileBotSprite: {fileID: 21300000, guid: 2a0312c2e46460a4dbce351a4b20985f, type: 3}
+  _avatarMask: {fileID: 21300000, guid: 9cb16eda6bfc31f4fb4ad264387e59cd, type: 3}
 --- !u!1 &2177612344681018170
 GameObject:
   m_ObjectHideFlags: 0
@@ -573,11 +578,11 @@ RectTransform:
   - {fileID: 2223691121479714876}
   m_Father: {fileID: 1731608351740115695}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
-  m_AnchorMin: {x: 1, y: 0}
-  m_AnchorMax: {x: 1, y: 0}
-  m_AnchoredPosition: {x: -25, y: 109}
+  m_AnchorMin: {x: 1, y: 1}
+  m_AnchorMax: {x: 1, y: 1}
+  m_AnchoredPosition: {x: -25, y: -165}
   m_SizeDelta: {x: 350, y: 100}
-  m_Pivot: {x: 1, y: 0}
+  m_Pivot: {x: 1, y: 1}
 --- !u!1 &4069911489919897547
 GameObject:
   m_ObjectHideFlags: 0

@@ -3,7 +3,6 @@ using UnityEngine;
 using YARG.Core.Game;
 using YARG.Core.Song;
 using YARG.Helpers;
-using YARG.Player;
 using YARG.Playlists;
 using YARG.Scores;
 using YARG.Song;
@@ -153,7 +152,7 @@ namespace YARG.Menu.MusicLibrary
         {
             base.PrimaryButtonClick();
 
-            if (PlayerContainer.Players.Count <= 0)
+            if (MusicLibraryMenu.NeedsPlayers)
             {
                 return;
             }

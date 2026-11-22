@@ -130,9 +130,16 @@ namespace YARG.Menu.DifficultySelect
 
         public void UseCompactText(float fontSize)
         {
+            UseCompactText(fontSize, fontSize);
+        }
+
+        public void UseCompactText(float headerSize, float bodySize)
+        {
+            _header.fontSize = headerSize;
+            _body.fontSize = bodySize;
+
             foreach (var label in new[] { _header, _body })
             {
-                label.fontSize = fontSize;
                 label.textWrappingMode = TextWrappingModes.NoWrap;
                 label.overflowMode = TextOverflowModes.Ellipsis;
             }

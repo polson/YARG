@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using UnityEngine.InputSystem;
 using YARG.Core;
 using YARG.Core.Engine;
 using YARG.Core.Game;
@@ -149,6 +150,8 @@ namespace YARG.Player
             DeviceInfo.EnableInputs();
             DeviceInfo.SubscribeToMenuInputs(OnMenuInput);
             InputManager.RegisterPlayer(this);
+            DeviceInfo.ControllerAdded += OnControllerAdded;
+            DeviceInfo.ControllerRemoved += OnControllerRemoved;
 
             InputsEnabled = true;
         }
@@ -162,9 +165,21 @@ namespace YARG.Player
 
             DeviceInfo.DisableInputs();
             DeviceInfo.UnsubscribeFromMenuInputs(OnMenuInput);
+            DeviceInfo.ControllerAdded -= OnControllerAdded;
+            DeviceInfo.ControllerRemoved -= OnControllerRemoved;
             InputManager.UnregisterPlayer(this);
 
             InputsEnabled = false;
+        }
+
+        private static void OnControllerAdded(InputDevice controller)
+        {
+            InputManager.RegisterDevice(controller);
+        }
+
+        private static void OnControllerRemoved(InputDevice controller)
+        {
+            InputManager.UnregisterDevice(controller);
         }
 
         private void OnMenuInput(ref GameInput input)

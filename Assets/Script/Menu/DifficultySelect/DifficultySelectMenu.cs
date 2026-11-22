@@ -9,6 +9,7 @@ using UnityEngine.UI;
 using YARG.Core;
 using YARG.Core.Extensions;
 using YARG.Core.Game;
+using YARG.Gameplay.HUD;
 using YARG.Core.Input;
 using YARG.Core.Song;
 using YARG.Core.Utility;
@@ -125,6 +126,16 @@ namespace YARG.Menu.DifficultySelect
         private GameObject _ringsItemPrefab;
         [SerializeField]
         private ModifierItem _modifierItemPrefab;
+        [SerializeField]
+        private TrackPlayerMenu _cardPrefab;
+        [SerializeField]
+        private Scrollbar _scrollbarPrefab;
+        [SerializeField]
+        private Sprite _profileGenericSprite;
+        [SerializeField]
+        private Sprite _profileBotSprite;
+        [SerializeField]
+        private Sprite _avatarMask;
 
         private int _playerIndex;
         private int _vocalModifierSelectIndex = -1;
@@ -1276,6 +1287,11 @@ namespace YARG.Menu.DifficultySelect
                     SmallPrefab = _difficultyItemSmallRedPrefab,
                     ModifierPrefab = _modifierItemPrefab,
                     TextTemplate = _loadingPhrase,
+                    CardPrefab = _cardPrefab,
+                    ScrollbarPrefab = _scrollbarPrefab,
+                    ProfileGenericSprite = _profileGenericSprite,
+                    ProfileBotSprite = _profileBotSprite,
+                    AvatarMask = _avatarMask,
                 });
             }
 
