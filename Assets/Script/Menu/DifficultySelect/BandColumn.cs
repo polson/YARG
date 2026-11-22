@@ -133,6 +133,7 @@ namespace YARG.Menu.DifficultySelect
             _headingColor = _heading.color;
             _heading.fontSizeMin = HEADING_MIN_FONT_SIZE;
             _heading.textWrappingMode = TextWrappingModes.NoWrap;
+            _heading.verticalAlignment = VerticalAlignmentOptions.Middle;
             _icon = header.Find("Instrument Icon").GetComponent<Image>();
             _iconWidth = _icon.GetComponent<LayoutElement>().preferredWidth;
             _headingSpacing = header.GetComponent<HorizontalLayoutGroup>().spacing;
@@ -585,16 +586,14 @@ namespace YARG.Menu.DifficultySelect
                 warning.SetTextColor(WARNING_COLOR);
             }
 
-            bool labels = !_menu.ShortLabels;
-            float labeledHeight = labels ? TWO_LINE_ROW_HEIGHT : ROW_HEIGHT;
 
-            AddRow(labels ? Localize.Key("Menu.DifficultySelect.Instrument") : null,
+            AddRow(Localize.Key("Menu.DifficultySelect.Instrument"),
                 DifficultySelectMenu.GetInstrumentDisplayName(profile.CurrentInstrument, profile.GameMode),
-                () => OpenPicker(true), !Ready, height: labeledHeight);
+                () => OpenPicker(true), !Ready, height: TWO_LINE_ROW_HEIGHT);
 
-            var difficulty = AddRow(labels ? Localize.Key("Menu.DifficultySelect.Difficulty") : null,
-                GetDifficultyLabel(profile.CurrentDifficulty), () => SetState(BandColumnState.Difficulty),
-                !Ready && _difficulties.Count > 0, height: labeledHeight);
+            var difficulty = AddRow(Localize.Key("Menu.DifficultySelect.Difficulty"),
+                profile.CurrentDifficulty.ToLocalizedName(), () => SetState(BandColumnState.Difficulty),
+                !Ready && _difficulties.Count > 0, height: TWO_LINE_ROW_HEIGHT);
             if (!Ready && _difficulties.Count > 0)
             {
                 _difficultyButton = difficulty.Button;
@@ -608,10 +607,10 @@ namespace YARG.Menu.DifficultySelect
             }
 
             var modifiers = GetActiveModifierNames();
-            AddRow(labels ? Localize.Key("Menu.DifficultySelect.Modifiers") : null,
+            AddRow(Localize.Key("Menu.DifficultySelect.Modifiers"),
                 modifiers.Count == 0 ? Modifier.None.ToLocalizedName() : string.Join("\n", modifiers),
                 () => SetState(BandColumnState.Modifiers), !Ready,
-                height: labeledHeight + Mathf.Max(0, modifiers.Count - 1) * MODIFIER_LINE_HEIGHT);
+                height: TWO_LINE_ROW_HEIGHT + Mathf.Max(0, modifiers.Count - 1) * MODIFIER_LINE_HEIGHT);
 
             var ready = AddRow(null,
                 Localize.Key("Menu.DifficultySelect.Band", Ready ? "Unready" : "Ready"),
@@ -626,7 +625,7 @@ namespace YARG.Menu.DifficultySelect
             foreach (var difficulty in EnumExtensions<Difficulty>.Values)
             {
                 var capture = difficulty;
-                _difficultyItems[difficulty] = AddRow(null, GetDifficultyLabel(difficulty),
+                _difficultyItems[difficulty] = AddRow(null, difficulty.ToLocalizedName(),
                     () => ConfirmDifficulty(capture), _difficulties.Contains(difficulty));
             }
 
@@ -883,13 +882,6 @@ namespace YARG.Menu.DifficultySelect
             profile.CurrentDifficulty = (Difficulty) diff;
         }
 
-        private string GetDifficultyLabel(Difficulty difficulty)
-        {
-            return _menu.ShortLabels
-                ? Localize.Key("Menu.DifficultySelect.Band.ShortDifficulty", difficulty.ToString())
-                : difficulty.ToLocalizedName();
-        }
-
         private List<string> GetActiveModifierNames()
         {
             var profile = Player.Profile;
@@ -914,7 +906,7 @@ namespace YARG.Menu.DifficultySelect
         private void SetPlayerHeading()
         {
             UpdateIcon();
-            SetHeading(_menu.HideNames ? string.Empty : Player.Profile.Name, true);
+            SetHeading(Player.Profile.Name, true);
             if (Ready)
             {
                 _heading.color = BandSelectMenu.READY_COLOR;
@@ -1023,6 +1015,7 @@ namespace YARG.Menu.DifficultySelect
             var toggle = Object.Instantiate(_menu.Prefabs.ModifierPrefab, _rows);
             toggle.Initialize(label, active, onChanged);
             toggle.gameObject.AddComponent<LayoutElement>().preferredHeight = ROW_HEIGHT;
+
             Nav.AddNavigatable(toggle);
             return toggle;
         }

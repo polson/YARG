@@ -46,8 +46,6 @@ namespace YARG.Menu.DifficultySelect
         private const int MAX_PLAYERS = HighwayCameraRendering.MAX_MATRICES;
 
         private const float MAX_COLUMN_WIDTH = 460f;
-        private const float SHORT_LABEL_WIDTH = 230f;
-        private const float HIDE_NAME_WIDTH = 190f;
         private const float COLUMN_SPACING = 16f;
         internal const float SLIDE_DISTANCE = 900f;
         internal const float SLIDE_SECONDS = 0.3f;
@@ -94,8 +92,6 @@ namespace YARG.Menu.DifficultySelect
         internal IReadOnlyList<SongEntry> Songs => _songs;
         internal IReadOnlyList<Instrument> Instruments => _instruments;
         internal int MaxHarmonyIndex { get; private set; }
-        internal bool ShortLabels { get; private set; }
-        internal bool HideNames { get; private set; }
 
         public bool IsOpen { get; private set; }
 
@@ -135,6 +131,10 @@ namespace YARG.Menu.DifficultySelect
             _joinCard.sizeDelta = new Vector2(0f, JOIN_SLOT_HEIGHT + CARD_BOTTOM_INSET);
 
             _joinText = CreateText(_joinCard, JOIN_FONT_SIZE, TextAlignmentOptions.Center);
+            _joinText.textWrappingMode = TextWrappingModes.NoWrap;
+            _joinText.enableAutoSizing = true;
+            _joinText.fontSizeMax = JOIN_FONT_SIZE;
+            _joinText.fontSizeMin = JOIN_FONT_SIZE * DifficultyItem.MIN_SHRINK;
             _joinText.color = Color.white;
             var joinRect = _joinText.rectTransform;
             joinRect.anchorMin = Vector2.zero;
@@ -173,7 +173,6 @@ namespace YARG.Menu.DifficultySelect
             _band.gameObject.SetActive(true);
             _footer.gameObject.SetActive(true);
 
-            UpdateLabelSizes(PlayerContainer.Players.Count + 1);
             foreach (var player in PlayerContainer.Players)
             {
                 AddColumn(player, true).OpenForSong();
@@ -298,13 +297,6 @@ namespace YARG.Menu.DifficultySelect
                 : Localize.Key("Menu.DifficultySelect.Band.JoinPrompt");
 
             int slots = _columns.Count + 1;
-            if (UpdateLabelSizes(slots))
-            {
-                foreach (var column in _columns)
-                {
-                    column.Rebuild();
-                }
-            }
 
             float width = GetColumnWidth(slots);
             _joinSlotLayout.preferredWidth = width;
@@ -895,18 +887,6 @@ namespace YARG.Menu.DifficultySelect
             card.anchorMax = new Vector2(0.5f, 0f);
             card.pivot = new Vector2(0.5f, 0f);
             card.anchoredPosition = Vector2.zero;
-        }
-
-        private bool UpdateLabelSizes(int slots)
-        {
-            float width = GetColumnWidth(slots);
-            bool shortLabels = width < SHORT_LABEL_WIDTH;
-            bool hideNames = width < HIDE_NAME_WIDTH;
-
-            bool changed = shortLabels != ShortLabels || hideNames != HideNames;
-            ShortLabels = shortLabels;
-            HideNames = hideNames;
-            return changed;
         }
 
         internal GameObject CreateCard(Transform parent)

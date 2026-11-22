@@ -378,15 +378,7 @@
                 "Part": "Part {0}",
                 "Starting": "Starting...",
                 "NobodyPlaying": "Everyone is sitting out",
-                "NoPlayers": "Waiting for players",
-                "ShortDifficulty": {
-                    "Beginner": "BEG",
-                    "Easy": "EZ",
-                    "Medium": "MED",
-                    "Hard": "HRD",
-                    "Expert": "EXP",
-                    "ExpertPlus": "EXP+"
-                }
+                "NoPlayers": "Waiting for players"
             }
         },
         "GameModes": {

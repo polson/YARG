@@ -9,6 +9,8 @@ namespace YARG.Menu.DifficultySelect
 {
     public class DifficultyItem : MonoBehaviour
     {
+        public const float MIN_SHRINK = 0.5f;
+
         [SerializeField]
         private TextMeshProUGUI _header;
         [SerializeField]
@@ -135,14 +137,18 @@ namespace YARG.Menu.DifficultySelect
 
         public void UseCompactText(float headerSize, float bodySize)
         {
-            _header.fontSize = headerSize;
-            _body.fontSize = bodySize;
+            ShrinkToFit(_header, headerSize);
+            ShrinkToFit(_body, bodySize);
+        }
 
-            foreach (var label in new[] { _header, _body })
-            {
-                label.textWrappingMode = TextWrappingModes.NoWrap;
-                label.overflowMode = TextOverflowModes.Ellipsis;
-            }
+        private static void ShrinkToFit(TextMeshProUGUI label, float fontSize)
+        {
+            label.fontSize = fontSize;
+            label.fontSizeMax = fontSize;
+            label.fontSizeMin = fontSize * MIN_SHRINK;
+            label.enableAutoSizing = true;
+            label.textWrappingMode = TextWrappingModes.NoWrap;
+            label.overflowMode = TextOverflowModes.Ellipsis;
         }
     }
 }
