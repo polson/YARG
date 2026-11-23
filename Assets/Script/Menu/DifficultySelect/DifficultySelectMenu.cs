@@ -9,7 +9,6 @@ using UnityEngine.UI;
 using YARG.Core;
 using YARG.Core.Extensions;
 using YARG.Core.Game;
-using YARG.Gameplay.HUD;
 using YARG.Core.Input;
 using YARG.Core.Song;
 using YARG.Core.Utility;
@@ -127,15 +126,9 @@ namespace YARG.Menu.DifficultySelect
         [SerializeField]
         private ModifierItem _modifierItemPrefab;
         [SerializeField]
-        private TrackPlayerMenu _cardPrefab;
+        private BandSelectMenu _band;
         [SerializeField]
-        private Scrollbar _scrollbarPrefab;
-        [SerializeField]
-        private Sprite _profileGenericSprite;
-        [SerializeField]
-        private Sprite _profileBotSprite;
-        [SerializeField]
-        private Sprite _avatarMask;
+        private TextMeshProUGUI _headerText;
 
         private int _playerIndex;
         private int _vocalModifierSelectIndex = -1;
@@ -162,8 +155,6 @@ namespace YARG.Menu.DifficultySelect
         private ScrollRect _scrollRect;
         private Scrollbar _scrollbar;
 
-        private BandSelectMenu _band;
-        private TextMeshProUGUI _headerText;
         private string _classicHeaderText;
 
         private void OnEnable()
@@ -173,16 +164,8 @@ namespace YARG.Menu.DifficultySelect
 
             bool useBand = SettingsManager.Settings.OvershellJoinFlow.Value;
 
-            if (_headerText == null)
-            {
-                _headerText = transform.Find("GenericHeader/Double Header Text/Header")?.GetComponent<TextMeshProUGUI>();
-                _classicHeaderText = _headerText != null ? _headerText.text : null;
-            }
-
-            if (_headerText != null)
-            {
-                _headerText.text = useBand ? LocalizeHeader("Band.Title") : _classicHeaderText;
-            }
+            _classicHeaderText ??= _headerText.text;
+            _headerText.text = useBand ? LocalizeHeader("Band.Title") : _classicHeaderText;
             _container.GetComponentInParent<ScrollRect>(true).transform.parent.gameObject.SetActive(!useBand);
             _loadingPhrase.gameObject.SetActive(!useBand);
 
@@ -1249,7 +1232,7 @@ namespace YARG.Menu.DifficultySelect
 
         private void OnDisable()
         {
-            if (_band != null && _band.IsOpen)
+            if (_band.IsOpen)
             {
                 _band.Close();
                 return;
@@ -1275,25 +1258,6 @@ namespace YARG.Menu.DifficultySelect
             _songList = Setlist.IsPlaying
                 ? Setlist.ResolveSongs()
                 : new List<SongEntry> { GlobalVariables.State.CurrentSong };
-
-            if (_band == null)
-            {
-                _band = gameObject.AddComponent<BandSelectMenu>();
-                _band.Initialize(new BandSelectMenu.Assets
-                {
-                    Root = (RectTransform) transform,
-                    ItemPrefab = _difficultyItemPrefab,
-                    ReadyPrefab = _difficultyGreenPrefab,
-                    SmallPrefab = _difficultyItemSmallRedPrefab,
-                    ModifierPrefab = _modifierItemPrefab,
-                    TextTemplate = _loadingPhrase,
-                    CardPrefab = _cardPrefab,
-                    ScrollbarPrefab = _scrollbarPrefab,
-                    ProfileGenericSprite = _profileGenericSprite,
-                    ProfileBotSprite = _profileBotSprite,
-                    AvatarMask = _avatarMask,
-                });
-            }
 
             _band.Open(_songList, LoadGameplay);
         }

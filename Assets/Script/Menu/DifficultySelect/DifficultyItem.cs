@@ -9,7 +9,7 @@ namespace YARG.Menu.DifficultySelect
 {
     public class DifficultyItem : MonoBehaviour
     {
-        public const float MIN_SHRINK = 0.5f;
+        private const float MIN_SHRINK = 0.5f;
 
         [SerializeField]
         private TextMeshProUGUI _header;
@@ -20,6 +20,8 @@ namespace YARG.Menu.DifficultySelect
         private Image _selectionFill;
         [SerializeField]
         private CanvasGroup _canvasGroup;
+        [SerializeField]
+        private Image _avatar;
 
         [field: SerializeField]
         public NavigatableButton Button { get; private set; }
@@ -139,6 +141,12 @@ namespace YARG.Menu.DifficultySelect
         {
             ShrinkToFit(_header, headerSize);
             ShrinkToFit(_body, bodySize);
+        }
+
+        public void SetAvatar(Sprite sprite, bool flipped)
+        {
+            _avatar.sprite = sprite;
+            _avatar.rectTransform.localScale = new Vector3(1f, flipped ? -1f : 1f, 1f);
         }
 
         private static void ShrinkToFit(TextMeshProUGUI label, float fontSize)

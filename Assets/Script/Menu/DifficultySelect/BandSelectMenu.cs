@@ -11,7 +11,6 @@ using YARG.Core.Extensions;
 using YARG.Core.Game;
 using YARG.Core.Input;
 using YARG.Core.Song;
-using YARG.Gameplay.HUD;
 using YARG.Gameplay.Visuals;
 using YARG.Helpers;
 using YARG.Input;
@@ -26,37 +25,14 @@ namespace YARG.Menu.DifficultySelect
 {
     public sealed class BandSelectMenu : MonoBehaviour
     {
-        public struct Assets
-        {
-            public RectTransform   Root;
-            public DifficultyItem  ItemPrefab;
-            public DifficultyItem  ReadyPrefab;
-            public DifficultyItem  SmallPrefab;
-            public ModifierItem    ModifierPrefab;
-            public TextMeshProUGUI TextTemplate;
-            public TrackPlayerMenu CardPrefab;
-            public Scrollbar       ScrollbarPrefab;
-            public Sprite          ProfileGenericSprite;
-            public Sprite          ProfileBotSprite;
-            public Sprite          AvatarMask;
-        }
-
         internal static readonly Color READY_COLOR = new Color32(0x00, 0xD3, 0xFF, 0xFF);
 
         private const int MAX_PLAYERS = HighwayCameraRendering.MAX_MATRICES;
 
         private const float MAX_COLUMN_WIDTH = 460f;
-        private const float COLUMN_SPACING = 16f;
         internal const float SLIDE_DISTANCE = 900f;
         internal const float SLIDE_SECONDS = 0.3f;
-        private const float JOIN_SLOT_HEIGHT = 90f;
-        private const float JOIN_FONT_SIZE = 30f;
-        private const float START_DELAY = 1f;
         private const float EXIT_HOLD_SECONDS = 0.6f;
-
-        private const float HELP_BAR_HEIGHT = 75f;
-        private const float OFFSCREEN_DEPTH = 36f;
-        internal const float CARD_BOTTOM_INSET = HELP_BAR_HEIGHT + OFFSCREEN_DEPTH + 10f;
 
         private static readonly GameMode[] NEW_PROFILE_MODES =
         {
@@ -70,25 +46,30 @@ namespace YARG.Menu.DifficultySelect
             GameMode.Vocals,
         };
 
+        [SerializeField]
+        private RectTransform _band;
+        [SerializeField]
+        private LayoutElement _joinSlot;
+        [SerializeField]
+        private RectTransform _joinCard;
+        [SerializeField]
+        private TextMeshProUGUI _joinText;
+        [SerializeField]
+        private TextMeshProUGUI _footer;
+        [SerializeField]
+        private BandColumn _columnPrefab;
+
         private readonly List<BandColumn> _columns = new();
         private readonly List<Instrument> _instruments = new();
-
-        private RectTransform _band;
-        private GameObject _joinSlot;
-        private LayoutElement _joinSlotLayout;
-        private RectTransform _joinCard;
         private readonly Dictionary<RectTransform, Tween> _shifts = new();
-        private TextMeshProUGUI _joinText;
-        private TextMeshProUGUI _footer;
 
         private List<SongEntry> _songs;
         private Action _startSong;
         private int _focusIndex;
-        private float _startTimer = -1f;
+        private bool _startPending;
         private bool _suppressPlayerEvents;
         private readonly List<InputDevice> _pendingJoins = new();
 
-        internal Assets Prefabs { get; private set; }
         internal IReadOnlyList<SongEntry> Songs => _songs;
         internal IReadOnlyList<Instrument> Instruments => _instruments;
         internal int MaxHarmonyIndex { get; private set; }
@@ -97,70 +78,12 @@ namespace YARG.Menu.DifficultySelect
 
         private bool IsFull => PlayerContainer.Players.Count >= MAX_PLAYERS;
 
-        public void Initialize(Assets assets)
-        {
-            Prefabs = assets;
-
-            var bandObject = new GameObject("Band", typeof(RectTransform));
-            _band = (RectTransform) bandObject.transform;
-            _band.SetParent(assets.Root, false);
-            _band.anchorMin = Vector2.zero;
-            _band.anchorMax = Vector2.one;
-            _band.offsetMin = new Vector2(50f, -OFFSCREEN_DEPTH);
-            _band.offsetMax = new Vector2(-50f, -280f);
-
-            var row = bandObject.AddComponent<HorizontalLayoutGroup>();
-            row.childAlignment = TextAnchor.LowerCenter;
-            row.spacing = COLUMN_SPACING;
-            row.childControlWidth = true;
-            row.childControlHeight = false;
-            row.childForceExpandWidth = false;
-            row.childForceExpandHeight = false;
-
-            _joinSlot = new GameObject("Join Slot", typeof(RectTransform));
-            _joinSlot.transform.SetParent(_band, false);
-            ((RectTransform) _joinSlot.transform).sizeDelta = Vector2.zero;
-            _joinSlotLayout = _joinSlot.AddComponent<LayoutElement>();
-            _joinSlotLayout.flexibleWidth = 0f;
-
-            var joinCard = CreateCard(_joinSlot.transform);
-            joinCard.transform.Find("Background/Header Gradient").gameObject.SetActive(false);
-            joinCard.transform.Find("Options").gameObject.SetActive(false);
-            _joinCard = (RectTransform) joinCard.transform;
-            PlaceCard(_joinCard);
-            _joinCard.sizeDelta = new Vector2(0f, JOIN_SLOT_HEIGHT + CARD_BOTTOM_INSET);
-
-            _joinText = CreateText(_joinCard, JOIN_FONT_SIZE, TextAlignmentOptions.Center);
-            _joinText.textWrappingMode = TextWrappingModes.NoWrap;
-            _joinText.enableAutoSizing = true;
-            _joinText.fontSizeMax = JOIN_FONT_SIZE;
-            _joinText.fontSizeMin = JOIN_FONT_SIZE * DifficultyItem.MIN_SHRINK;
-            _joinText.color = Color.white;
-            var joinRect = _joinText.rectTransform;
-            joinRect.anchorMin = Vector2.zero;
-            joinRect.anchorMax = Vector2.one;
-            joinRect.pivot = new Vector2(0.5f, 0.5f);
-            joinRect.offsetMin = new Vector2(10f, CARD_BOTTOM_INSET);
-            joinRect.offsetMax = new Vector2(-10f, -10f);
-
-            _footer = CreateText(assets.Root, 28f, TextAlignmentOptions.MidlineLeft);
-            var footerRect = _footer.rectTransform;
-            footerRect.anchorMin = new Vector2(0f, 1f);
-            footerRect.anchorMax = new Vector2(0.6f, 1f);
-            footerRect.pivot = new Vector2(0f, 1f);
-            footerRect.offsetMin = new Vector2(50f, -265f);
-            footerRect.offsetMax = new Vector2(0f, -165f);
-
-            bandObject.SetActive(false);
-            _footer.gameObject.SetActive(false);
-        }
-
         public void Open(List<SongEntry> songs, Action startSong)
         {
             IsOpen = true;
             _songs = songs;
             _startSong = startSong;
-            _startTimer = -1f;
+            _startPending = false;
             _focusIndex = 0;
 
             UpdateInstruments();
@@ -229,11 +152,11 @@ namespace YARG.Menu.DifficultySelect
 
             foreach (var column in _columns)
             {
-                column.Destroy();
+                Destroy(column.gameObject);
             }
 
             _columns.Clear();
-            _startTimer = -1f;
+            _startPending = false;
 
             _band.gameObject.SetActive(false);
             _footer.gameObject.SetActive(false);
@@ -270,15 +193,9 @@ namespace YARG.Menu.DifficultySelect
                 }
             }
 
-            if (_startTimer < 0f)
+            if (_startPending)
             {
-                return;
-            }
-
-            _startTimer -= Time.unscaledDeltaTime;
-            if (_startTimer <= 0f)
-            {
-                _startTimer = -1f;
+                _startPending = false;
                 StartSong();
             }
         }
@@ -290,7 +207,7 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            _joinSlot.SetActive(true);
+            _joinSlot.gameObject.SetActive(true);
             _joinSlot.transform.SetAsLastSibling();
             _joinText.text = IsFull
                 ? Localize.KeyFormat("Menu.DifficultySelect.Band.Full", MAX_PLAYERS)
@@ -299,7 +216,7 @@ namespace YARG.Menu.DifficultySelect
             int slots = _columns.Count + 1;
 
             float width = GetColumnWidth(slots);
-            _joinSlotLayout.preferredWidth = width;
+            _joinSlot.preferredWidth = width;
             _joinCard.sizeDelta = new Vector2(width, _joinCard.sizeDelta.y);
 
             _focusIndex = Mathf.Clamp(_focusIndex, 0, Mathf.Max(0, _columns.Count - 1));
@@ -651,7 +568,8 @@ namespace YARG.Menu.DifficultySelect
 
         private BandColumn AddColumn(YargPlayer player, bool slideIn)
         {
-            var column = new BandColumn(this, _band, player, slideIn);
+            var column = Instantiate(_columnPrefab, _band);
+            column.Initialize(this, player, slideIn);
             _columns.Add(column);
             _joinSlot.transform.SetAsLastSibling();
             return column;
@@ -758,26 +676,12 @@ namespace YARG.Menu.DifficultySelect
             {
                 _footer.text = Localize.Key("Menu.DifficultySelect.Band.NobodyPlaying");
             }
-            else if (allDecided)
-            {
-                _footer.text = Localize.Key("Menu.DifficultySelect.Band.Starting");
-            }
             else
             {
                 _footer.text = string.Empty;
             }
 
-            if (allDecided && ready > 0)
-            {
-                if (_startTimer < 0f)
-                {
-                    _startTimer = START_DELAY;
-                }
-            }
-            else
-            {
-                _startTimer = -1f;
-            }
+            _startPending = allDecided && ready > 0;
         }
 
         private void StartSong()
@@ -877,43 +781,9 @@ namespace YARG.Menu.DifficultySelect
         private float GetColumnWidth(int slots)
         {
             slots = Mathf.Max(1, slots);
-            float available = _band.rect.width - COLUMN_SPACING * (slots - 1);
+            float spacing = _band.GetComponent<HorizontalLayoutGroup>().spacing;
+            float available = _band.rect.width - spacing * (slots - 1);
             return Mathf.Min(MAX_COLUMN_WIDTH, available / slots);
-        }
-
-        internal static void PlaceCard(RectTransform card)
-        {
-            card.anchorMin = new Vector2(0.5f, 0f);
-            card.anchorMax = new Vector2(0.5f, 0f);
-            card.pivot = new Vector2(0.5f, 0f);
-            card.anchoredPosition = Vector2.zero;
-        }
-
-        internal GameObject CreateCard(Transform parent)
-        {
-            var menu = Instantiate(Prefabs.CardPrefab, parent);
-            var card = menu.gameObject;
-            DestroyImmediate(menu);
-
-            card.name = "Card";
-            card.transform.localScale = Vector3.one;
-            card.transform.Find("Border").gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
-            card.transform.Find("Background").gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
-            card.SetActive(true);
-            return card;
-        }
-
-        private TextMeshProUGUI CreateText(Transform parent, float fontSize, TextAlignmentOptions alignment)
-        {
-            var text = Instantiate(Prefabs.TextTemplate, parent);
-            text.gameObject.SetActive(true);
-            text.name = "Text";
-            text.text = string.Empty;
-            text.fontSize = fontSize;
-            text.alignment = alignment;
-            text.textWrappingMode = TextWrappingModes.Normal;
-            text.overflowMode = TextOverflowModes.Ellipsis;
-            return text;
         }
     }
 }

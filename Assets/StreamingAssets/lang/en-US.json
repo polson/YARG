@@ -367,8 +367,8 @@
                 "InUse": "(in use)",
                 "NotInSong": "(not in this song)",
                 "NoBinding": "(no binding)",
-                "NeedsMicrophone": "(needs a microphone)",
-                "NeedsController": "(needs a controller)",
+                "NeedsMicrophone": "(no microphone)",
+                "NeedsController": "(no controller)",
                 "SingersMustMatch": "(singers must match)",
                 "NoMicrophone": "No microphone assigned",
                 "NoController": "No controller assigned",
@@ -376,7 +376,6 @@
                 "Unready": "Unready",
                 "SittingOut": "Sitting Out",
                 "Part": "Part {0}",
-                "Starting": "Starting...",
                 "NobodyPlaying": "Everyone is sitting out",
                 "NoPlayers": "Waiting for players"
             }

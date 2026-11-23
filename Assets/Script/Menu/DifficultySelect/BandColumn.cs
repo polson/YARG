@@ -30,17 +30,13 @@ namespace YARG.Menu.DifficultySelect
         SittingOut,
     }
 
-    internal sealed class BandColumn
+    internal sealed class BandColumn : MonoBehaviour
     {
-        private const float HEADER_HEIGHT = 73f;
         private const float HEADER_MARGIN = 40f;
-        private const float HEADING_MIN_FONT_SIZE = 14f;
-        private const float SCROLL_SENSITIVITY = 30f;
         private const float PROFILE_ROW_HEIGHT = 64f;
         private const float AVATAR_MARGIN = 6f;
         private const float ROW_HEIGHT = 52f;
         private const float TWO_LINE_ROW_HEIGHT = 72f;
-        private const float ROW_FONT_SIZE = 26f;
         private const float SMALL_FONT_SIZE = 20f;
         private const float LABEL_FONT_SIZE = 18f;
         private const float VALUE_FONT_SIZE = 28f;
@@ -49,27 +45,55 @@ namespace YARG.Menu.DifficultySelect
         private const float UNFOCUSED_BORDER_BRIGHTNESS = 0.5f;
         private static readonly Color WARNING_COLOR = new Color32(0xFB, 0x44, 0x3F, 0xFF);
 
-        private readonly BandSelectMenu _menu;
+        [SerializeField]
+        private RectTransform _card;
+        [SerializeField]
+        private VerticalLayoutGroup _cardLayout;
+        [SerializeField]
+        private Image _border;
+        [SerializeField]
+        private HorizontalLayoutGroup _headerLayout;
+        [SerializeField]
+        private TextMeshProUGUI _heading;
+        [SerializeField]
+        private LayoutElement _headingLayout;
+        [SerializeField]
+        private Image _icon;
+        [SerializeField]
+        private LayoutElement _iconLayout;
+        [SerializeField]
+        private ScrollRect _scroll;
+        [SerializeField]
+        private VerticalLayoutGroup _rowLayout;
+        [SerializeField]
+        private LayoutElement _viewportLayout;
+        [SerializeField]
+        private LayoutElement _layout;
+        [SerializeField]
+        private NavigationGroup _nav;
 
-        private readonly RectTransform _card;
-        private readonly Image _border;
-        private readonly Color _borderColor;
-        private readonly RectTransform _rows;
-        private readonly RectTransform _viewport;
-        private readonly LayoutElement _viewportLayout;
-        private readonly VerticalLayoutGroup _rowLayout;
-        private readonly Scrollbar _scrollbar;
-        private readonly float _scrollbarWidth;
-        private readonly TextMeshProUGUI _heading;
-        private readonly LayoutElement _headingLayout;
-        private readonly Color _headingColor;
-        private readonly Image _icon;
-        private readonly float _iconWidth;
-        private readonly float _headingSpacing;
+        [Space]
+        [SerializeField]
+        private DifficultyItem _itemPrefab;
+        [SerializeField]
+        private DifficultyItem _readyPrefab;
+        [SerializeField]
+        private DifficultyItem _smallPrefab;
+        [SerializeField]
+        private DifficultyItem _profilePrefab;
+        [SerializeField]
+        private ModifierItem _modifierPrefab;
+        [SerializeField]
+        private Sprite _profileGenericSprite;
+        [SerializeField]
+        private Sprite _profileBotSprite;
+
+        private BandSelectMenu _menu;
+        private Color _borderColor;
+        private Color _headingColor;
 
         private AsyncOperationHandle<Sprite> _iconHandle;
         private string _iconKey;
-        private float _width;
         private Tween _rise;
         private readonly List<Modifier> _modifiers = new();
         private readonly List<Texture2D> _avatarTextures = new();
@@ -92,10 +116,6 @@ namespace YARG.Menu.DifficultySelect
         public bool JoinDeviceOwned;
         public YargProfile CreatedProfile;
 
-        public readonly GameObject Root;
-        public readonly NavigationGroup Nav;
-        public readonly LayoutElement Layout;
-
         public BandColumnState State { get; private set; }
         public bool Ready { get; private set; }
 
@@ -110,96 +130,25 @@ namespace YARG.Menu.DifficultySelect
         public bool IsSittingOut => State == BandColumnState.SittingOut;
         public bool IsDecided => IsSittingOut || (State == BandColumnState.Main && Ready);
 
-        public BandColumn(BandSelectMenu menu, Transform parent, YargPlayer player, bool slideIn)
+        public NavigationGroup Nav => _nav;
+        public RectTransform Card => _card;
+
+        private RectTransform Rows => _scroll.content;
+
+        public void Initialize(BandSelectMenu menu, YargPlayer player, bool slideIn)
         {
             _menu = menu;
             Player = player;
-
-            Root = new GameObject("Column", typeof(RectTransform));
-            Root.transform.SetParent(parent, false);
-            ((RectTransform) Root.transform).sizeDelta = Vector2.zero;
-
-            _card = (RectTransform) menu.CreateCard(Root.transform).transform;
-            BandSelectMenu.PlaceCard(_card);
-            _card.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-            var card = _card.transform;
-
-            _border = card.Find("Border").GetComponent<Image>();
             _borderColor = _border.color;
-
-            var header = card.Find("Background/Header Gradient/Header Content");
-            _heading = header.Find("Heading").GetComponent<TextMeshProUGUI>();
-            _headingLayout = _heading.GetComponent<LayoutElement>();
             _headingColor = _heading.color;
-            _heading.fontSizeMin = HEADING_MIN_FONT_SIZE;
-            _heading.textWrappingMode = TextWrappingModes.NoWrap;
-            _heading.verticalAlignment = VerticalAlignmentOptions.Middle;
-            _icon = header.Find("Instrument Icon").GetComponent<Image>();
-            _iconWidth = _icon.GetComponent<LayoutElement>().preferredWidth;
-            _headingSpacing = header.GetComponent<HorizontalLayoutGroup>().spacing;
 
-            _rows = (RectTransform) card.Find("Options");
-            for (int i = _rows.childCount - 1; i >= 0; i--)
-            {
-                Object.Destroy(_rows.GetChild(i).gameObject);
-            }
-
-            _viewport = (RectTransform) new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D)).transform;
-            _viewport.SetParent(card, false);
-            _viewport.SetSiblingIndex(_rows.GetSiblingIndex());
-            _viewportLayout = _viewport.gameObject.AddComponent<LayoutElement>();
-
-            _rows.SetParent(_viewport, false);
-            _rows.anchorMin = Vector2.up;
-            _rows.anchorMax = Vector2.one;
-            _rows.pivot = new Vector2(0.5f, 1f);
-            _rows.anchoredPosition = Vector2.zero;
-            _rows.sizeDelta = Vector2.zero;
-            _rows.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-
-            var scroll = _viewport.gameObject.AddComponent<ScrollRect>();
-            scroll.content = _rows;
-            scroll.viewport = _viewport;
-            scroll.horizontal = false;
-            scroll.movementType = ScrollRect.MovementType.Clamped;
-            scroll.inertia = false;
-            scroll.scrollSensitivity = SCROLL_SENSITIVITY;
-
-            _scrollbar = Object.Instantiate(menu.Prefabs.ScrollbarPrefab, _viewport);
-            _scrollbar.navigation = new UnityEngine.UI.Navigation { mode = UnityEngine.UI.Navigation.Mode.None };
-            _scrollbarWidth = ((RectTransform) _scrollbar.transform).sizeDelta.x;
-            scroll.verticalScrollbar = _scrollbar;
-            scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.AutoHide;
-
-            _rowLayout = _rows.GetComponent<VerticalLayoutGroup>();
-            _rowLayout.spacing = 2f;
-            _rowLayout.childAlignment = TextAnchor.UpperCenter;
-            _rowLayout.childControlWidth = true;
-            _rowLayout.childControlHeight = true;
-            _rowLayout.childForceExpandWidth = true;
-            _rowLayout.childForceExpandHeight = false;
-
-            var layout = _card.gameObject.AddComponent<VerticalLayoutGroup>();
-            layout.padding = new RectOffset(2, 2, (int) HEADER_HEIGHT, (int) BandSelectMenu.CARD_BOTTOM_INSET);
-            layout.childAlignment = TextAnchor.UpperCenter;
-            layout.childControlWidth = true;
-            layout.childControlHeight = true;
-            layout.childForceExpandWidth = true;
-            layout.childForceExpandHeight = false;
-
-            Layout = Root.AddComponent<LayoutElement>();
-            Layout.flexibleWidth = 0f;
-
-            Nav = Root.AddComponent<NavigationGroup>();
-            Nav.SelectionChanged += OnSelectionChanged;
+            _nav.SelectionChanged += OnSelectionChanged;
 
             if (slideIn)
             {
                 RiseFrom(-BandSelectMenu.SLIDE_DISTANCE);
             }
         }
-
-        public RectTransform Card => _card;
 
         public void RiseFrom(float offset)
         {
@@ -210,32 +159,26 @@ namespace YARG.Menu.DifficultySelect
                 .SetUpdate(true);
         }
 
-        public void Destroy()
+        private void OnDestroy()
         {
             _card.DOKill();
-            Nav.SelectionChanged -= OnSelectionChanged;
+            _nav.SelectionChanged -= OnSelectionChanged;
             ReleaseIcon();
             ClearAvatars();
-            Object.Destroy(Root);
         }
 
         public void DismissAndDestroy()
         {
-            Nav.SelectionChanged -= OnSelectionChanged;
-            Layout.ignoreLayout = true;
-            Root.AddComponent<CanvasGroup>().blocksRaycasts = false;
+            _nav.SelectionChanged -= OnSelectionChanged;
+            _layout.ignoreLayout = true;
+            gameObject.AddComponent<CanvasGroup>().blocksRaycasts = false;
 
             _card.DOKill();
             _card.DOAnchorPosY(-BandSelectMenu.SLIDE_DISTANCE, BandSelectMenu.SLIDE_SECONDS)
                 .SetEase(Ease.InCubic)
                 .SetUpdate(true)
-                .SetLink(Root)
-                .OnComplete(() =>
-                {
-                    ReleaseIcon();
-                    ClearAvatars();
-                    Object.Destroy(Root);
-                });
+                .SetLink(gameObject)
+                .OnComplete(() => Destroy(gameObject));
         }
 
         public void SetFocused(bool focused)
@@ -247,9 +190,8 @@ namespace YARG.Menu.DifficultySelect
 
         public void SetWidth(float width)
         {
-            Layout.preferredWidth = width;
+            _layout.preferredWidth = width;
             _card.sizeDelta = new Vector2(width, _card.sizeDelta.y);
-            _width = width;
             FitHeading();
         }
 
@@ -332,20 +274,20 @@ namespace YARG.Menu.DifficultySelect
 
         public void Rebuild()
         {
-            int? previousIndex = Nav.SelectedIndex;
+            int? previousIndex = _nav.SelectedIndex;
             bool sameState = _builtState == State;
 
-            Nav.ClearNavigatables();
+            _nav.ClearNavigatables();
             _difficultyItems.Clear();
             ClearAvatars();
             _modifierToggles.Clear();
             _readyButton = null;
             _difficultyButton = null;
-            for (int i = _rows.childCount - 1; i >= 0; i--)
+            for (int i = Rows.childCount - 1; i >= 0; i--)
             {
-                var child = _rows.GetChild(i).gameObject;
+                var child = Rows.GetChild(i).gameObject;
                 child.SetActive(false);
-                Object.Destroy(child);
+                Destroy(child);
             }
 
             switch (State)
@@ -381,7 +323,7 @@ namespace YARG.Menu.DifficultySelect
             bool selectReady = _selectReady;
             _selectReady = false;
 
-            if (Nav.Count == 0 || Nav.SelectedIndex is not null)
+            if (_nav.Count == 0 || _nav.SelectedIndex is not null)
             {
                 return;
             }
@@ -389,43 +331,44 @@ namespace YARG.Menu.DifficultySelect
             var currentDifficulty = Player.Profile.CurrentDifficulty;
             if (sameState && previousIndex is { } index)
             {
-                Nav.SelectAt(Mathf.Clamp(index, 0, Nav.Count - 1));
+                _nav.SelectAt(Mathf.Clamp(index, 0, _nav.Count - 1));
             }
             else if (_readyButton != null && (Ready || selectReady))
             {
-                Nav.SelectAt(IndexOf(_readyButton));
+                _nav.SelectAt(IndexOf(_readyButton));
             }
             else if (_difficultyButton != null && !Ready)
             {
-                Nav.SelectAt(IndexOf(_difficultyButton));
+                _nav.SelectAt(IndexOf(_difficultyButton));
             }
             else if (State == BandColumnState.Difficulty && _difficulties.Contains(currentDifficulty) &&
                 _difficultyItems.TryGetValue(currentDifficulty, out var current))
             {
-                Nav.SelectAt(IndexOf(current.Button));
+                _nav.SelectAt(IndexOf(current.Button));
             }
             else
             {
-                Nav.SelectFirst();
+                _nav.SelectFirst();
             }
         }
 
         private void FitRows(bool resetScroll)
         {
-            LayoutRebuilder.ForceRebuildLayoutImmediate(_rows);
+            var rows = Rows;
+            LayoutRebuilder.ForceRebuildLayoutImmediate(rows);
 
-            float contentHeight = LayoutUtility.GetPreferredHeight(_rows);
-            float maxHeight = Mathf.Max(ROW_HEIGHT,
-                _menu.MaxCardHeight - HEADER_HEIGHT - BandSelectMenu.CARD_BOTTOM_INSET);
+            float contentHeight = LayoutUtility.GetPreferredHeight(rows);
+            float maxHeight = Mathf.Max(ROW_HEIGHT, _menu.MaxCardHeight - _cardLayout.padding.vertical);
             bool scrollable = contentHeight > maxHeight;
 
+            var scrollbar = (RectTransform) _scroll.verticalScrollbar.transform;
             _viewportLayout.preferredHeight = Mathf.Min(contentHeight, maxHeight);
-            _scrollbar.gameObject.SetActive(scrollable);
-            _rowLayout.padding.right = scrollable ? Mathf.CeilToInt(_scrollbarWidth) : 0;
+            scrollbar.gameObject.SetActive(scrollable);
+            _rowLayout.padding.right = scrollable ? Mathf.CeilToInt(scrollbar.sizeDelta.x) : 0;
 
             if (resetScroll)
             {
-                _rows.anchoredPosition = Vector2.zero;
+                rows.anchoredPosition = Vector2.zero;
             }
 
             LayoutRebuilder.ForceRebuildLayoutImmediate(_card);
@@ -434,16 +377,17 @@ namespace YARG.Menu.DifficultySelect
 
         private void ScrollToSelection()
         {
-            if (Nav.SelectedIndex is not { } index)
+            if (_nav.SelectedIndex is not { } index)
             {
                 return;
             }
 
-            var item = (RectTransform) Nav.Navigatables[index].transform;
-            var bounds = RectTransformUtility.CalculateRelativeRectTransformBounds(_viewport, item);
-            var view = _viewport.rect;
+            var rows = Rows;
+            var item = (RectTransform) _nav.Navigatables[index].transform;
+            var bounds = RectTransformUtility.CalculateRelativeRectTransformBounds(_scroll.viewport, item);
+            var view = _scroll.viewport.rect;
 
-            float y = _rows.anchoredPosition.y;
+            float y = rows.anchoredPosition.y;
             if (bounds.max.y > view.yMax)
             {
                 y -= bounds.max.y - view.yMax;
@@ -453,8 +397,8 @@ namespace YARG.Menu.DifficultySelect
                 y += view.yMin - bounds.min.y;
             }
 
-            float maxScroll = Mathf.Max(0f, _rows.rect.height - view.height);
-            _rows.anchoredPosition = new Vector2(0f, Mathf.Clamp(y, 0f, maxScroll));
+            float maxScroll = Mathf.Max(0f, rows.rect.height - view.height);
+            rows.anchoredPosition = new Vector2(0f, Mathf.Clamp(y, 0f, maxScroll));
         }
 
         private void SetState(BandColumnState state)
@@ -509,66 +453,33 @@ namespace YARG.Menu.DifficultySelect
 
             float height = taken ? TWO_LINE_ROW_HEIGHT : PROFILE_ROW_HEIGHT;
             var row = AddRow(taken ? Localize.Key("Menu.DifficultySelect.Band.InUse") : null, profile.Name,
-                () => _menu.ChooseJoinProfile(this, profile), !taken, height: height);
+                () => _menu.ChooseJoinProfile(this, profile), !taken, _profilePrefab, height);
             AddAvatar(row, profile, height);
         }
 
         private void AddAvatar(DifficultyItem row, YargProfile profile, float rowHeight)
         {
-            float size = rowHeight - AVATAR_MARGIN * 2f;
-
-            var frame = new GameObject("Avatar", typeof(RectTransform));
-            var frameRect = (RectTransform) frame.transform;
-            frameRect.SetParent(row.transform, false);
-            frameRect.anchorMin = new Vector2(0f, 0.5f);
-            frameRect.anchorMax = new Vector2(0f, 0.5f);
-            frameRect.pivot = new Vector2(0f, 0.5f);
-            frameRect.anchoredPosition = new Vector2(AVATAR_MARGIN * 2f, 0f);
-            frameRect.sizeDelta = new Vector2(size, size);
-            frame.AddComponent<LayoutElement>().ignoreLayout = true;
-
-            var maskImage = frame.AddComponent<Image>();
-            maskImage.sprite = _menu.Prefabs.AvatarMask;
-            maskImage.raycastTarget = false;
-            frame.AddComponent<Mask>().showMaskGraphic = false;
-
-            var picture = new GameObject("Picture", typeof(RectTransform));
-            var pictureRect = (RectTransform) picture.transform;
-            pictureRect.SetParent(frameRect, false);
-            pictureRect.anchorMin = Vector2.zero;
-            pictureRect.anchorMax = Vector2.one;
-            pictureRect.offsetMin = Vector2.zero;
-            pictureRect.offsetMax = Vector2.zero;
-
-            var image = picture.AddComponent<Image>();
-            image.raycastTarget = false;
-            image.preserveAspect = true;
-
             if (profile.Avatar != null && profile.Avatar.IsValid)
             {
                 var texture = profile.Avatar.LoadTexture(false);
                 _avatarTextures.Add(texture);
-                image.sprite = Sprite.Create(texture, new Rect(0f, 0f, texture.width, texture.height),
-                    new Vector2(0.5f, 0.5f));
-                pictureRect.localScale = new Vector3(1f, -1f, 1f);
+                row.SetAvatar(Sprite.Create(texture, new Rect(0f, 0f, texture.width, texture.height),
+                    new Vector2(0.5f, 0.5f)), flipped: true);
             }
             else
             {
-                image.sprite = profile.IsBot ? _menu.Prefabs.ProfileBotSprite : _menu.Prefabs.ProfileGenericSprite;
+                row.SetAvatar(profile.IsBot ? _profileBotSprite : _profileGenericSprite, flipped: false);
             }
 
-            if (row.TryGetComponent<VerticalLayoutGroup>(out var layout))
-            {
-                int inset = Mathf.CeilToInt(size + AVATAR_MARGIN * 3f);
-                layout.padding = new RectOffset(inset, inset, 0, 0);
-            }
+            int inset = Mathf.CeilToInt(rowHeight + AVATAR_MARGIN);
+            row.GetComponent<VerticalLayoutGroup>().padding = new RectOffset(inset, inset, 0, 0);
         }
 
         private void ClearAvatars()
         {
             foreach (var texture in _avatarTextures)
             {
-                Object.Destroy(texture);
+                Destroy(texture);
             }
 
             _avatarTextures.Clear();
@@ -614,7 +525,7 @@ namespace YARG.Menu.DifficultySelect
 
             var ready = AddRow(null,
                 Localize.Key("Menu.DifficultySelect.Band", Ready ? "Unready" : "Ready"),
-                ToggleReady, true, _menu.Prefabs.ReadyPrefab);
+                ToggleReady, true, _readyPrefab);
             _readyButton = ready.Button;
         }
 
@@ -654,7 +565,7 @@ namespace YARG.Menu.DifficultySelect
 
                 if (instrument == profile.CurrentInstrument && _pickerCanCancel)
                 {
-                    Nav.SelectAt(IndexOf(row.Button));
+                    _nav.SelectAt(IndexOf(row.Button));
                 }
             }
 
@@ -671,9 +582,9 @@ namespace YARG.Menu.DifficultySelect
                     () => { }, false, height: TWO_LINE_ROW_HEIGHT);
             }
 
-            AddRow(null, Localize.Key("Menu.DifficultySelect.SitOut"), SitOut, true, _menu.Prefabs.SmallPrefab);
+            AddRow(null, Localize.Key("Menu.DifficultySelect.SitOut"), SitOut, true, _smallPrefab);
             AddRow(null, Localize.Key("Menu.DifficultySelect.Disconnect"), () => _menu.Disconnect(this), true,
-                _menu.Prefabs.SmallPrefab);
+                _smallPrefab);
         }
 
         private void BuildModifiers()
@@ -759,7 +670,7 @@ namespace YARG.Menu.DifficultySelect
             Rebuild();
             if (_readyButton != null)
             {
-                Nav.SelectAt(IndexOf(_readyButton));
+                _nav.SelectAt(IndexOf(_readyButton));
             }
 
             _menu.OnColumnChanged();
@@ -924,15 +835,16 @@ namespace YARG.Menu.DifficultySelect
 
         private void FitHeading()
         {
-            if (_width <= 0f)
+            float width = _layout.preferredWidth;
+            if (width <= 0f)
             {
                 return;
             }
 
-            float maxWidth = _width - HEADER_MARGIN;
+            float maxWidth = width - HEADER_MARGIN;
             if (_icon.gameObject.activeSelf)
             {
-                maxWidth -= _iconWidth + _headingSpacing;
+                maxWidth -= _iconLayout.preferredWidth + _headerLayout.spacing;
             }
 
             _heading.enableAutoSizing = false;
@@ -974,16 +886,16 @@ namespace YARG.Menu.DifficultySelect
 
         private DifficultyItem AddLabel(string text)
         {
-            var label = Object.Instantiate(_menu.Prefabs.ItemPrefab, _rows);
+            var label = Instantiate(_itemPrefab, Rows);
             label.InitializeAsTitle(text);
-            PrepareRow(label, ROW_HEIGHT, SMALL_FONT_SIZE);
+            label.UseCompactText(SMALL_FONT_SIZE);
             return label;
         }
 
         private DifficultyItem AddRow(string header, string body, UnityAction action, bool interactable,
             DifficultyItem prefab = null, float height = ROW_HEIGHT)
         {
-            var row = Object.Instantiate(prefab != null ? prefab : _menu.Prefabs.ItemPrefab, _rows);
+            var row = Instantiate(prefab != null ? prefab : _itemPrefab, Rows);
 
             if (header is null)
             {
@@ -992,19 +904,15 @@ namespace YARG.Menu.DifficultySelect
             else
             {
                 row.Initialize(header, body, action);
-            }
-
-            PrepareRow(row, height, ROW_FONT_SIZE);
-            if (header is not null)
-            {
                 row.UseCompactText(LABEL_FONT_SIZE, VALUE_FONT_SIZE);
             }
 
+            row.GetComponent<LayoutElement>().preferredHeight = height;
             row.SetInteractable(interactable);
 
             if (interactable)
             {
-                Nav.AddNavigatable(row.Button);
+                _nav.AddNavigatable(row.Button);
             }
 
             return row;
@@ -1012,33 +920,18 @@ namespace YARG.Menu.DifficultySelect
 
         private ModifierItem AddToggle(string label, bool active, System.Action<bool> onChanged)
         {
-            var toggle = Object.Instantiate(_menu.Prefabs.ModifierPrefab, _rows);
+            var toggle = Instantiate(_modifierPrefab, Rows);
             toggle.Initialize(label, active, onChanged);
-            toggle.gameObject.AddComponent<LayoutElement>().preferredHeight = ROW_HEIGHT;
 
-            Nav.AddNavigatable(toggle);
+            _nav.AddNavigatable(toggle);
             return toggle;
-        }
-
-        private static void PrepareRow(DifficultyItem row, float height, float fontSize)
-        {
-            row.UseCompactText(fontSize);
-            row.gameObject.AddComponent<LayoutElement>().preferredHeight = height;
-
-            if (row.TryGetComponent<VerticalLayoutGroup>(out var layout))
-            {
-                layout.childControlWidth = true;
-                layout.childAlignment = TextAnchor.MiddleCenter;
-                layout.spacing = 0f;
-                layout.padding = new RectOffset(4, 4, 0, 0);
-            }
         }
 
         private int IndexOf(NavigatableBehaviour navigatable)
         {
-            for (int i = 0; i < Nav.Navigatables.Count; i++)
+            for (int i = 0; i < _nav.Navigatables.Count; i++)
             {
-                if (Nav.Navigatables[i] == navigatable)
+                if (_nav.Navigatables[i] == navigatable)
                 {
                     return i;
                 }
