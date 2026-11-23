@@ -46,6 +46,13 @@ namespace YARG.Settings
         Pages,
     }
 
+    public enum OvershellMode
+    {
+        Everywhere,
+        DifficultySelect,
+        Off,
+    }
+
     public enum DateAddedSortMode
     {
         ChartFileDate,
@@ -886,7 +893,12 @@ namespace YARG.Settings
                 ? TempoEngine.YargStretch
                 : TempoEngine.BassFx;
             public ToggleSetting SaveScoresWithBots { get; } = new(false);
-            public ToggleSetting OvershellJoinFlow { get; } = new(false);
+            public DropdownSetting<OvershellMode> ShowOvershell { get; } = new(OvershellMode.Off)
+            {
+                OvershellMode.Everywhere,
+                OvershellMode.DifficultySelect,
+                OvershellMode.Off,
+            };
             public SliderSetting FontScaling { get; } = new(0f, 0f, 100f, FontScalingCallback);
 
             public DropdownSetting<AudioOutputMode> OutputMode { get; } = new(AudioOutputMode.Shared,

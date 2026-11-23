@@ -133,7 +133,7 @@ namespace YARG.Menu.DifficultySelect
             string subHeaderKey = GlobalVariables.State.IsPractice ? "Practice" : "Quickplay";
             _subHeader.text = Localize.Key("Menu.Main.Options", subHeaderKey);
 
-            bool useBand = SettingsManager.Settings.OvershellJoinFlow.Value;
+            bool useBand = SettingsManager.Settings.ShowOvershell.Value != OvershellMode.Off;
 
             _classicHeaderText ??= _headerText.text;
             _headerText.text = useBand ? LocalizeHeader("Band.Title") : _classicHeaderText;

@@ -141,25 +141,46 @@ namespace YARG.Menu.Navigation
 
         public void InvokeFuncs(NavigationContext context)
         {
-            foreach (var entry in _entries.Where(i => i.Action == context.Action))
+            for (int i = 0; i < _entries.Count; i++)
             {
-                entry.Invoke(context);
+                var entry = _entries[i];
+                if (entry.Action == context.Action)
+                {
+                    entry.Invoke(context);
+                }
             }
         }
 
         public void InvokeHoldOffFuncs(NavigationContext context)
         {
-            foreach (var entry in _entries.Where(i => i.Action == context.Action))
+            for (int i = 0; i < _entries.Count; i++)
             {
-                entry.InvokeHoldOffHandler(context);
+                var entry = _entries[i];
+                if (entry.Action == context.Action)
+                {
+                    entry.InvokeHoldOffHandler(context);
+                }
             }
         }
 
         public void InvokeHoldFuncs(NavigationContext context)
         {
-            foreach (var entry in _entries.Where(i => i.Action == context.Action && i.HasHoldHandler))
+            for (int i = 0; i < _entries.Count; i++)
             {
-                entry.InvokeHoldHandler(context);
+                var entry = _entries[i];
+                if (entry.Action == context.Action && entry.HasHoldHandler)
+                {
+                    entry.InvokeHoldHandler(context);
+                }
+            }
+        }
+
+        public void ReplaceEntry(Entry entry)
+        {
+            int index = _entries.FindIndex(e => e.Action == entry.Action);
+            if (index >= 0)
+            {
+                _entries[index] = entry;
             }
         }
 

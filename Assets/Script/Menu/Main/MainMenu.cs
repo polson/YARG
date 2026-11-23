@@ -1,6 +1,7 @@
 using TMPro;
 using UnityEngine;
 using YARG.Core.Input;
+using YARG.Menu.DifficultySelect;
 using YARG.Menu.MusicLibrary;
 using YARG.Menu.Navigation;
 using YARG.Menu.Persistent;
@@ -15,6 +16,8 @@ namespace YARG.Menu.Main
 
         [SerializeField]
         private TextMeshProUGUI _versionText;
+        [SerializeField]
+        private BandSelectMenu _overshell;
 
         private void Start()
         {
@@ -51,11 +54,32 @@ namespace YARG.Menu.Main
                 NavigationScheme.Entry.NavigateDown,
                 new NavigationScheme.Entry(MenuAction.Select, "Menu.Main.GoToCurrentlyPlaying", CurrentlyPlaying)
             }, true));
+
+            if (MusicLibraryMenu.UseOvershell)
+            {
+                _overshell.OpenOvershell(CanEngageOvershell);
+            }
+        }
+
+        private void Update()
+        {
+            _overshell.SetOvershellHidden(IsSettingsOpen());
         }
 
         private void OnDisable()
         {
+            _overshell.Close();
             Navigator.Instance?.PopScheme();
+        }
+
+        private bool CanEngageOvershell()
+        {
+            return !IsSettingsOpen() && !DialogManager.Instance.IsDialogShowing;
+        }
+
+        private static bool IsSettingsOpen()
+        {
+            return SettingsMenu.Instance != null && SettingsMenu.Instance.gameObject.activeSelf;
         }
 
         public void CurrentlyPlaying()

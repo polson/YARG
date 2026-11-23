@@ -66,6 +66,8 @@ namespace YARG.Menu.Persistent
             DISABLED,
         }
 
+        public MenuAction? Action => _entry?.Action;
+
         public void SetInfoFromSchemeEntry(NavigationScheme.Entry entry, bool clickable = true)
         {
             _clickable = clickable;

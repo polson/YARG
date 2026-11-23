@@ -33,9 +33,8 @@ namespace YARG.Menu.DifficultySelect
 
         private const float MAX_COLUMN_WIDTH = 460f;
         internal const float SLIDE_DISTANCE = 900f;
-        private const float JOIN_STRIP_HEIGHT = 72f;
+        internal const float JOIN_STRIP_HEIGHT = 72f;
         internal const float SLIDE_SECONDS = 0.3f;
-        private const float EXIT_HOLD_SECONDS = 0.6f;
 
         private static readonly GameMode[] NEW_PROFILE_MODES =
         {
@@ -73,6 +72,8 @@ namespace YARG.Menu.DifficultySelect
         private bool _startPending;
         private bool _suppressPlayerEvents;
         private readonly List<InputDevice> _pendingJoins = new();
+        private Func<bool> _canEngage;
+        private bool _hidden;
 
         internal IReadOnlyList<SongEntry> Songs => _songs;
         internal IReadOnlyList<Instrument> Instruments => _instruments;
@@ -80,12 +81,14 @@ namespace YARG.Menu.DifficultySelect
         internal DifficultyRing RingTemplate { get; private set; }
 
         public bool IsOpen { get; private set; }
+        public bool IsOvershell { get; private set; }
 
         private bool IsFull => PlayerContainer.Players.Count >= MAX_PLAYERS;
 
         public void Open(List<SongEntry> songs, DifficultyRing ringTemplate, Action startSong)
         {
             IsOpen = true;
+            IsOvershell = false;
             _songs = songs;
             RingTemplate = ringTemplate;
             _startSong = startSong;
@@ -116,9 +119,7 @@ namespace YARG.Menu.DifficultySelect
                 new NavigationScheme.Entry(MenuAction.Down, "Menu.Common.Down",
                     ctx => ColumnFor(ctx.Player)?.Nav.SelectNext(ctx.IsRepeat)),
                 new NavigationScheme.Entry(MenuAction.Green, "Menu.Common.Confirm", OnConfirm),
-                new NavigationScheme.Entry(MenuAction.Red, "Menu.Common.Back", OnBack,
-                    onHoldHandler: _ => MenuManager.Instance.PopMenu(),
-                    holdSeconds: EXIT_HOLD_SECONDS),
+                new NavigationScheme.Entry(MenuAction.Red, "Menu.Common.Back", OnBack),
             }, false));
 
             Navigator.Instance.NavigationEvent += OnNavigationEvent;
@@ -128,6 +129,60 @@ namespace YARG.Menu.DifficultySelect
             PlayerContainer.PlayerRemoved += OnPlayerRemoved;
 
             OnColumnChanged();
+        }
+
+        public void OpenOvershell(Func<bool> canEngage)
+        {
+            IsOpen = true;
+            IsOvershell = true;
+            _canEngage = canEngage;
+            _hidden = false;
+            _startPending = false;
+            _focusIndex = 0;
+
+            _joinSlot.gameObject.SetActive(false);
+            _band.gameObject.SetActive(true);
+            _footer.gameObject.SetActive(false);
+            ShowFooterBackground(true);
+
+            foreach (var player in PlayerContainer.Players)
+            {
+                InsertColumn(player, false, null).OpenOvershell(false);
+            }
+
+            Navigator.Instance.InputInterceptor = InterceptOvershellInput;
+            InputManager.UnclaimedDevicePressed = OnUnclaimedDevicePressed;
+            PlayerContainer.PlayerAdded += OnPlayerAdded;
+            PlayerContainer.PlayerRemoved += OnPlayerRemoved;
+
+            OnColumnChanged();
+        }
+
+        public void SetOvershellHidden(bool hidden)
+        {
+            if (!IsOpen || !IsOvershell || hidden == _hidden)
+            {
+                return;
+            }
+
+            _hidden = hidden;
+            if (hidden)
+            {
+                foreach (var column in _columns.ToList())
+                {
+                    if (column.IsJoining)
+                    {
+                        CancelJoin(column);
+                    }
+                    else if (column.IsExpanded)
+                    {
+                        column.Back();
+                    }
+                }
+            }
+
+            _band.gameObject.SetActive(!hidden);
+            ShowFooterBackground(!hidden);
         }
 
         public void Close()
@@ -147,7 +202,7 @@ namespace YARG.Menu.DifficultySelect
 
             PlayerContainer.PlayerAdded -= OnPlayerAdded;
             PlayerContainer.PlayerRemoved -= OnPlayerRemoved;
-            Navigator.Instance.NavigationEvent -= OnNavigationEvent;
+            ReleaseNavigator();
 
             foreach (var column in _columns.ToList())
             {
@@ -169,7 +224,10 @@ namespace YARG.Menu.DifficultySelect
             _footer.gameObject.SetActive(false);
             ShowFooterBackground(false);
 
-            Navigator.Instance.PopScheme();
+            if (!IsOvershell)
+            {
+                Navigator.Instance.PopScheme();
+            }
         }
 
         private void OnDestroy()
@@ -181,6 +239,22 @@ namespace YARG.Menu.DifficultySelect
 
             PlayerContainer.PlayerAdded -= OnPlayerAdded;
             PlayerContainer.PlayerRemoved -= OnPlayerRemoved;
+            ReleaseNavigator();
+        }
+
+        private void ReleaseNavigator()
+        {
+            var navigator = Navigator.Instance;
+            if (navigator == null)
+            {
+                return;
+            }
+
+            navigator.NavigationEvent -= OnNavigationEvent;
+            if (navigator.InputInterceptor == InterceptOvershellInput)
+            {
+                navigator.InputInterceptor = null;
+            }
         }
 
         private void Update()
@@ -235,7 +309,8 @@ namespace YARG.Menu.DifficultySelect
             for (int i = 0; i < _columns.Count; i++)
             {
                 _columns[i].SetWidth(width);
-                _columns[i].SetFocused(i == _focusIndex && !PlayerContainer.HasConnectedKeyboardProfile());
+                _columns[i].SetFocused(IsOvershell ||
+                    (i == _focusIndex && !PlayerContainer.HasConnectedKeyboardProfile()));
             }
 
             UpdateStatus();
@@ -376,7 +451,15 @@ namespace YARG.Menu.DifficultySelect
                 column.JoinDeviceOwned = owned;
             }
 
-            column.OpenForSong();
+            if (IsOvershell)
+            {
+                column.OpenOvershell(true);
+            }
+            else
+            {
+                column.OpenForSong();
+            }
+
             PlayerContainer.SaveProfiles();
             BindingsContainer.SaveBindings();
             OnColumnChanged();
@@ -440,13 +523,13 @@ namespace YARG.Menu.DifficultySelect
         private void OnBack(NavigationContext context)
         {
             var column = ColumnFor(context.Player);
-            if (context.Player is null && (column is null || column.IsAtTopLevel))
+            if (column is null || column.IsAtTopLevel)
             {
                 MenuManager.Instance.PopMenu();
             }
             else
             {
-                column?.Back();
+                column.Back();
             }
         }
 
@@ -468,6 +551,72 @@ namespace YARG.Menu.DifficultySelect
             OnColumnChanged();
         }
 
+        private bool InterceptOvershellInput(NavigationContext context)
+        {
+            if (_hidden)
+            {
+                return false;
+            }
+
+            var column = context.Player is null ? null : _columns.FirstOrDefault(c => c.Player == context.Player);
+            if (column is null)
+            {
+                return IsMenuExitAction(context.Action) && AnyColumnOpen();
+            }
+
+            if (context.Action == MenuAction.Start)
+            {
+                if (column.IsJoining)
+                {
+                    return true;
+                }
+
+                if (column.IsExpanded)
+                {
+                    column.Back();
+                }
+                else if (_canEngage())
+                {
+                    column.Expand();
+                }
+
+                return true;
+            }
+
+            if (!column.IsExpanded)
+            {
+                return IsMenuExitAction(context.Action) && AnyColumnOpen();
+            }
+
+            switch (context.Action)
+            {
+                case MenuAction.Up:
+                    column.Nav.SelectPrevious(context.IsRepeat);
+                    break;
+                case MenuAction.Down:
+                    column.Nav.SelectNext(context.IsRepeat);
+                    break;
+                case MenuAction.Green:
+                    column.Nav.ConfirmSelection();
+                    break;
+                case MenuAction.Red:
+                    column.Back();
+                    break;
+            }
+
+            return true;
+        }
+
+        private static bool IsMenuExitAction(MenuAction action)
+        {
+            return action is MenuAction.Green or MenuAction.Red;
+        }
+
+        private bool AnyColumnOpen()
+        {
+            return _columns.Any(c => c.IsExpanded && !c.IsSittingOut);
+        }
+
         private BandColumn ColumnFor(YargPlayer player)
         {
             if (player is not null)
@@ -485,7 +634,12 @@ namespace YARG.Menu.DifficultySelect
                 return false;
             }
 
-            if (!IsOpen || DialogManager.Instance.IsDialogShowing || IsFull)
+            if (IsOvershell && device is Keyboard)
+            {
+                return false;
+            }
+
+            if (!IsOpen || DialogManager.Instance.IsDialogShowing || IsFull || (IsOvershell && (_hidden || !_canEngage())))
             {
                 return device is not Keyboard;
             }
@@ -622,7 +776,16 @@ namespace YARG.Menu.DifficultySelect
             }
 
             var before = CaptureCardPositions();
-            InsertColumn(player, true, before).OpenForSong();
+            var column = InsertColumn(player, true, before);
+            if (IsOvershell)
+            {
+                column.OpenOvershell(false);
+            }
+            else
+            {
+                column.OpenForSong();
+            }
+
             OnColumnChanged();
             ShiftCards(before, 0f, null);
         }
@@ -773,6 +936,11 @@ namespace YARG.Menu.DifficultySelect
 
         private void UpdateStatus()
         {
+            if (IsOvershell)
+            {
+                return;
+            }
+
             int ready = _columns.Count(c => c.IsDecided && !c.IsSittingOut);
             bool allDecided = _columns.Count > 0 && _columns.All(c => c.IsDecided);
 
@@ -878,21 +1046,20 @@ namespace YARG.Menu.DifficultySelect
 
         private void ShowFooterBackground(bool show)
         {
+            if (IsOvershell)
+            {
+                return;
+            }
+
             _footerBackground.gameObject.SetActive(show);
 
-            if (HelpBar.Instance == null)
+            if (!show || HelpBar.Instance == null)
             {
                 return;
             }
 
             var helpBar = (RectTransform) HelpBar.Instance.transform;
-            helpBar.anchoredPosition = new Vector2(helpBar.anchoredPosition.x, show ? JOIN_STRIP_HEIGHT : 0f);
-
-            if (show)
-            {
-                _footerBackground.sizeDelta = new Vector2(_footerBackground.sizeDelta.x,
-                    JOIN_STRIP_HEIGHT + helpBar.rect.height);
-            }
+            _footerBackground.sizeDelta = new Vector2(_footerBackground.sizeDelta.x, helpBar.rect.height);
         }
 
         private float GetColumnWidth(int slots)

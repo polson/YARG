@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using TMPro;
 using UnityEngine;
+using UnityEngine.UI;
 using YARG.Audio;
 using YARG.Core;
 using YARG.Core.Audio;
@@ -13,6 +14,7 @@ using YARG.Core.Song;
 using YARG.Helpers;
 using YARG.Helpers.Extensions;
 using YARG.Localization;
+using YARG.Menu.DifficultySelect;
 using YARG.Menu.Filters;
 using YARG.Menu.ListMenu;
 using YARG.Menu.Navigation;
@@ -142,6 +144,12 @@ namespace YARG.Menu.MusicLibrary
         private GameObject _noPlayerWarning;
         [SerializeField]
         private PopupMenu _popupMenu;
+        [SerializeField]
+        private BandSelectMenu _overshell;
+        [SerializeField]
+        private LayoutElement _helpBarSpacer;
+        [SerializeField]
+        private VerticalLayoutGroup _sidebarLayout;
 
         protected override int ExtraListViewPadding => 15;
         protected override bool CanScroll => !_popupMenu.gameObject.activeSelf;
@@ -182,6 +190,7 @@ namespace YARG.Menu.MusicLibrary
         private static bool _needsReload                  = false;
         protected      bool _needsNavigationSchemeRefresh = false;
         private        bool _setlistHadSongs;
+        private NavigationScheme _navigationScheme;
 
         protected virtual bool SearchAllowed => true;
 
@@ -231,6 +240,12 @@ namespace YARG.Menu.MusicLibrary
 
             // Set navigation scheme
             SetNavigationScheme();
+
+            SetOvershellLayout(UseOvershell);
+            if (UseOvershell)
+            {
+                _overshell.OpenOvershell(CanEngageOvershell);
+            }
 
             // Restore search
             if (SearchAllowed)
@@ -402,8 +417,7 @@ namespace YARG.Menu.MusicLibrary
             }
 
             bool isSelectingPlaylist = MenuState == MenuState.PlaylistSelect;
-            bool setListNotEmpty = ShowPlaylist.Count > 0;
-            _sidebar.UpdatePlayButtonLabel(setListNotEmpty);
+            _sidebar.UpdatePlayButtonLabel(ShowPlaylist.Count > 0);
             string jumpKey = SettingsManager.Settings.NavigationJumpDistance.Value == NavigationJumpDistance.Pages
                 ? "Menu.MusicLibrary.SkipPage"
                 : "Menu.MusicLibrary.SkipSection";
@@ -495,16 +509,7 @@ namespace YARG.Menu.MusicLibrary
                         () => CurrentSelection?.PrimaryButtonClick(),
                         hide: true
                     ) :
-                    new NavigationScheme.Entry(
-                        MenuAction.Green,
-                        setListNotEmpty ?
-                            "Menu.MusicLibrary.AddHoldStartSet" :
-                            "Menu.MusicLibrary.PlayHoldAddToSet",
-                        OnGreenTap,
-                        holdSeconds: GREEN_HOLD_SECONDS,
-                        onHoldHandler: OnGreenHold,
-                        hide: true
-                    ),
+                    CreateGreenEntry(),
                 new NavigationScheme.Entry(MenuAction.Red, "Menu.Common.Back", Back, hide: true),
                 yellowEntry,
                 blueEntry,
@@ -521,7 +526,69 @@ namespace YARG.Menu.MusicLibrary
                 scheme.VerticalDirectionsModifier = MenuAction.Orange;
             }
 
+            _navigationScheme = scheme;
             _ = Navigator.Instance.PushScheme(scheme);
+        }
+
+        private NavigationScheme.Entry CreateGreenEntry()
+        {
+            return new NavigationScheme.Entry(MenuAction.Green, GetGreenLabelKey(), OnGreenTap,
+                holdSeconds: GREEN_HOLD_SECONDS, onHoldHandler: OnGreenHold, hide: !UseOvershell);
+        }
+
+        private string GetGreenLabelKey()
+        {
+            bool setListNotEmpty = ShowPlaylist.Count > 0;
+
+            if (CurrentSelection is SortHeaderViewType sortHeader)
+            {
+                if (setListNotEmpty)
+                {
+                    return sortHeader.Collapsed
+                        ? "Menu.MusicLibrary.ExpandHeaderHoldStartSet"
+                        : "Menu.MusicLibrary.CollapseHeaderHoldStartSet";
+                }
+
+                return sortHeader.Collapsed
+                    ? "Menu.MusicLibrary.ExpandHeaderHoldAddToSet"
+                    : "Menu.MusicLibrary.CollapseHeaderHoldAddToSet";
+            }
+
+            return setListNotEmpty
+                ? "Menu.MusicLibrary.AddHoldStartSet"
+                : "Menu.MusicLibrary.PlayHoldAddToSet";
+        }
+
+        public void RefreshGreenHint()
+        {
+            if (!UseOvershell)
+            {
+                _sidebar.UpdatePlayButtonLabel(ShowPlaylist.Count > 0);
+                return;
+            }
+
+            if (_navigationScheme is null || MenuState == MenuState.PlaylistSelect || HelpBar.Instance == null)
+            {
+                return;
+            }
+
+            var entry = CreateGreenEntry();
+            _navigationScheme.ReplaceEntry(entry);
+            HelpBar.Instance.RefreshEntry(_navigationScheme, entry);
+        }
+
+        private bool CanEngageOvershell()
+        {
+            return !IsNavigationSchemeBlocked() && !IsFiltersMenuOpen();
+        }
+
+        private void SetOvershellLayout(bool visible)
+        {
+            _sidebar.SetCompact(visible);
+            _sidebarLayout.padding.bottom = visible
+                ? Mathf.RoundToInt(_helpBarSpacer.preferredHeight + BandSelectMenu.JOIN_STRIP_HEIGHT)
+                : 0;
+            LayoutRebuilder.MarkLayoutForRebuild((RectTransform) _sidebarLayout.transform);
         }
 
         protected override void OnSelectedIndexChanged()
@@ -1038,6 +1105,8 @@ namespace YARG.Menu.MusicLibrary
 
         protected void Update()
         {
+            _overshell.SetOvershellHidden(IsFiltersMenuOpen());
+
             if (_needsNavigationSchemeRefresh && !IsNavigationSchemeBlocked())
             {
                 _needsNavigationSchemeRefresh = false;
@@ -1084,6 +1153,8 @@ namespace YARG.Menu.MusicLibrary
             _searchField.OnSearchQueryUpdated -= UpdateSearch;
             PlayerContainer.PlayerAdded -= OnPlayerAdded;
             PlayerContainer.PlayerRemoved -= OnPlayerRemoved;
+
+            _overshell.Close();
 
             if (Navigator.Instance == null) return;
 
@@ -1625,8 +1696,10 @@ namespace YARG.Menu.MusicLibrary
             _needsReload = true;
         }
 
+        public static bool UseOvershell => SettingsManager.Settings.ShowOvershell.Value == OvershellMode.Everywhere;
+
         public static bool NeedsPlayers =>
-            PlayerContainer.Players.Count <= 0 && !SettingsManager.Settings.OvershellJoinFlow.Value;
+            PlayerContainer.Players.Count <= 0 && SettingsManager.Settings.ShowOvershell.Value == OvershellMode.Off;
 
         public static void ResetMainLibraryIndex()
         {

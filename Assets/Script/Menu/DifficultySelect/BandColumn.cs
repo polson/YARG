@@ -119,6 +119,7 @@ namespace YARG.Menu.DifficultySelect
 
         public bool IsJoining => State == BandColumnState.ChooseProfile;
         private bool IsCollapsed => State == BandColumnState.Main && (Ready || _collapsed);
+        public bool IsExpanded => !IsCollapsed;
         public bool IsAtTopLevel => State switch
         {
             BandColumnState.Main       => !Ready,
@@ -254,6 +255,26 @@ namespace YARG.Menu.DifficultySelect
             }
 
             OpenPicker(false);
+        }
+
+        public void OpenOvershell(bool animate)
+        {
+            JoinDevice = null;
+            CreatedProfile = null;
+            Ready = false;
+            _warning = null;
+            _locked = false;
+            _collapsed = true;
+            State = BandColumnState.Main;
+
+            if (animate)
+            {
+                RebuildFromCurrentTop();
+            }
+            else
+            {
+                Rebuild();
+            }
         }
 
         public void Back()
@@ -533,6 +554,13 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
+            if (_menu.IsOvershell)
+            {
+                AddRow(null, Localize.Key("Menu.DifficultySelect.Band.DropOut"), () => _menu.Disconnect(this), true,
+                    _smallPrefab);
+                return;
+            }
+
             if (_warning is not null)
             {
                 var warning = AddLabel(_warning);
@@ -617,16 +645,15 @@ namespace YARG.Menu.DifficultySelect
             SetHeading(Localize.Key("Menu.DifficultySelect.Band.ChooseInstrument"));
             var song = GlobalVariables.State.CurrentSong;
 
-            var blocked = new List<(Instrument Instrument, string Blocker, GameMode Mode)>();
+            bool anyPlayable = false;
             foreach (var instrument in _menu.Instruments)
             {
-                string blocker = _menu.GetInstrumentBlocker(this, instrument, out var mode);
-                if (blocker is not null)
+                if (_menu.GetInstrumentBlocker(this, instrument, out var mode) is not null)
                 {
-                    blocked.Add((instrument, blocker, mode));
                     continue;
                 }
 
+                anyPlayable = true;
                 var capture = instrument;
                 var row = AddRow(null, PlayerSelectionRules.GetInstrumentLabelWithTier(song, instrument, mode),
                     () => PickInstrument(capture, mode), true, height: TWO_LINE_ROW_HEIGHT);
@@ -637,17 +664,9 @@ namespace YARG.Menu.DifficultySelect
                 }
             }
 
-            foreach (var (instrument, blocker, mode) in blocked)
+            if (!anyPlayable)
             {
-                AddRow(blocker, PlayerSelectionRules.GetInstrumentDisplayName(instrument, mode), () => { }, false,
-                    height: TWO_LINE_ROW_HEIGHT);
-            }
-
-            if (!_menu.Instruments.Contains(profile.PreferredInstrument))
-            {
-                AddRow(Localize.Key("Menu.DifficultySelect.Band.NotInSong"),
-                    PlayerSelectionRules.GetInstrumentDisplayName(profile.PreferredInstrument, profile.GameMode),
-                    () => { }, false, height: TWO_LINE_ROW_HEIGHT);
+                AddLabel(Localize.Key("Menu.DifficultySelect.Band.NoPlayableInstruments"));
             }
         }
 
@@ -798,7 +817,7 @@ namespace YARG.Menu.DifficultySelect
             }
             else
             {
-                ExpandFromCollapsed();
+                RebuildFromCurrentTop();
                 if (_readyButton != null)
                 {
                     _nav.SelectAt(IndexOf(_readyButton));
@@ -816,11 +835,11 @@ namespace YARG.Menu.DifficultySelect
             }
 
             _collapsed = false;
-            ExpandFromCollapsed();
+            RebuildFromCurrentTop();
             return true;
         }
 
-        private void ExpandFromCollapsed()
+        private void RebuildFromCurrentTop()
         {
             float top = _card.anchoredPosition.y + _card.rect.height;
             Rebuild();

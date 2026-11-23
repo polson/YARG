@@ -365,7 +365,7 @@
                 "ChooseProfile": "Choose Profile",
                 "ChooseInstrument": "Choose Instrument",
                 "InUse": "(in use)",
-                "NotInSong": "(not in this song)",
+                "NoPlayableInstruments": "No playable instruments",
                 "NoBinding": "(no binding)",
                 "NeedsMicrophone": "(no microphone)",
                 "NeedsController": "(no controller)",
@@ -2289,9 +2289,14 @@
                 "Name": "Save Scores with Bots",
                 "Description": "Allows score saving when playing with bots. Only human scores are recorded. Bot scores are excluded."
             },
-            "OvershellJoinFlow": {
-                "Name": "Band Join Screen",
-                "Description": "Replaces the difficulty select screen with one column per player. Players join by pressing a button on their controller, and the song starts once everyone is ready."
+            "ShowOvershell": {
+                "Name": "Show Overshell",
+                "Description": "Shows a column per player along the bottom of the screen. Players join by pressing a button on their controller, and the song starts once everyone is ready. Everywhere shows it in the music library and difficulty select, Difficulty Select shows it only on the difficulty select screen.",
+                "Dropdown": {
+                    "Everywhere": "Everywhere",
+                    "DifficultySelect": "Difficulty Select",
+                    "Off": "Off"
+                }
             },
             "SfxVolume": {
                 "Name": "SFX Volume",
