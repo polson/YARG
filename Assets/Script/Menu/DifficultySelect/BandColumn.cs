@@ -88,6 +88,7 @@ namespace YARG.Menu.DifficultySelect
         private PlayerCardHeader _header;
         private Tween _rise;
         private readonly List<Modifier> _modifiers = new();
+        [System.NonSerialized]
         private Modifier _excusableModifiers;
         private readonly List<Texture2D> _avatarTextures = new();
         private readonly List<Difficulty> _difficulties = new();

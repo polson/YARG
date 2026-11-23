@@ -67,6 +67,7 @@ namespace YARG.Input
         private static bool _gameFocused;
         private static bool _focusChanged;
         private static HashSet<InputDevice> _backgroundDisabledDevices = new();
+        private static readonly List<YargPlayer> _playersToUpdate = new();
 
         public static bool SuppressDeviceToasts { get; set; } = false;
 
@@ -197,13 +198,13 @@ namespace YARG.Input
             }
 
             // Update bindings using the input update time
-            using (var players = PlayerContainer.PlayerEnumerator)
+            _playersToUpdate.Clear();
+            _playersToUpdate.AddRange(PlayerContainer.Players);
+            foreach (var player in _playersToUpdate)
             {
-                while (players.MoveNext())
-                {
-                    players.Current.DeviceInfo.UpdateBindingsForFrame(InputUpdateTime);
-                }
+                player.DeviceInfo?.UpdateBindingsForFrame(InputUpdateTime);
             }
+            _playersToUpdate.Clear();
 
             // Remove any devices that happened to be actually disabled
             // right as the game focus changed
