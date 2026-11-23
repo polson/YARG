@@ -16,6 +16,7 @@ using YARG.Helpers;
 using YARG.Input;
 using YARG.Input.Bindings;
 using YARG.Localization;
+using YARG.Menu.MusicLibrary;
 using YARG.Menu.Navigation;
 using YARG.Menu.Persistent;
 using YARG.Menu.ProfileList;
@@ -73,15 +74,17 @@ namespace YARG.Menu.DifficultySelect
         internal IReadOnlyList<SongEntry> Songs => _songs;
         internal IReadOnlyList<Instrument> Instruments => _instruments;
         internal int MaxHarmonyIndex { get; private set; }
+        internal DifficultyRing RingTemplate { get; private set; }
 
         public bool IsOpen { get; private set; }
 
         private bool IsFull => PlayerContainer.Players.Count >= MAX_PLAYERS;
 
-        public void Open(List<SongEntry> songs, Action startSong)
+        public void Open(List<SongEntry> songs, DifficultyRing ringTemplate, Action startSong)
         {
             IsOpen = true;
             _songs = songs;
+            RingTemplate = ringTemplate;
             _startSong = startSong;
             _startPending = false;
             _focusIndex = 0;
@@ -253,7 +256,7 @@ namespace YARG.Menu.DifficultySelect
             {
                 foreach (var other in _columns)
                 {
-                    if (other == column || other.State != BandColumnState.Main)
+                    if (other == column || !other.HasChosenInstrument)
                     {
                         continue;
                     }
@@ -686,26 +689,16 @@ namespace YARG.Menu.DifficultySelect
 
         private void StartSong()
         {
-            YargProfile vocalLeader = null;
-
             foreach (var column in _columns)
             {
-                var player = column.Player;
-                player.SittingOut = column.IsSittingOut;
+                column.Player.SittingOut = column.IsSittingOut;
+            }
 
-                if (player.SittingOut || player.Profile.GameMode != GameMode.Vocals)
-                {
-                    continue;
-                }
-
-                if (vocalLeader is null)
-                {
-                    vocalLeader = player.Profile;
-                }
-                else
-                {
-                    player.Profile.ApplySessionModifiers(vocalLeader);
-                }
+            var players = _columns.Select(c => c.Player).ToList();
+            var vocalLeader = players.FirstOrDefault(p => !p.SittingOut && p.Profile.GameMode == GameMode.Vocals);
+            if (vocalLeader != null)
+            {
+                PlayerSelectionRules.ShareVocalModifiers(vocalLeader, players);
             }
 
             _startSong?.Invoke();
@@ -738,7 +731,7 @@ namespace YARG.Menu.DifficultySelect
             _instruments.Clear();
             foreach (var instrument in instruments.OrderBy(i => i))
             {
-                if (_songs.All(s => DifficultySelectMenu.SongHasInstrument(s, instrument)))
+                if (_songs.All(s => PlayerSelectionRules.SongHasInstrument(s, instrument)))
                 {
                     _instruments.Add(instrument);
                 }

@@ -475,24 +475,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   <Menu>k__BackingField: 3
   <HideBelow>k__BackingField: 1
---- !u!114 &5927936930784539018
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1731608351740115684}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: adb229afd09e47c8b44d74735a7c9cea, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  _band: {fileID: 5978042088170327381}
-  _joinSlot: {fileID: 4122370232935426601}
-  _joinCard: {fileID: 8497239876215712391}
-  _joinText: {fileID: 8550382763777952036}
-  _footer: {fileID: 3908434504889823800}
-  _columnPrefab: {fileID: 6029383437272622616, guid: 1e4c33d8b951280c48ffbc9b7d8e513a, type: 3}
 --- !u!114 &7249260118945706693
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -526,6 +508,24 @@ MonoBehaviour:
   _modifierItemPrefab: {fileID: 3419815060514877507, guid: 6c928df38839ed24eaa659f76c62da6b, type: 3}
   _band: {fileID: 5927936930784539018}
   _headerText: {fileID: 2556417247703624372}
+--- !u!114 &5927936930784539018
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1731608351740115684}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: adb229afd09e47c8b44d74735a7c9cea, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  _band: {fileID: 5978042088170327381}
+  _joinSlot: {fileID: 4122370232935426601}
+  _joinCard: {fileID: 8497239876215712391}
+  _joinText: {fileID: 8550382763777952036}
+  _footer: {fileID: 3908434504889823800}
+  _columnPrefab: {fileID: 6029383437272622616, guid: 1e4c33d8b951280c48ffbc9b7d8e513a, type: 3}
 --- !u!1 &1760945247419712673
 GameObject:
   m_ObjectHideFlags: 0
@@ -3182,7 +3182,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 6232041351873830570, guid: 81863a63e0d96cf459c263ee0ea6f98e, type: 3}
       propertyPath: m_Value
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []

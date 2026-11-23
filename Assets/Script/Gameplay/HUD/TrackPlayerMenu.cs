@@ -3,8 +3,6 @@ using System.Collections.Generic;
 using DG.Tweening;
 using TMPro;
 using UnityEngine;
-using UnityEngine.AddressableAssets;
-using UnityEngine.ResourceManagement.AsyncOperations;
 using UnityEngine.UI;
 using YARG.Core.Input;
 using YARG.Player;
@@ -33,7 +31,6 @@ namespace YARG.Gameplay.HUD
         private const float OPEN_BOTTOM_OFFSET  = 36f;
         private const float CLOSED_EXTRA_OFFSET = 8f;
         private const float DISABLED_ALPHA      = 0.35f;
-        private const float HEADER_MARGIN       = 40f;
 
         [SerializeField]
         private TextMeshProUGUI _headingText;
@@ -58,7 +55,7 @@ namespace YARG.Gameplay.HUD
         private float                         _lastTrackWidth = -1f;
         private RectTransform                 _panel;
         private YargPlayer                    _player;
-        private AsyncOperationHandle<Sprite>  _iconHandle;
+        private PlayerCardHeader              _header;
         private IReadOnlyList<PlayerMenuItem> _items = Array.Empty<PlayerMenuItem>();
         private int                           _selectedIndex;
         private int                           _scrollOffset;
@@ -92,10 +89,7 @@ namespace YARG.Gameplay.HUD
             }
 
             _panel.DOKill();
-            if (_iconHandle.IsValid())
-            {
-                Addressables.Release(_iconHandle);
-            }
+            _header?.ReleaseIcon();
         }
 
         public void Initialize(YargPlayer player, GameManager gameManager)
@@ -104,8 +98,8 @@ namespace YARG.Gameplay.HUD
             _player.MenuInput += OnMenuInput;
             _headingText.text = player.Profile.Name;
 
-            _iconHandle = Addressables.LoadAssetAsync<Sprite>(player.GetInstrumentSprite());
-            _icon.sprite = _iconHandle.WaitForCompletion();
+            _header = new PlayerCardHeader(_headingText, _icon);
+            _header.SetIcon(player.GetInstrumentSprite());
 
             _gameManager = gameManager;
         }
@@ -117,7 +111,7 @@ namespace YARG.Gameplay.HUD
             _scrollOffset = 0;
             EnsureSelectionVisible();
             RefreshSelection();
-            LayoutHeading();
+            _header.Fit(_panel.sizeDelta.x);
         }
 
         public void Open()
@@ -198,7 +192,7 @@ namespace YARG.Gameplay.HUD
             var currentY = DOTween.IsTweening(_panel) ? _panel.localPosition.y : (IsOpen ? _openY : _closedY);
             _panel.localPosition = new Vector3(x: screenBottom.x, y: currentY, z: 0f);
 
-            LayoutHeading();
+            _header.Fit(_panel.sizeDelta.x);
         }
 
         public void HideImmediate()
@@ -297,28 +291,6 @@ namespace YARG.Gameplay.HUD
                     _slots[i].Hide();
                 }
             }
-        }
-
-        private void LayoutHeading()
-        {
-            var iconLayout = _icon.GetComponent<LayoutElement>();
-            var iconWidth = iconLayout != null && iconLayout.preferredWidth > 0f
-                ? iconLayout.preferredWidth
-                : _icon.rectTransform.sizeDelta.x;
-            var layoutGroup = _headingText.GetComponentInParent<HorizontalLayoutGroup>(includeInactive: true);
-            var spacing = layoutGroup != null ? layoutGroup.spacing : 0f;
-            var maxTextWidth = _panel.sizeDelta.x - HEADER_MARGIN - iconWidth - spacing;
-
-            _headingText.enableAutoSizing = false;
-            _headingText.fontSize = _headingText.fontSizeMax;
-
-            var preferredWidth = _headingText.preferredWidth;
-            if (_headingText.TryGetComponent<LayoutElement>(out var layoutElement))
-            {
-                layoutElement.preferredWidth = Mathf.Min(preferredWidth, maxTextWidth);
-            }
-
-            _headingText.enableAutoSizing = preferredWidth > maxTextWidth;
         }
 
         [Serializable]
