@@ -375,6 +375,7 @@
                 "Ready": "Ready",
                 "Unready": "Unready",
                 "SittingOut": "Sitting Out",
+                "DropOut": "Drop Out",
                 "Part": "Part {0}",
                 "NobodyPlaying": "Everyone is sitting out",
                 "NoPlayers": "Waiting for players"

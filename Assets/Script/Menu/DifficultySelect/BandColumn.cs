@@ -42,6 +42,7 @@ namespace YARG.Menu.DifficultySelect
         private const float MODIFIER_LINE_HEIGHT = 34f;
 
         private const float UNFOCUSED_BORDER_BRIGHTNESS = 0.5f;
+        private const int COLLAPSED_PADDING_TRIM = 19;
         private static readonly Color WARNING_COLOR = new Color32(0xFB, 0x44, 0x3F, 0xFF);
 
         [SerializeField]
@@ -87,6 +88,7 @@ namespace YARG.Menu.DifficultySelect
 
         private PlayerCardHeader _header;
         private Tween _rise;
+        private Tween _collapse;
         private readonly List<Modifier> _modifiers = new();
         [System.NonSerialized]
         private Modifier _excusableModifiers;
@@ -98,8 +100,9 @@ namespace YARG.Menu.DifficultySelect
         private BandColumnState _builtState;
         private BandColumnState _pickerReturnState;
         private bool _pickerCanCancel;
-        private bool _switchingProfile;
         private bool _locked;
+        private bool _collapsed;
+        private int _expandedBottomPadding;
         private string _warning;
         private NavigatableBehaviour _readyButton;
         private NavigatableBehaviour _difficultyButton;
@@ -114,7 +117,8 @@ namespace YARG.Menu.DifficultySelect
         public BandColumnState State { get; private set; }
         public bool Ready { get; private set; }
 
-        public bool IsJoining => State == BandColumnState.ChooseProfile && !_switchingProfile;
+        public bool IsJoining => State == BandColumnState.ChooseProfile;
+        private bool IsCollapsed => State == BandColumnState.Main && (Ready || _collapsed);
         public bool IsAtTopLevel => State switch
         {
             BandColumnState.Main       => !Ready,
@@ -140,6 +144,7 @@ namespace YARG.Menu.DifficultySelect
         private void Awake()
         {
             _header = new PlayerCardHeader(_heading, _icon);
+            _expandedBottomPadding = _cardLayout.padding.bottom;
         }
 
         public void Initialize(BandSelectMenu menu, YargPlayer player, bool slideIn)
@@ -208,7 +213,6 @@ namespace YARG.Menu.DifficultySelect
             JoinDeviceOwned = deviceOwned;
             CreatedProfile = createdProfile;
             Ready = false;
-            _switchingProfile = false;
             State = BandColumnState.ChooseProfile;
             Rebuild();
         }
@@ -218,9 +222,9 @@ namespace YARG.Menu.DifficultySelect
             JoinDevice = null;
             CreatedProfile = null;
             Ready = false;
-            _switchingProfile = false;
             _warning = null;
             _locked = false;
+            _collapsed = false;
 
             if (GlobalVariables.State.CurrentCareer is not null && Player.Profile.IsBot)
             {
@@ -262,15 +266,18 @@ namespace YARG.Menu.DifficultySelect
                 case BandColumnState.Main when Ready:
                     ToggleReady();
                     break;
-                case BandColumnState.Main when Player.DeviceInfo.HasControllerAssigned:
-                    OpenProfileSwitch();
+                case BandColumnState.Main when !_collapsed:
+                    _collapsed = true;
+                    SlideDownAndCollapse();
                     break;
-                case BandColumnState.Main:
                 case BandColumnState.SittingOut:
                     OpenPicker(true);
                     break;
                 case BandColumnState.Instrument when _pickerCanCancel:
                     SetState(_pickerReturnState);
+                    break;
+                case BandColumnState.Instrument:
+                    _menu.Disconnect(this);
                     break;
                 case BandColumnState.Difficulty:
                 case BandColumnState.Adjustments:
@@ -290,6 +297,13 @@ namespace YARG.Menu.DifficultySelect
         {
             int? previousIndex = _nav.SelectedIndex;
             bool sameState = _builtState == State;
+
+            if (_collapse is not null)
+            {
+                _collapse.Kill();
+                _collapse = null;
+                _card.anchoredPosition = new Vector2(_card.anchoredPosition.x, 0f);
+            }
 
             _nav.ClearNavigatables();
             _difficultyItems.Clear();
@@ -382,6 +396,10 @@ namespace YARG.Menu.DifficultySelect
 
         private void FitRows(bool resetScroll)
         {
+            _cardLayout.padding.bottom = IsCollapsed
+                ? _expandedBottomPadding - COLLAPSED_PADDING_TRIM
+                : _expandedBottomPadding;
+
             var rows = Rows;
             LayoutRebuilder.ForceRebuildLayoutImmediate(rows);
 
@@ -431,19 +449,10 @@ namespace YARG.Menu.DifficultySelect
 
         private void SetState(BandColumnState state)
         {
+            _collapsed = false;
             State = state;
             Rebuild();
             _menu.OnColumnChanged();
-        }
-
-        private void OpenProfileSwitch()
-        {
-            JoinDevice = Player.DeviceInfo.Controllers[0];
-            JoinDeviceOwned = true;
-            CreatedProfile = null;
-            Ready = false;
-            _switchingProfile = true;
-            SetState(BandColumnState.ChooseProfile);
         }
 
         private void OpenPicker(bool canCancel)
@@ -519,6 +528,11 @@ namespace YARG.Menu.DifficultySelect
 
             SetPlayerHeading();
 
+            if (IsCollapsed)
+            {
+                return;
+            }
+
             if (_warning is not null)
             {
                 var warning = AddLabel(_warning);
@@ -551,6 +565,9 @@ namespace YARG.Menu.DifficultySelect
                 _excusableModifiers, out int optionCount);
             AddStateRow(Localize.Key("Menu.DifficultySelect.Adjustments"), adjustments,
                 BandColumnState.Adjustments, !Ready, MultiLineHeight(optionCount));
+
+            AddRow(null, Localize.Key("Menu.DifficultySelect.Band.DropOut"), () => _menu.Disconnect(this), true,
+                _smallPrefab);
         }
 
         private void AddInstrumentRow()
@@ -632,10 +649,6 @@ namespace YARG.Menu.DifficultySelect
                     PlayerSelectionRules.GetInstrumentDisplayName(profile.PreferredInstrument, profile.GameMode),
                     () => { }, false, height: TWO_LINE_ROW_HEIGHT);
             }
-
-            AddRow(null, Localize.Key("Menu.DifficultySelect.SitOut"), SitOut, true, _smallPrefab);
-            AddRow(null, Localize.Key("Menu.DifficultySelect.Disconnect"), () => _menu.Disconnect(this), true,
-                _smallPrefab);
         }
 
         private void BuildAdjustments()
@@ -756,13 +769,6 @@ namespace YARG.Menu.DifficultySelect
             SetState(BandColumnState.Main);
         }
 
-        private void SitOut()
-        {
-            Ready = false;
-            _warning = null;
-            SetState(BandColumnState.SittingOut);
-        }
-
         private void ToggleReady()
         {
             if (!Ready)
@@ -783,14 +789,59 @@ namespace YARG.Menu.DifficultySelect
             }
 
             _warning = null;
+            _collapsed = false;
             Ready = !Ready;
-            Rebuild();
-            if (_readyButton != null)
+
+            if (Ready)
             {
-                _nav.SelectAt(IndexOf(_readyButton));
+                SlideDownAndCollapse();
+            }
+            else
+            {
+                ExpandFromCollapsed();
+                if (_readyButton != null)
+                {
+                    _nav.SelectAt(IndexOf(_readyButton));
+                }
             }
 
             _menu.OnColumnChanged();
+        }
+
+        public bool Expand()
+        {
+            if (State != BandColumnState.Main || Ready || !_collapsed)
+            {
+                return false;
+            }
+
+            _collapsed = false;
+            ExpandFromCollapsed();
+            return true;
+        }
+
+        private void ExpandFromCollapsed()
+        {
+            float top = _card.anchoredPosition.y + _card.rect.height;
+            Rebuild();
+            RiseFrom(top - _card.rect.height);
+        }
+
+        private void SlideDownAndCollapse()
+        {
+            _rise?.Kill();
+            _collapse?.Kill();
+
+            float collapsedHeight = _cardLayout.padding.top + _expandedBottomPadding - COLLAPSED_PADDING_TRIM;
+            _collapse = _card.DOAnchorPosY(collapsedHeight - _card.rect.height, BandSelectMenu.SLIDE_SECONDS)
+                .SetEase(Ease.OutCubic)
+                .SetUpdate(true)
+                .OnComplete(() =>
+                {
+                    _collapse = null;
+                    _card.anchoredPosition = new Vector2(_card.anchoredPosition.x, 0f);
+                    Rebuild();
+                });
         }
 
         private void ConfirmDifficulty(Difficulty difficulty)
