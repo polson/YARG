@@ -54,6 +54,11 @@ namespace YARG.Menu
         private static readonly HashSet<Menu> _menusWithoutOvershell = new()
         {
             Menu.Credits,
+            Menu.ProfileList,
+            Menu.ProfileInfo,
+            Menu.History,
+            Menu.CareerList,
+            Menu.Career,
         };
 
         private Dictionary<Menu, MenuObject> _menus;

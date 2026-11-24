@@ -19,6 +19,7 @@ using YARG.Menu.Filters;
 using YARG.Menu.ListMenu;
 using YARG.Menu.Navigation;
 using YARG.Menu.Persistent;
+using YARG.Menu.Settings;
 using YARG.Player;
 using YARG.Playlists;
 using YARG.Scores;
@@ -1116,7 +1117,8 @@ namespace YARG.Menu.MusicLibrary
                 _needsNavigationSchemeRefresh = true;
             }
 
-            _overshell.SetOvershellHidden(IsFiltersMenuOpen());
+            _overshell.SetOvershellHidden(IsFiltersMenuOpen() ||
+                (SettingsMenu.Instance != null && SettingsMenu.Instance.gameObject.activeSelf));
 
             if (_needsNavigationSchemeRefresh && !IsNavigationSchemeBlocked())
             {

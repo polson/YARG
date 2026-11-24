@@ -375,6 +375,7 @@
                 "SittingOut": "Sitting Out",
                 "DropOut": "Drop Out",
                 "Position": "Position",
+                "Settings": "Settings",
                 "MoveLeft": "Move Left",
                 "MoveRight": "Move Right",
                 "Part": "Part {0}",

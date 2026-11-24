@@ -126,6 +126,17 @@ namespace YARG.Menu.DifficultySelect
             ShrinkToFit(_body, bodySize);
         }
 
+        public void SetBody(string body)
+        {
+            _body.text = body;
+        }
+
+        public void AllowTinyText()
+        {
+            _header.fontSizeMin = TINY_FONT_SIZE;
+            _body.fontSizeMin = TINY_FONT_SIZE;
+        }
+
         public void UseWrappedText()
         {
             _header.fontSizeMin = TINY_FONT_SIZE;
@@ -144,8 +155,7 @@ namespace YARG.Menu.DifficultySelect
             var rect = (RectTransform) _avatar.rectTransform.parent;
             rect.sizeDelta = new Vector2(rect.sizeDelta.x, size - rowHeight);
             rect.anchoredPosition = new Vector2(margin, rect.anchoredPosition.y);
-            _header.fontSizeMin = TINY_FONT_SIZE;
-            _body.fontSizeMin = TINY_FONT_SIZE;
+            AllowTinyText();
         }
 
         private static void ShrinkToFit(TextMeshProUGUI label, float fontSize)

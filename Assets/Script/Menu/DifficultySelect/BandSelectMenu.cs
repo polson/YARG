@@ -713,6 +713,12 @@ namespace YARG.Menu.DifficultySelect
                 _                => 0,
             };
 
+            if (direction != 0 && !_started && ColumnFor(context.Player) is { } column &&
+                column.AdjustSelection(direction))
+            {
+                return;
+            }
+
             bool movesFocus = direction != 0 && context.Player is null && _columns.Count > 0;
             if (!movesFocus)
             {
@@ -773,6 +779,12 @@ namespace YARG.Menu.DifficultySelect
                     break;
                 case MenuAction.Red:
                     column.Back();
+                    break;
+                case MenuAction.Left:
+                    column.AdjustSelection(-1);
+                    break;
+                case MenuAction.Right:
+                    column.AdjustSelection(1);
                     break;
             }
 

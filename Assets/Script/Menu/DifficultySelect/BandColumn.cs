@@ -29,9 +29,11 @@ namespace YARG.Menu.DifficultySelect
         OpenLane,
         SittingOut,
         Position,
+        Settings,
+        SettingOptions,
     }
 
-    internal sealed class BandColumn : MonoBehaviour, IPointerClickHandler, IScrollHandler
+    internal sealed partial class BandColumn : MonoBehaviour, IPointerClickHandler, IScrollHandler
     {
         private const float PROFILE_ROW_HEIGHT = 64f;
         private const float AVATAR_MARGIN = 6f;
@@ -41,6 +43,9 @@ namespace YARG.Menu.DifficultySelect
         private const float HEADER_MARGIN = 40f;
         private const float HEADER_SPACING = 10f;
         private const float HEADER_FONT_SIZE_MIN = 6f;
+        private const float HEADER_ICON_MIN_CARD_WIDTH = 110f;
+        private const float SCROLLBAR_WIDTH = 15f;
+        private const float SCROLLBAR_WIDTH_SHARE = 0.08f;
         private const float ROW_HEIGHT = 52f;
         private const float TWO_LINE_ROW_HEIGHT = 72f;
         private const float SMALL_FONT_SIZE = 20f;
@@ -65,6 +70,7 @@ namespace YARG.Menu.DifficultySelect
         private Image _icon;
         private LayoutElement _iconLayout;
         private HorizontalLayoutGroup _headerContent;
+        private bool _wantsHeaderIcon;
         [SerializeField]
         private ScrollRect _scroll;
         [SerializeField]
@@ -359,7 +365,11 @@ namespace YARG.Menu.DifficultySelect
                 case BandColumnState.Difficulty:
                 case BandColumnState.Adjustments:
                 case BandColumnState.Position:
+                case BandColumnState.Settings:
                     SetState(BandColumnState.Main);
+                    break;
+                case BandColumnState.SettingOptions:
+                    SetState(BandColumnState.Settings);
                     break;
                 case BandColumnState.Modifiers:
                 case BandColumnState.Accessibility:
@@ -386,6 +396,7 @@ namespace YARG.Menu.DifficultySelect
             _nav.ClearNavigatables();
             ClearAvatars();
             _profileRows.Clear();
+            _steppers.Clear();
             _modifierToggles.Clear();
             _readyButton = null;
             _difficultyButton = null;
@@ -430,6 +441,12 @@ namespace YARG.Menu.DifficultySelect
                     break;
                 case BandColumnState.Position:
                     BuildPosition();
+                    break;
+                case BandColumnState.Settings:
+                    BuildSettings();
+                    break;
+                case BandColumnState.SettingOptions:
+                    BuildSettingOptions();
                     break;
             }
 
@@ -557,6 +574,9 @@ namespace YARG.Menu.DifficultySelect
             var scrollbar = (RectTransform) _scroll.verticalScrollbar.transform;
             _viewportLayout.preferredHeight = Mathf.Min(contentHeight, maxHeight);
             scrollbar.gameObject.SetActive(scrollable);
+            float scrollbarWidth = Mathf.Min(SCROLLBAR_WIDTH, _layout.preferredWidth * SCROLLBAR_WIDTH_SHARE);
+            scrollbar.sizeDelta = new Vector2(scrollbarWidth, scrollbar.sizeDelta.y);
+            scrollbar.anchoredPosition = new Vector2(-scrollbarWidth / 2f, scrollbar.anchoredPosition.y);
             _rowLayout.padding.right = scrollable ? Mathf.CeilToInt(scrollbar.sizeDelta.x) : 0;
 
             LayoutRebuilder.ForceRebuildLayoutImmediate(_card);
@@ -719,6 +739,7 @@ namespace YARG.Menu.DifficultySelect
 
             if (_menu.IsOvershell)
             {
+                AddSettingsRow();
                 AddPositionRow();
                 AddRow(null, Localize.Key("Menu.DifficultySelect.Band.DropOut"), () => _menu.Disconnect(this), true,
                     _smallPrefab);
@@ -758,6 +779,7 @@ namespace YARG.Menu.DifficultySelect
             AddStateRow(Localize.Key("Menu.DifficultySelect.Adjustments"), adjustments,
                 BandColumnState.Adjustments, !Ready, MultiLineHeight(optionCount));
 
+            AddSettingsRow();
             AddPositionRow();
             AddRow(null, Localize.Key("Menu.DifficultySelect.Band.DropOut"), () => _menu.Disconnect(this), true,
                 _smallPrefab);
@@ -1043,6 +1065,11 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
+            if (eventData.pointerPressRaycast.gameObject == null)
+            {
+                return;
+            }
+
             if (Ready)
             {
                 ToggleReady();
@@ -1160,13 +1187,17 @@ namespace YARG.Menu.DifficultySelect
         private void FitHeader()
         {
             float width = _layout.preferredWidth;
+            _icon.gameObject.SetActive(_wantsHeaderIcon && width >= HEADER_ICON_MIN_CARD_WIDTH);
             float scale = Mathf.Clamp01(width * AVATAR_WIDTH_SHARE / HEADER_ICON_SIZE);
             float iconSize = HEADER_ICON_SIZE * scale;
+            _iconLayout.minWidth = iconSize;
+            _iconLayout.minHeight = iconSize;
             _iconLayout.preferredWidth = iconSize;
             _iconLayout.preferredHeight = iconSize;
             _icon.rectTransform.sizeDelta = new Vector2(iconSize, iconSize);
-            _headerContent.spacing = HEADER_SPACING * scale;
-            _header.Fit(width, HEADER_MARGIN * scale);
+            float spaceScale = scale * scale;
+            _headerContent.spacing = HEADER_SPACING * spaceScale;
+            _header.Fit(width, HEADER_MARGIN * spaceScale);
         }
 
         private void SetHeading(string text, bool showIcon = false)
@@ -1174,7 +1205,7 @@ namespace YARG.Menu.DifficultySelect
             _heading.text = text;
             _heading.color = _headingColor;
             _heading.gameObject.SetActive(!string.IsNullOrEmpty(text));
-            _icon.gameObject.SetActive(showIcon && _icon.sprite != null);
+            _wantsHeaderIcon = showIcon && _icon.sprite != null;
             FitHeader();
         }
 
