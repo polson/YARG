@@ -10,6 +10,7 @@ namespace YARG.Menu.DifficultySelect
     public class DifficultyItem : MonoBehaviour
     {
         private const float MIN_SHRINK = 0.5f;
+        private const float TINY_FONT_SIZE = 4f;
 
         [SerializeField]
         private TextMeshProUGUI _header;
@@ -125,10 +126,26 @@ namespace YARG.Menu.DifficultySelect
             ShrinkToFit(_body, bodySize);
         }
 
+        public void UseWrappedText()
+        {
+            _header.fontSizeMin = TINY_FONT_SIZE;
+            _header.textWrappingMode = TextWrappingModes.Normal;
+            _header.overflowMode = TextOverflowModes.Overflow;
+        }
+
         public void SetAvatar(Sprite sprite, bool flipped)
         {
             _avatar.sprite = sprite;
             _avatar.rectTransform.localScale = new Vector3(1f, flipped ? -1f : 1f, 1f);
+        }
+
+        public void FitAvatar(float rowHeight, float size, float margin)
+        {
+            var rect = (RectTransform) _avatar.rectTransform.parent;
+            rect.sizeDelta = new Vector2(rect.sizeDelta.x, size - rowHeight);
+            rect.anchoredPosition = new Vector2(margin, rect.anchoredPosition.y);
+            _header.fontSizeMin = TINY_FONT_SIZE;
+            _body.fontSizeMin = TINY_FONT_SIZE;
         }
 
         private static void ShrinkToFit(TextMeshProUGUI label, float fontSize)

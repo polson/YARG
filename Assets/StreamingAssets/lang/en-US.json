@@ -363,8 +363,6 @@
                 "JoinPrompt": "Press to Join",
                 "Full": "Full ({0} of {0})",
                 "ChooseProfile": "Choose Profile",
-                "ChooseInstrument": "Choose Instrument",
-                "InUse": "(in use)",
                 "NoPlayableInstruments": "No playable instruments",
                 "NoBinding": "(no binding)",
                 "NeedsMicrophone": "(no microphone)",

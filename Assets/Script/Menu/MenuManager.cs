@@ -51,6 +51,11 @@ namespace YARG.Menu
             Menu.DifficultySelect,
         };
 
+        private static readonly HashSet<Menu> _menusWithoutOvershell = new()
+        {
+            Menu.Credits,
+        };
+
         private Dictionary<Menu, MenuObject> _menus;
         private BandSelectMenu _overshell;
         private MenuObject _overshellHost;
@@ -164,7 +169,7 @@ namespace YARG.Menu
         {
             MenuObject host = null;
             if (MusicLibraryMenu.UseOvershell && _openMenus.TryPeek(out var top) &&
-                !_selfHostedOvershellMenus.Contains(top) && _menus.TryGetValue(top, out var menu) &&
+                !_selfHostedOvershellMenus.Contains(top) && !_menusWithoutOvershell.Contains(top) && _menus.TryGetValue(top, out var menu) &&
                 menu.gameObject.activeInHierarchy)
             {
                 host = menu;

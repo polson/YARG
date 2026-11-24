@@ -524,7 +524,6 @@ MonoBehaviour:
   _band: {fileID: 5978042088170327381}
   _joinSlot: {fileID: 4122370232935426601}
   _joinCard: {fileID: 8497239876215712391}
-  _joinText: {fileID: 8550382763777952036}
   _footer: {fileID: 3908434504889823800}
   _footerBackground: {fileID: 6149433874209821559}
   _columnPrefab: {fileID: 6029383437272622616, guid: 1e4c33d8b951280c48ffbc9b7d8e513a, type: 3}
@@ -1490,7 +1489,7 @@ MonoBehaviour:
     m_Top: 0
     m_Bottom: 0
   m_ChildAlignment: 7
-  m_Spacing: 16
+  m_Spacing: 8
   m_ChildForceExpandWidth: 0
   m_ChildForceExpandHeight: 0
   m_ChildControlWidth: 1

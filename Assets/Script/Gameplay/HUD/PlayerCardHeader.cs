@@ -56,14 +56,14 @@ namespace YARG.Gameplay.HUD
             }
         }
 
-        public void Fit(float cardWidth)
+        public void Fit(float cardWidth, float margin = MARGIN)
         {
             if (cardWidth <= 0f)
             {
                 return;
             }
 
-            float maxWidth = cardWidth - MARGIN;
+            float maxWidth = cardWidth - margin;
             if (_icon.gameObject.activeSelf)
             {
                 float iconWidth = _iconLayout != null && _iconLayout.preferredWidth > 0f
