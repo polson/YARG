@@ -28,6 +28,7 @@ namespace YARG.Menu.DifficultySelect
         Accessibility,
         OpenLane,
         SittingOut,
+        Position,
     }
 
     internal sealed class BandColumn : MonoBehaviour
@@ -44,6 +45,7 @@ namespace YARG.Menu.DifficultySelect
         private const float UNFOCUSED_BORDER_BRIGHTNESS = 0.5f;
         private const int COLLAPSED_PADDING_TRIM = 19;
         private static readonly Color WARNING_COLOR = new Color32(0xFB, 0x44, 0x3F, 0xFF);
+        private static readonly Color DIVIDER_COLOR = new Color(0f, 0.48f, 0.72f, 0.3f);
 
         [SerializeField]
         private RectTransform _card;
@@ -108,6 +110,9 @@ namespace YARG.Menu.DifficultySelect
         private NavigatableBehaviour _difficultyButton;
         private bool _selectReady;
         private NavigatableBehaviour _returnButton;
+        private NavigatableBehaviour _moveLeftButton;
+        private NavigatableBehaviour _moveRightButton;
+        private readonly List<(Transform Row, GameObject Divider)> _dividers = new();
 
         public YargPlayer Player;
         public InputDevice JoinDevice;
@@ -302,6 +307,7 @@ namespace YARG.Menu.DifficultySelect
                     break;
                 case BandColumnState.Difficulty:
                 case BandColumnState.Adjustments:
+                case BandColumnState.Position:
                     SetState(BandColumnState.Main);
                     break;
                 case BandColumnState.Modifiers:
@@ -333,6 +339,8 @@ namespace YARG.Menu.DifficultySelect
             _readyButton = null;
             _difficultyButton = null;
             _returnButton = null;
+            _moveLeftButton = null;
+            _moveRightButton = null;
             for (int i = Rows.childCount - 1; i >= 0; i--)
             {
                 var child = Rows.GetChild(i).gameObject;
@@ -369,12 +377,83 @@ namespace YARG.Menu.DifficultySelect
                 case BandColumnState.SittingOut:
                     BuildSittingOut();
                     break;
+                case BandColumnState.Position:
+                    BuildPosition();
+                    break;
             }
 
             _builtState = State;
 
+            StyleRows();
             SelectDefault(sameState, previousIndex);
+            UpdateDividers();
             FitRows(!sameState);
+        }
+
+        private void StyleRows()
+        {
+            _dividers.Clear();
+            foreach (Transform row in Rows)
+            {
+                if (!row.gameObject.activeSelf)
+                {
+                    continue;
+                }
+
+                var background = row.Find("Background");
+                if (background != null && background.TryGetComponent<Image>(out var image))
+                {
+                    image.sprite = null;
+                    image.color = Color.clear;
+                }
+
+                GameObject divider = null;
+                if (_dividers.Count > 0)
+                {
+                    divider = AddDivider(row);
+                    if (background != null)
+                    {
+                        divider.transform.SetSiblingIndex(background.GetSiblingIndex() + 1);
+                    }
+                }
+
+                _dividers.Add((row, divider));
+            }
+        }
+
+        private static GameObject AddDivider(Transform row)
+        {
+            var divider = new GameObject("Divider", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+            var rect = (RectTransform) divider.transform;
+            rect.SetParent(row, false);
+            rect.anchorMin = new Vector2(0f, 1f);
+            rect.anchorMax = Vector2.one;
+            rect.pivot = new Vector2(0.5f, 1f);
+            rect.offsetMin = new Vector2(0f, -1f);
+            rect.offsetMax = Vector2.zero;
+
+            var image = divider.GetComponent<Image>();
+            image.color = DIVIDER_COLOR;
+            image.raycastTarget = false;
+            divider.GetComponent<LayoutElement>().ignoreLayout = true;
+            return divider;
+        }
+
+        private void UpdateDividers()
+        {
+            var selected = _nav.SelectedBehaviour;
+            int selectedIndex = selected == null
+                ? -1
+                : _dividers.FindIndex(entry => selected.transform.IsChildOf(entry.Row));
+
+            for (int i = 0; i < _dividers.Count; i++)
+            {
+                var divider = _dividers[i].Divider;
+                if (divider != null)
+                {
+                    divider.SetActive(i != selectedIndex && i != selectedIndex + 1);
+                }
+            }
         }
 
         private void SelectDefault(bool sameState, int? previousIndex)
@@ -556,6 +635,7 @@ namespace YARG.Menu.DifficultySelect
 
             if (_menu.IsOvershell)
             {
+                AddPositionRow();
                 AddRow(null, Localize.Key("Menu.DifficultySelect.Band.DropOut"), () => _menu.Disconnect(this), true,
                     _smallPrefab);
                 return;
@@ -594,8 +674,44 @@ namespace YARG.Menu.DifficultySelect
             AddStateRow(Localize.Key("Menu.DifficultySelect.Adjustments"), adjustments,
                 BandColumnState.Adjustments, !Ready, MultiLineHeight(optionCount));
 
+            AddPositionRow();
             AddRow(null, Localize.Key("Menu.DifficultySelect.Band.DropOut"), () => _menu.Disconnect(this), true,
                 _smallPrefab);
+        }
+
+        private void AddPositionRow()
+        {
+            AddRow(null, Localize.Key("Menu.DifficultySelect.Band.Position"),
+                () => SetState(BandColumnState.Position), true);
+        }
+
+        private void BuildPosition()
+        {
+            SetHeading(Localize.Key("Menu.DifficultySelect.Band.Position"));
+
+            _moveLeftButton = AddRow(null, Localize.Key("Menu.DifficultySelect.Band.MoveLeft"), () => Move(-1),
+                _menu.CanMoveColumn(this, -1)).Button;
+            _moveRightButton = AddRow(null, Localize.Key("Menu.DifficultySelect.Band.MoveRight"), () => Move(1),
+                _menu.CanMoveColumn(this, 1)).Button;
+
+            AddRow(null, Localize.Key("Menu.DifficultySelect.Done"), () => SetState(BandColumnState.Main), true);
+        }
+
+        private void Move(int direction)
+        {
+            if (!_menu.MoveColumn(this, direction))
+            {
+                return;
+            }
+
+            Rebuild();
+            var button = _menu.CanMoveColumn(this, direction)
+                ? (direction < 0 ? _moveLeftButton : _moveRightButton)
+                : (direction < 0 ? _moveRightButton : _moveLeftButton);
+            if (_nav.Navigatables.Contains(button))
+            {
+                _nav.SelectAt(IndexOf(button));
+            }
         }
 
         private void AddInstrumentRow()
@@ -885,6 +1001,8 @@ namespace YARG.Menu.DifficultySelect
 
         private void OnSelectionChanged(NavigatableBehaviour selected, SelectionOrigin origin)
         {
+            UpdateDividers();
+
             if (origin == SelectionOrigin.Mouse)
             {
                 _menu.FocusColumn(this);

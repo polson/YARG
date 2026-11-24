@@ -376,6 +376,9 @@
                 "Unready": "Unready",
                 "SittingOut": "Sitting Out",
                 "DropOut": "Drop Out",
+                "Position": "Position",
+                "MoveLeft": "Move Left",
+                "MoveRight": "Move Right",
                 "Part": "Part {0}",
                 "NobodyPlaying": "Everyone is sitting out",
                 "NoPlayers": "Waiting for players"

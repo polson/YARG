@@ -107,7 +107,7 @@ namespace YARG.Menu.DifficultySelect
             _footer.gameObject.SetActive(true);
             ShowFooterBackground(true);
 
-            foreach (var player in PlayerContainer.Players)
+            foreach (var player in PlayerContainer.Players.ToList())
             {
                 InsertColumn(player, true, null).OpenForSong();
             }
@@ -145,7 +145,7 @@ namespace YARG.Menu.DifficultySelect
             _footer.gameObject.SetActive(false);
             ShowFooterBackground(true);
 
-            foreach (var player in PlayerContainer.Players)
+            foreach (var player in PlayerContainer.Players.ToList())
             {
                 InsertColumn(player, false, null).OpenOvershell(false);
             }
@@ -288,6 +288,8 @@ namespace YARG.Menu.DifficultySelect
             {
                 return;
             }
+
+            PlayerContainer.SetPlayerOrder(_columns.Select(c => c.Player).ToList());
 
             int slots = Mathf.Max(MIN_SLOTS, _columns.Count + 1);
             SetJoinSlotCount(slots - _columns.Count);
@@ -460,9 +462,9 @@ namespace YARG.Menu.DifficultySelect
                 column.OpenForSong();
             }
 
+            OnColumnChanged();
             PlayerContainer.SaveProfiles();
             BindingsContainer.SaveBindings();
-            OnColumnChanged();
             RefreshProfilePickers(column);
         }
 
@@ -833,6 +835,67 @@ namespace YARG.Menu.DifficultySelect
 
             RefreshProfilePickers(column);
             return column;
+        }
+
+        internal bool CanMoveColumn(BandColumn column, int direction)
+        {
+            var slots = OrderedSlots();
+            int index = slots.IndexOf(column.transform);
+            int target = index + direction;
+            return index >= 0 && target >= 0 && target < slots.Count;
+        }
+
+        internal bool MoveColumn(BandColumn column, int direction)
+        {
+            var slots = OrderedSlots();
+            int index = slots.IndexOf(column.transform);
+            int target = index + direction;
+            if (index < 0 || target < 0 || target >= slots.Count)
+            {
+                return false;
+            }
+
+            var other = slots[target];
+            var focused = _columns.Count > 0 ? _columns[Mathf.Clamp(_focusIndex, 0, _columns.Count - 1)] : null;
+            var before = CaptureCardPositions();
+
+            int siblingIndex = column.transform.GetSiblingIndex();
+            column.transform.SetSiblingIndex(other.GetSiblingIndex());
+            other.SetSiblingIndex(siblingIndex);
+
+            _columns.Sort((a, b) => a.transform.GetSiblingIndex().CompareTo(b.transform.GetSiblingIndex()));
+            if (focused is not null)
+            {
+                _focusIndex = _columns.IndexOf(focused);
+            }
+
+            OnColumnChanged();
+            PlayerContainer.SaveProfiles();
+            ShiftCards(before, 0f, null);
+
+            foreach (var c in _columns)
+            {
+                if (c != column && c.State == BandColumnState.Position)
+                {
+                    c.Rebuild();
+                }
+            }
+
+            return true;
+        }
+
+        private List<Transform> OrderedSlots()
+        {
+            var slots = new List<Transform>();
+            foreach (Transform child in _band)
+            {
+                if (_columns.Any(c => c.transform == child) || _joinSlots.Any(s => s.transform == child))
+                {
+                    slots.Add(child);
+                }
+            }
+
+            return slots;
         }
 
         private void RemoveColumn(BandColumn column)

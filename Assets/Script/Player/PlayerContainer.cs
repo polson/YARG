@@ -972,6 +972,20 @@ namespace YARG.Player
             _players.Insert(index + 1, player);
         }
 
+        public static void SetPlayerOrder(List<YargPlayer> order)
+        {
+            var sorted = _players
+                .OrderBy(player => order.IndexOf(player) is var index and >= 0 ? index : int.MaxValue)
+                .ToList();
+            if (sorted.SequenceEqual(_players))
+            {
+                return;
+            }
+
+            _players.Clear();
+            _players.AddRange(sorted);
+        }
+
         public static void UpdateProfileOrder()
         {
             ClearProfileOrder();
