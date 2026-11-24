@@ -20,7 +20,7 @@ namespace YARG.Menu.DifficultySelect
             Modifier.OpensToGreens | Modifier.NoKicks | Modifier.UnpitchedOnly | Modifier.RangeCompress;
 
         // Instruments that use the (X-Fret) suffix and not the (X-Lane) suffix when in 6-fret mode
-        private static readonly Instrument[] _fretInstruments = {
+        private static readonly Instrument[] FRET_INSTRUMENTS = {
             Instrument.FiveFretGuitar,
             Instrument.FiveFretBass,
             Instrument.FiveFretCoopGuitar,
@@ -146,11 +146,6 @@ namespace YARG.Menu.DifficultySelect
                 }
 
                 possibleModifiers.Add(modifier);
-
-                if (profile.IsModifierActive(modifier) && !possibleModifiers.Contains(modifier))
-                {
-                    profile.RemoveModifiers(modifier);
-                }
             }
 
             return excusable;
@@ -168,7 +163,7 @@ namespace YARG.Menu.DifficultySelect
             if (gameMode == GameMode.SixFretGuitar && !instrument.IsSixFret())
             {
                 //TODO: Figure out a way to localise this
-                if (_fretInstruments.Contains(instrument))
+                if (FRET_INSTRUMENTS.Contains(instrument))
                 {
                     return $"{name} (5-Fret)";
                 }

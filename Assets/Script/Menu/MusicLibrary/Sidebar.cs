@@ -189,6 +189,7 @@ namespace YARG.Menu.MusicLibrary
                     break;
             }
 
+            UpdatePlayButtonLabel(_musicLibraryMenu.ShowPlaylist.Count > 0);
             _musicLibraryMenu.RefreshGreenHint();
             RefreshFavoriteState();
         }

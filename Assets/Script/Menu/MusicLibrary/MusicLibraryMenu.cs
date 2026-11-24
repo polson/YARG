@@ -561,13 +561,8 @@ namespace YARG.Menu.MusicLibrary
 
         public void RefreshGreenHint()
         {
-            if (!UseOvershell)
-            {
-                _sidebar.UpdatePlayButtonLabel(ShowPlaylist.Count > 0);
-                return;
-            }
-
-            if (_navigationScheme is null || MenuState == MenuState.PlaylistSelect || HelpBar.Instance == null)
+            bool showsGreenHint = UseOvershell && MenuState != MenuState.PlaylistSelect;
+            if (!showsGreenHint || _navigationScheme is null || HelpBar.Instance == null)
             {
                 return;
             }
@@ -1105,6 +1100,22 @@ namespace YARG.Menu.MusicLibrary
 
         protected void Update()
         {
+            if (UseOvershell != _overshell.IsOpen)
+            {
+                SetOvershellLayout(UseOvershell);
+                if (UseOvershell)
+                {
+                    _overshell.OpenOvershell(CanEngageOvershell);
+                }
+                else
+                {
+                    _overshell.Close();
+                }
+
+                _sidebar.UpdatePlayButtonLabel(ShowPlaylist.Count > 0);
+                _needsNavigationSchemeRefresh = true;
+            }
+
             _overshell.SetOvershellHidden(IsFiltersMenuOpen());
 
             if (_needsNavigationSchemeRefresh && !IsNavigationSchemeBlocked())

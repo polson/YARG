@@ -2,6 +2,10 @@
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using YARG.Menu.DifficultySelect;
+using YARG.Menu.MusicLibrary;
+using YARG.Menu.Persistent;
+using YARG.Menu.Settings;
 
 namespace YARG.Menu
 {
@@ -40,7 +44,16 @@ namespace YARG.Menu
         /// </summary>
         private static Menu _lastOpenMenu = Menu.None;
 
+        private static readonly HashSet<Menu> _selfHostedOvershellMenus = new()
+        {
+            Menu.MainMenu,
+            Menu.MusicLibrary,
+            Menu.DifficultySelect,
+        };
+
         private Dictionary<Menu, MenuObject> _menus;
+        private BandSelectMenu _overshell;
+        private MenuObject _overshellHost;
 
         private readonly Stack<Menu> _openMenus = new();
         private Coroutine _reactivateCoroutine;
@@ -63,8 +76,14 @@ namespace YARG.Menu
             }
         }
 
+        private void Update()
+        {
+            RefreshOvershell();
+        }
+
         private void OnDisable()
         {
+            SetOvershellHost(null);
             _lastOpenMenu = Menu.None;
 
             // Set the last open menu to the first instance of the allowed menu
@@ -108,6 +127,7 @@ namespace YARG.Menu
 
             // ... and push it onto the stack
             _openMenus.Push(menu);
+            RefreshOvershell();
 
             return newMenu;
         }
@@ -136,6 +156,69 @@ namespace YARG.Menu
             {
                 throw new InvalidOperationException($"Failed to open menu {newMenuEnum}.");
             }
+
+            RefreshOvershell();
+        }
+
+        private void RefreshOvershell()
+        {
+            MenuObject host = null;
+            if (MusicLibraryMenu.UseOvershell && _openMenus.TryPeek(out var top) &&
+                !_selfHostedOvershellMenus.Contains(top) && _menus.TryGetValue(top, out var menu) &&
+                menu.gameObject.activeInHierarchy)
+            {
+                host = menu;
+            }
+
+            SetOvershellHost(host);
+
+            if (_overshell != null)
+            {
+                _overshell.SetOvershellHidden(IsSettingsOpen());
+            }
+        }
+
+        private void SetOvershellHost(MenuObject host)
+        {
+            if (host == _overshellHost)
+            {
+                return;
+            }
+
+            if (_overshell != null)
+            {
+                _overshell.Close();
+            }
+
+            _overshellHost = host;
+            if (host == null)
+            {
+                return;
+            }
+
+            if (_overshell == null)
+            {
+                var template = _menus[Menu.MainMenu].GetComponentInChildren<BandSelectMenu>(true);
+                _overshell = Instantiate(template, host.transform, false);
+                _overshell.DiscardCopiedContent();
+            }
+            else
+            {
+                _overshell.transform.SetParent(host.transform, false);
+            }
+
+            _overshell.transform.SetAsLastSibling();
+            _overshell.OpenOvershell(CanEngageOvershell);
+        }
+
+        private static bool CanEngageOvershell()
+        {
+            return !IsSettingsOpen() && !DialogManager.Instance.IsDialogShowing;
+        }
+
+        private static bool IsSettingsOpen()
+        {
+            return SettingsMenu.Instance != null && SettingsMenu.Instance.gameObject.activeSelf;
         }
 
         // Disables the current menu without popping it from the stack

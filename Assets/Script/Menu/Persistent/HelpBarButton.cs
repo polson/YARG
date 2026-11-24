@@ -46,6 +46,7 @@ namespace YARG.Menu.Persistent
         private readonly Color _darkCoolGrey = new(123 / 255f, 127 / 255f, 154 / 255f, 0.05f);
 
         private bool _clickable = true;
+        private bool _disabledOutlined = true;
         private bool _isPointerOver;
         private ButtonState _defaultState = ButtonState.NONE;
 
@@ -55,7 +56,7 @@ namespace YARG.Menu.Persistent
         private Sprite _defaultButtonIcon;
         private bool _directionalIconVertical;
         private bool IsPointerHolding => _entry?.HasHoldHandler == true && _holdTracker?.IsHolding == true;
-        private bool IsDisabledState => _currentState == ButtonState.DISABLED;
+        public bool IsDisabledState => _currentState == ButtonState.DISABLED;
 
         public enum ButtonState
         {
@@ -109,6 +110,7 @@ namespace YARG.Menu.Persistent
             _buttonImage.rectTransform.anchoredPosition = _buttonImagePosition;
             _buttonImage.rectTransform.sizeDelta = _buttonImageSize;
             _buttonHoldFill.color = _buttonFillColor;
+            _currentState = ButtonState.NONE;
             ApplyState(_defaultState);
         }
 
@@ -195,8 +197,9 @@ namespace YARG.Menu.Persistent
             _entry?.InvokeHoldOffHandler();
         }
 
-        public void DisableButton()
+        public void DisableButton(bool outlined = true)
         {
+            _disabledOutlined = outlined;
             _clickable = false;
             ClearHoldState();
             ApplyState(ButtonState.DISABLED);
@@ -299,8 +302,9 @@ namespace YARG.Menu.Persistent
                     _buttonText.color = Color.white;
                     break;
                 case ButtonState.DISABLED:
-                    _buttonBackground.color = _darkCoolGrey;
-                    _buttonOutline.color = _darkCoolGrey;
+                    var disabledBackground = _disabledOutlined ? _darkCoolGrey : _maskableClear;
+                    _buttonBackground.color = disabledBackground;
+                    _buttonOutline.color = disabledBackground;
                     _buttonImage.color = _coolGrey;
                     _buttonLabel.color = _coolGrey;
                     _buttonText.color = _coolGrey;

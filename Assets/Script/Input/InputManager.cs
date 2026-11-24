@@ -260,13 +260,6 @@ namespace YARG.Input
             //  profile bound to the keyboard or mouse. Just seems like a waste of cycles to check
             //  on every input event.
 
-            if (device is Keyboard keyboard && UnclaimedDevicePressed != null &&
-                !_registeredDevices.Contains(keyboard) && IsKeyboardJoinPress(eventPtr))
-            {
-                eventPtr.handled = UnclaimedDevicePressed(keyboard);
-                return;
-            }
-
             // For now, ignore keyboard, mouse, and pen entirely
             if (device is Keyboard or Mouse or Pen)
             {
@@ -334,20 +327,6 @@ namespace YARG.Input
             }
             _previousEventTimes[device] = eventPtr.time;
 #endif
-        }
-
-        private static bool IsKeyboardJoinPress(InputEventPtr eventPtr)
-        {
-            foreach (var control in eventPtr.EnumerateChangedControls())
-            {
-                if (control is KeyControl { keyCode: Key.Enter or Key.NumpadEnter or Key.Digit1 } key &&
-                    key.IsValueConsideredPressed(key.ReadValueFromEvent(eventPtr)))
-                {
-                    return true;
-                }
-            }
-
-            return false;
         }
 
         private static void OnFocusChange(bool focused)

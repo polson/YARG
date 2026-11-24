@@ -35,6 +35,7 @@ namespace YARG.Menu.DifficultySelect
         internal const float SLIDE_DISTANCE = 900f;
         internal const float JOIN_STRIP_HEIGHT = 72f;
         internal const float SLIDE_SECONDS = 0.3f;
+        private const int OPEN_CARD_SORTING_ORDER = 107;
 
         private static readonly GameMode[] NEW_PROFILE_MODES =
         {
@@ -61,18 +62,27 @@ namespace YARG.Menu.DifficultySelect
         [SerializeField]
         private BandColumn _columnPrefab;
 
+        private static readonly Dictionary<YargPlayer, int> _seats = new();
+
         private readonly List<BandColumn> _columns = new();
         private readonly List<Instrument> _instruments = new();
         private readonly Dictionary<RectTransform, Tween> _shifts = new();
         private readonly List<LayoutElement> _joinSlots = new();
+        private readonly Dictionary<BandColumn, (InputDevice Device, bool Owned, YargProfile Created)> _joins = new();
 
         private List<SongEntry> _songs;
         private Action _startSong;
         private int _focusIndex;
         private bool _startPending;
+        private bool _started;
+        private IDisposable _startInputBlocker;
+        private Tween _startDelay;
+        private Canvas _bandCanvas;
+        private int _bandSortingOrder;
         private bool _suppressPlayerEvents;
         private readonly List<InputDevice> _pendingJoins = new();
         private Func<bool> _canEngage;
+        private NavigationScheme _scheme;
         private bool _hidden;
 
         internal IReadOnlyList<SongEntry> Songs => _songs;
@@ -85,34 +95,31 @@ namespace YARG.Menu.DifficultySelect
 
         private bool IsFull => PlayerContainer.Players.Count >= MAX_PLAYERS;
 
+        private bool IsJoinBlocked => _started || DialogManager.Instance.IsDialogShowing || IsFull ||
+            (IsOvershell && (_hidden || !_canEngage()));
+
+        public void DiscardCopiedContent()
+        {
+            foreach (Transform child in _band)
+            {
+                if (child != _joinSlot.transform)
+                {
+                    Destroy(child.gameObject);
+                }
+            }
+        }
+
         public void Open(List<SongEntry> songs, DifficultyRing ringTemplate, Action startSong)
         {
-            IsOpen = true;
-            IsOvershell = false;
             _songs = songs;
             RingTemplate = ringTemplate;
             _startSong = startSong;
-            _startPending = false;
-            _focusIndex = 0;
-
             UpdateInstruments();
 
-            foreach (var player in PlayerContainer.Players)
-            {
-                player.Profile.RestoreSavedModifiers();
-            }
+            IsOvershell = false;
+            OpenBand();
 
-            _joinSlot.gameObject.SetActive(false);
-            _band.gameObject.SetActive(true);
-            _footer.gameObject.SetActive(true);
-            ShowFooterBackground(true);
-
-            foreach (var player in PlayerContainer.Players.ToList())
-            {
-                InsertColumn(player, true, null).OpenForSong();
-            }
-
-            _ = Navigator.Instance.PushScheme(new NavigationScheme(new()
+            _scheme = new NavigationScheme(new()
             {
                 new NavigationScheme.Entry(MenuAction.Up, "Menu.Common.Up",
                     ctx => ColumnFor(ctx.Player)?.Nav.SelectPrevious(ctx.IsRepeat)),
@@ -120,47 +127,115 @@ namespace YARG.Menu.DifficultySelect
                     ctx => ColumnFor(ctx.Player)?.Nav.SelectNext(ctx.IsRepeat)),
                 new NavigationScheme.Entry(MenuAction.Green, "Menu.Common.Confirm", OnConfirm),
                 new NavigationScheme.Entry(MenuAction.Red, "Menu.Common.Back", OnBack),
-            }, false));
-
+            }, allowsMusicPlayer: false);
+            _ = Navigator.Instance.PushScheme(_scheme);
             Navigator.Instance.NavigationEvent += OnNavigationEvent;
 
-            InputManager.UnclaimedDevicePressed = OnUnclaimedDevicePressed;
-            PlayerContainer.PlayerAdded += OnPlayerAdded;
-            PlayerContainer.PlayerRemoved += OnPlayerRemoved;
-
+            ListenForPlayers();
             OnColumnChanged();
         }
 
         public void OpenOvershell(Func<bool> canEngage)
         {
-            IsOpen = true;
-            IsOvershell = true;
             _canEngage = canEngage;
             _hidden = false;
+
+            IsOvershell = true;
+            OpenBand();
+            Navigator.Instance.InputInterceptor = InterceptOvershellInput;
+
+            ListenForPlayers();
+            OnColumnChanged();
+        }
+
+        private void OpenBand()
+        {
+            IsOpen = true;
             _startPending = false;
+            _started = false;
             _focusIndex = 0;
 
             _joinSlot.gameObject.SetActive(false);
             _band.gameObject.SetActive(true);
-            _footer.gameObject.SetActive(false);
+            _footer.gameObject.SetActive(!IsOvershell);
             ShowFooterBackground(true);
 
+            var seats = new Dictionary<YargPlayer, int>(_seats);
             foreach (var player in PlayerContainer.Players.ToList())
             {
-                InsertColumn(player, false, null).OpenOvershell(false);
+                var column = InsertColumn(player, before: null);
+                if (!IsOvershell)
+                {
+                    column.RiseFrom(-SLIDE_DISTANCE);
+                }
+
+                column.Open();
             }
 
-            Navigator.Instance.InputInterceptor = InterceptOvershellInput;
+            SetJoinSlotCount(Mathf.Max(MIN_SLOTS, _columns.Count + 1) - _columns.Count);
+            ApplySeats(seats);
+        }
+
+        private void ApplySeats(Dictionary<YargPlayer, int> seats)
+        {
+            int count = _columns.Count + _joinSlots.Count;
+            var seated = new Transform[count];
+            var unseated = new List<BandColumn>();
+
+            foreach (var column in _columns)
+            {
+                if (seats.TryGetValue(column.Player, out int seat) && seat < count && seated[seat] == null)
+                {
+                    seated[seat] = column.transform;
+                }
+                else
+                {
+                    unseated.Add(column);
+                }
+            }
+
+            int next = 0;
+            foreach (var column in unseated)
+            {
+                while (seated[next] != null)
+                {
+                    next++;
+                }
+
+                seated[next] = column.transform;
+            }
+
+            var joinSlots = new Queue<LayoutElement>(_joinSlots.OrderBy(slot => slot.transform.GetSiblingIndex()));
+            for (int i = 0; i < count; i++)
+            {
+                seated[i] ??= joinSlots.Dequeue().transform;
+                seated[i].SetAsLastSibling();
+            }
+
+            _columns.Sort((a, b) => a.transform.GetSiblingIndex().CompareTo(b.transform.GetSiblingIndex()));
+        }
+
+        private void RecordSeats()
+        {
+            var slots = OrderedSlots();
+            _seats.Clear();
+            foreach (var column in _columns)
+            {
+                _seats[column.Player] = slots.IndexOf(column.transform);
+            }
+        }
+
+        private void ListenForPlayers()
+        {
             InputManager.UnclaimedDevicePressed = OnUnclaimedDevicePressed;
             PlayerContainer.PlayerAdded += OnPlayerAdded;
             PlayerContainer.PlayerRemoved += OnPlayerRemoved;
-
-            OnColumnChanged();
         }
 
         public void SetOvershellHidden(bool hidden)
         {
-            if (!IsOpen || !IsOvershell || hidden == _hidden)
+            bool overshellOpen = IsOpen && IsOvershell;
+            if (!overshellOpen || hidden == _hidden)
             {
                 return;
             }
@@ -176,7 +251,7 @@ namespace YARG.Menu.DifficultySelect
                     }
                     else if (column.IsExpanded)
                     {
-                        column.Back();
+                        column.Collapse();
                     }
                 }
             }
@@ -194,22 +269,14 @@ namespace YARG.Menu.DifficultySelect
 
             IsOpen = false;
             _pendingJoins.Clear();
+            _startDelay?.Kill();
+            _startDelay = null;
+            ReleaseStartInputBlocker();
+            Unsubscribe();
 
-            if (InputManager.UnclaimedDevicePressed == OnUnclaimedDevicePressed)
+            foreach (var column in _joins.Keys.ToList())
             {
-                InputManager.UnclaimedDevicePressed = null;
-            }
-
-            PlayerContainer.PlayerAdded -= OnPlayerAdded;
-            PlayerContainer.PlayerRemoved -= OnPlayerRemoved;
-            ReleaseNavigator();
-
-            foreach (var column in _columns.ToList())
-            {
-                if (column.IsJoining)
-                {
-                    CancelJoin(column);
-                }
+                CancelJoin(column);
             }
 
             foreach (var column in _columns)
@@ -218,7 +285,6 @@ namespace YARG.Menu.DifficultySelect
             }
 
             _columns.Clear();
-            _startPending = false;
 
             _band.gameObject.SetActive(false);
             _footer.gameObject.SetActive(false);
@@ -232,6 +298,11 @@ namespace YARG.Menu.DifficultySelect
 
         private void OnDestroy()
         {
+            Unsubscribe();
+        }
+
+        private void Unsubscribe()
+        {
             if (InputManager.UnclaimedDevicePressed == OnUnclaimedDevicePressed)
             {
                 InputManager.UnclaimedDevicePressed = null;
@@ -239,11 +310,7 @@ namespace YARG.Menu.DifficultySelect
 
             PlayerContainer.PlayerAdded -= OnPlayerAdded;
             PlayerContainer.PlayerRemoved -= OnPlayerRemoved;
-            ReleaseNavigator();
-        }
 
-        private void ReleaseNavigator()
-        {
             var navigator = Navigator.Instance;
             if (navigator == null)
             {
@@ -271,7 +338,10 @@ namespace YARG.Menu.DifficultySelect
 
                 foreach (var device in devices)
                 {
-                    Join(device);
+                    if (!IsJoinBlocked)
+                    {
+                        Join(device);
+                    }
                 }
             }
 
@@ -280,6 +350,24 @@ namespace YARG.Menu.DifficultySelect
                 _startPending = false;
                 StartSong();
             }
+
+            UpdateSortingOrder();
+        }
+
+        private void UpdateSortingOrder()
+        {
+            if (_bandCanvas == null)
+            {
+                if (!_band.TryGetComponent(out _bandCanvas))
+                {
+                    return;
+                }
+
+                _bandSortingOrder = _bandCanvas.sortingOrder;
+            }
+
+            bool raise = IsOvershell && _columns.Any(c => c.IsExpanded);
+            _bandCanvas.sortingOrder = raise ? OPEN_CARD_SORTING_ORDER : _bandSortingOrder;
         }
 
         internal void OnColumnChanged()
@@ -293,6 +381,7 @@ namespace YARG.Menu.DifficultySelect
 
             int slots = Mathf.Max(MIN_SLOTS, _columns.Count + 1);
             SetJoinSlotCount(slots - _columns.Count);
+            RecordSeats();
 
             string joinText = IsFull
                 ? Localize.KeyFormat("Menu.DifficultySelect.Band.Full", MAX_PLAYERS)
@@ -343,13 +432,10 @@ namespace YARG.Menu.DifficultySelect
 
         private void DestroyJoinSlot(LayoutElement slot)
         {
+            var card = JoinCard(slot);
             _joinSlots.Remove(slot);
-            if (_shifts.Remove(JoinCard(slot), out var shift))
-            {
-                shift.Kill();
-            }
-
-            JoinCard(slot).DOKill();
+            _shifts.Remove(card);
+            card.DOKill();
             slot.gameObject.SetActive(false);
             Destroy(slot.gameObject);
         }
@@ -429,20 +515,12 @@ namespace YARG.Menu.DifficultySelect
 
         internal void ChooseJoinProfile(BandColumn column, YargProfile profile)
         {
-            var device = column.JoinDevice;
-
             if (profile != column.Player.Profile)
             {
-                var created = column.CreatedProfile;
-                DetachPlayer(column);
+                var device = _joins[column].Device;
+                ReleaseJoin(column);
 
-                if (created is not null && created != profile)
-                {
-                    PlayerContainer.RemoveProfile(created);
-                    column.CreatedProfile = null;
-                }
-
-                var player = AttachPlayer(profile, device, out bool owned);
+                var player = AttachPlayer(profile, device, out _);
                 if (player is null)
                 {
                     RemoveColumn(column);
@@ -450,18 +528,10 @@ namespace YARG.Menu.DifficultySelect
                 }
 
                 column.Player = player;
-                column.JoinDeviceOwned = owned;
             }
 
-            if (IsOvershell)
-            {
-                column.OpenOvershell(true);
-            }
-            else
-            {
-                column.OpenForSong();
-            }
-
+            _joins.Remove(column);
+            column.CompleteJoin();
             OnColumnChanged();
             PlayerContainer.SaveProfiles();
             BindingsContainer.SaveBindings();
@@ -481,15 +551,40 @@ namespace YARG.Menu.DifficultySelect
 
         internal void CancelJoin(BandColumn column)
         {
-            var created = column.CreatedProfile;
-            DetachPlayer(column);
+            ReleaseJoin(column);
+            RemoveColumn(column);
+        }
+
+        private void ReleaseJoin(BandColumn column)
+        {
+            var (device, owned, created) = _joins[column];
+            var player = column.Player;
+
+            if (!owned)
+            {
+                player.DisableInputs();
+                player.DeviceInfo.RemoveController(device);
+            }
+
+            DisposePlayer(player);
 
             if (created is not null)
             {
                 PlayerContainer.RemoveProfile(created);
             }
+        }
 
-            RemoveColumn(column);
+        private void DisposePlayer(YargPlayer player)
+        {
+            _suppressPlayerEvents = true;
+            try
+            {
+                PlayerContainer.DisposePlayer(player);
+            }
+            finally
+            {
+                _suppressPlayerEvents = false;
+            }
         }
 
         internal void Disconnect(BandColumn column)
@@ -500,21 +595,17 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            _suppressPlayerEvents = true;
-            try
-            {
-                PlayerContainer.DisposePlayer(column.Player);
-            }
-            finally
-            {
-                _suppressPlayerEvents = false;
-            }
-
+            DisposePlayer(column.Player);
             RemoveColumn(column);
         }
 
         private void OnConfirm(NavigationContext context)
         {
+            if (_started)
+            {
+                return;
+            }
+
             var column = ColumnFor(context.Player);
             if (column is not null && !column.Expand())
             {
@@ -524,6 +615,11 @@ namespace YARG.Menu.DifficultySelect
 
         private void OnBack(NavigationContext context)
         {
+            if (_started)
+            {
+                return;
+            }
+
             var column = ColumnFor(context.Player);
             if (column is null || column.IsAtTopLevel)
             {
@@ -544,7 +640,8 @@ namespace YARG.Menu.DifficultySelect
                 _                => 0,
             };
 
-            if (direction == 0 || context.Player is not null || _columns.Count == 0)
+            bool movesFocus = direction != 0 && context.Player is null && _columns.Count > 0;
+            if (!movesFocus)
             {
                 return;
             }
@@ -555,12 +652,12 @@ namespace YARG.Menu.DifficultySelect
 
         private bool InterceptOvershellInput(NavigationContext context)
         {
-            if (_hidden)
+            if (_hidden || !_canEngage())
             {
                 return false;
             }
 
-            var column = context.Player is null ? null : _columns.FirstOrDefault(c => c.Player == context.Player);
+            var column = FindColumn(context.Player);
             if (column is null)
             {
                 return IsMenuExitAction(context.Action) && AnyColumnOpen();
@@ -616,18 +713,21 @@ namespace YARG.Menu.DifficultySelect
 
         private bool AnyColumnOpen()
         {
-            return _columns.Any(c => c.IsExpanded && !c.IsSittingOut);
+            return _columns.Any(c => c.IsExpanded && !c.IsSittingOut && c.Player.DeviceInfo.HasControllerAssigned);
         }
 
         private BandColumn ColumnFor(YargPlayer player)
         {
-            if (player is not null)
-            {
-                return _columns.FirstOrDefault(c => c.Player == player);
-            }
-
-            return _columns.Count > 0 ? _columns[Mathf.Clamp(_focusIndex, 0, _columns.Count - 1)] : null;
+            return player is null ? FocusedColumn : FindColumn(player);
         }
+
+        private BandColumn FindColumn(YargPlayer player)
+        {
+            return player is null ? null : _columns.FirstOrDefault(c => c.Player == player);
+        }
+
+        private BandColumn FocusedColumn =>
+            _columns.Count > 0 ? _columns[Mathf.Clamp(_focusIndex, 0, _columns.Count - 1)] : null;
 
         private bool OnUnclaimedDevicePressed(InputDevice device)
         {
@@ -636,19 +736,8 @@ namespace YARG.Menu.DifficultySelect
                 return false;
             }
 
-            if (IsOvershell && device is Keyboard)
+            if (IsJoinBlocked)
             {
-                return false;
-            }
-
-            if (!IsOpen || DialogManager.Instance.IsDialogShowing || IsFull || (IsOvershell && (_hidden || !_canEngage())))
-            {
-                return device is not Keyboard;
-            }
-
-            if (device is Keyboard)
-            {
-                Join(device);
                 return true;
             }
 
@@ -662,7 +751,7 @@ namespace YARG.Menu.DifficultySelect
 
         private void Join(InputDevice device)
         {
-            if (!IsOpen || IsFull || PlayerContainer.IsControllerTaken(device))
+            if (IsFull || PlayerContainer.IsControllerTaken(device))
             {
                 return;
             }
@@ -691,10 +780,11 @@ namespace YARG.Menu.DifficultySelect
             }
 
             var before = CaptureCardPositions();
-            var column = InsertColumn(player, false, before);
-            column.BeginJoin(device, owned, created);
+            var column = InsertColumn(player, before);
+            _joins[column] = (device, owned, created);
+            column.BeginJoin();
             OnColumnChanged();
-            ShiftCards(before, SLIDE_SECONDS, SLIDE_SECONDS * 2f);
+            ShiftCards(before, delay: SLIDE_SECONDS, riseDelay: SLIDE_SECONDS * 2f);
 
             LayoutRebuilder.ForceRebuildLayoutImmediate(column.Card);
             column.RiseFrom(_joinCard.rect.height - column.Card.rect.height);
@@ -709,7 +799,7 @@ namespace YARG.Menu.DifficultySelect
             _suppressPlayerEvents = true;
             try
             {
-                player = PlayerContainer.CreatePlayerFromProfile(profile, false);
+                player = PlayerContainer.CreatePlayerFromProfile(profile, resolveDevices: false);
             }
             finally
             {
@@ -726,27 +816,6 @@ namespace YARG.Menu.DifficultySelect
             player.DeviceInfo.ResolveMicrophones();
             player.EnableInputs();
             return player;
-        }
-
-        private void DetachPlayer(BandColumn column)
-        {
-            var player = column.Player;
-
-            if (!column.JoinDeviceOwned && column.JoinDevice is not null)
-            {
-                player.DisableInputs();
-                player.DeviceInfo.RemoveController(column.JoinDevice);
-            }
-
-            _suppressPlayerEvents = true;
-            try
-            {
-                PlayerContainer.DisposePlayer(player);
-            }
-            finally
-            {
-                _suppressPlayerEvents = false;
-            }
         }
 
         private static YargProfile CreateProfileFor(InputDevice device)
@@ -772,24 +841,17 @@ namespace YARG.Menu.DifficultySelect
 
         private void OnPlayerAdded(YargPlayer player)
         {
-            if (_suppressPlayerEvents || _columns.Any(c => c.Player == player))
+            if (_suppressPlayerEvents || FindColumn(player) is not null)
             {
                 return;
             }
 
             var before = CaptureCardPositions();
-            var column = InsertColumn(player, true, before);
-            if (IsOvershell)
-            {
-                column.OpenOvershell(false);
-            }
-            else
-            {
-                column.OpenForSong();
-            }
-
+            var column = InsertColumn(player, before);
+            column.RiseFrom(-SLIDE_DISTANCE);
+            column.Open();
             OnColumnChanged();
-            ShiftCards(before, 0f, null);
+            ShiftCards(before, delay: 0f, riseDelay: null);
         }
 
         private void OnPlayerRemoved(YargPlayer player)
@@ -799,19 +861,17 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            var column = _columns.FirstOrDefault(c => c.Player == player);
-            if (column is null)
+            var column = FindColumn(player);
+            if (column is not null)
             {
-                return;
+                RemoveColumn(column);
             }
-
-            RemoveColumn(column);
         }
 
-        private BandColumn InsertColumn(YargPlayer player, bool slideIn, Dictionary<RectTransform, float> before)
+        private BandColumn InsertColumn(YargPlayer player, Dictionary<RectTransform, float> before)
         {
             var column = Instantiate(_columnPrefab, _band);
-            column.Initialize(this, player, slideIn);
+            column.Initialize(this, player);
 
             var target = _joinSlots.OrderBy(slot => slot.transform.GetSiblingIndex()).FirstOrDefault();
             if (target is not null)
@@ -839,24 +899,27 @@ namespace YARG.Menu.DifficultySelect
 
         internal bool CanMoveColumn(BandColumn column, int direction)
         {
-            var slots = OrderedSlots();
-            int index = slots.IndexOf(column.transform);
-            int target = index + direction;
-            return index >= 0 && target >= 0 && target < slots.Count;
+            return SlotBeside(column, direction) != null;
         }
 
-        internal bool MoveColumn(BandColumn column, int direction)
+        private Transform SlotBeside(BandColumn column, int direction)
         {
             var slots = OrderedSlots();
             int index = slots.IndexOf(column.transform);
             int target = index + direction;
-            if (index < 0 || target < 0 || target >= slots.Count)
+            bool inRange = index >= 0 && target >= 0 && target < slots.Count;
+            return inRange ? slots[target] : null;
+        }
+
+        internal bool MoveColumn(BandColumn column, int direction)
+        {
+            var other = SlotBeside(column, direction);
+            if (other == null)
             {
                 return false;
             }
 
-            var other = slots[target];
-            var focused = _columns.Count > 0 ? _columns[Mathf.Clamp(_focusIndex, 0, _columns.Count - 1)] : null;
+            var focused = FocusedColumn;
             var before = CaptureCardPositions();
 
             int siblingIndex = column.transform.GetSiblingIndex();
@@ -864,14 +927,11 @@ namespace YARG.Menu.DifficultySelect
             other.SetSiblingIndex(siblingIndex);
 
             _columns.Sort((a, b) => a.transform.GetSiblingIndex().CompareTo(b.transform.GetSiblingIndex()));
-            if (focused is not null)
-            {
-                _focusIndex = _columns.IndexOf(focused);
-            }
+            _focusIndex = _columns.IndexOf(focused);
 
             OnColumnChanged();
             PlayerContainer.SaveProfiles();
-            ShiftCards(before, 0f, null);
+            ShiftCards(before, delay: 0f, riseDelay: null);
 
             foreach (var c in _columns)
             {
@@ -904,6 +964,7 @@ namespace YARG.Menu.DifficultySelect
             int siblingIndex = column.transform.GetSiblingIndex();
 
             _columns.Remove(column);
+            _joins.Remove(column);
             _shifts.Remove(column.Card);
             column.DismissAndDestroy();
 
@@ -914,7 +975,7 @@ namespace YARG.Menu.DifficultySelect
 
             RefreshProfilePickers(column);
             OnColumnChanged();
-            ShiftCards(before, SLIDE_SECONDS, SLIDE_SECONDS);
+            ShiftCards(before, delay: SLIDE_SECONDS, riseDelay: SLIDE_SECONDS);
         }
 
         private Dictionary<RectTransform, float> CaptureCardPositions()
@@ -964,20 +1025,19 @@ namespace YARG.Menu.DifficultySelect
 
         private void ShiftCard(RectTransform card, Dictionary<RectTransform, float> before, float delay)
         {
-            if (_shifts.TryGetValue(card, out var running))
+            if (_shifts.Remove(card, out var running))
             {
                 running.Kill();
-                _shifts.Remove(card);
             }
 
             float offset = before.TryGetValue(card, out float position)
                 ? position - SlotPosition(card)
                 : 0f;
 
-            card.anchoredPosition = new Vector2(offset, card.anchoredPosition.y);
-            if (Mathf.Abs(offset) < 0.5f)
+            bool settled = Mathf.Abs(offset) < 0.5f;
+            card.anchoredPosition = new Vector2(settled ? 0f : offset, card.anchoredPosition.y);
+            if (settled)
             {
-                card.anchoredPosition = new Vector2(0f, card.anchoredPosition.y);
                 return;
             }
 
@@ -1007,11 +1067,7 @@ namespace YARG.Menu.DifficultySelect
             int ready = _columns.Count(c => c.IsDecided && !c.IsSittingOut);
             bool allDecided = _columns.Count > 0 && _columns.All(c => c.IsDecided);
 
-            if (_columns.Count == 0)
-            {
-                _footer.text = Localize.Key("Menu.DifficultySelect.Band.NoPlayers");
-            }
-            else if (allDecided && ready == 0)
+            if (allDecided && ready == 0)
             {
                 _footer.text = Localize.Key("Menu.DifficultySelect.Band.NobodyPlaying");
             }
@@ -1021,10 +1077,22 @@ namespace YARG.Menu.DifficultySelect
             }
 
             _startPending = allDecided && ready > 0;
+
+            if (!IsOvershell && _scheme != null &&
+                _scheme.SetActionDisabled(MenuAction.Green, _columns.Count == 0) && HelpBar.Instance != null)
+            {
+                HelpBar.Instance.RefreshDisabledActions(_scheme);
+            }
         }
 
         private void StartSong()
         {
+            if (_started)
+            {
+                return;
+            }
+
+            _started = true;
             foreach (var column in _columns)
             {
                 column.Player.SittingOut = column.IsSittingOut;
@@ -1037,7 +1105,34 @@ namespace YARG.Menu.DifficultySelect
                 PlayerSelectionRules.ShareVocalModifiers(vocalLeader, players);
             }
 
-            _startSong?.Invoke();
+            _startInputBlocker = Navigator.Instance.PushInputBlocker();
+            foreach (var column in _columns)
+            {
+                column.SlideOut();
+            }
+
+            foreach (var slot in _joinSlots)
+            {
+                JoinCard(slot).DOAnchorPosY(-SLIDE_DISTANCE, SLIDE_SECONDS)
+                    .SetEase(Ease.InCubic)
+                    .SetUpdate(true)
+                    .SetLink(slot.gameObject);
+            }
+
+            _startDelay = DOVirtual.DelayedCall(SLIDE_SECONDS, () =>
+                {
+                    _startDelay = null;
+                    ReleaseStartInputBlocker();
+                    _startSong();
+                })
+                .SetUpdate(true)
+                .SetLink(gameObject);
+        }
+
+        private void ReleaseStartInputBlocker()
+        {
+            _startInputBlocker?.Dispose();
+            _startInputBlocker = null;
         }
 
         private void UpdateInstruments()
@@ -1127,7 +1222,6 @@ namespace YARG.Menu.DifficultySelect
 
         private float GetColumnWidth(int slots)
         {
-            slots = Mathf.Max(1, slots);
             float spacing = _band.GetComponent<HorizontalLayoutGroup>().spacing;
             float available = _band.rect.width - spacing * (slots - 1);
             return Mathf.Min(MAX_COLUMN_WIDTH, available / slots);

@@ -4,7 +4,6 @@ using DG.Tweening;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
-using UnityEngine.InputSystem;
 using UnityEngine.UI;
 using YARG.Core;
 using YARG.Core.Extensions;
@@ -96,7 +95,6 @@ namespace YARG.Menu.DifficultySelect
         private Modifier _excusableModifiers;
         private readonly List<Texture2D> _avatarTextures = new();
         private readonly List<Difficulty> _difficulties = new();
-        private readonly Dictionary<Difficulty, DifficultyItem> _difficultyItems = new();
         private readonly List<(ModifierItem Item, Modifier Modifier)> _modifierToggles = new();
 
         private BandColumnState _builtState;
@@ -108,16 +106,12 @@ namespace YARG.Menu.DifficultySelect
         private string _warning;
         private NavigatableBehaviour _readyButton;
         private NavigatableBehaviour _difficultyButton;
-        private bool _selectReady;
-        private NavigatableBehaviour _returnButton;
+        private NavigatableBehaviour _defaultButton;
         private NavigatableBehaviour _moveLeftButton;
         private NavigatableBehaviour _moveRightButton;
         private readonly List<(Transform Row, GameObject Divider)> _dividers = new();
 
-        public YargPlayer Player;
-        public InputDevice JoinDevice;
-        public bool JoinDeviceOwned;
-        public YargProfile CreatedProfile;
+        public YargPlayer Player { get; set; }
 
         public BandColumnState State { get; private set; }
         public bool Ready { get; private set; }
@@ -151,21 +145,15 @@ namespace YARG.Menu.DifficultySelect
         {
             _header = new PlayerCardHeader(_heading, _icon);
             _expandedBottomPadding = _cardLayout.padding.bottom;
+            _borderColor = _border.color;
+            _headingColor = _heading.color;
         }
 
-        public void Initialize(BandSelectMenu menu, YargPlayer player, bool slideIn)
+        public void Initialize(BandSelectMenu menu, YargPlayer player)
         {
             _menu = menu;
             Player = player;
-            _borderColor = _border.color;
-            _headingColor = _heading.color;
-
             _nav.SelectionChanged += OnSelectionChanged;
-
-            if (slideIn)
-            {
-                RiseFrom(-BandSelectMenu.SLIDE_DISTANCE);
-            }
         }
 
         public void RiseFrom(float offset)
@@ -199,6 +187,22 @@ namespace YARG.Menu.DifficultySelect
                 .OnComplete(() => Destroy(gameObject));
         }
 
+        public void SlideOut()
+        {
+            _rise?.Kill();
+            _collapse?.Kill();
+            if (!TryGetComponent(out CanvasGroup group))
+            {
+                group = gameObject.AddComponent<CanvasGroup>();
+            }
+
+            group.blocksRaycasts = false;
+            _card.DOAnchorPosY(-BandSelectMenu.SLIDE_DISTANCE, BandSelectMenu.SLIDE_SECONDS)
+                .SetEase(Ease.InCubic)
+                .SetUpdate(true)
+                .SetLink(gameObject);
+        }
+
         public void SetFocused(bool focused)
         {
             _border.color = focused
@@ -213,20 +217,47 @@ namespace YARG.Menu.DifficultySelect
             _header.Fit(_layout.preferredWidth);
         }
 
-        public void BeginJoin(InputDevice device, bool deviceOwned, YargProfile createdProfile)
+        public void BeginJoin()
         {
-            JoinDevice = device;
-            JoinDeviceOwned = deviceOwned;
-            CreatedProfile = createdProfile;
             Ready = false;
             State = BandColumnState.ChooseProfile;
             Rebuild();
         }
 
-        public void OpenForSong()
+        public void Open()
         {
-            JoinDevice = null;
-            CreatedProfile = null;
+            if (_menu.IsOvershell)
+            {
+                Collapse();
+            }
+            else
+            {
+                OpenForSong();
+            }
+        }
+
+        public void Collapse()
+        {
+            ResetForOvershell();
+            Rebuild();
+        }
+
+        public void CompleteJoin()
+        {
+            if (_menu.IsOvershell)
+            {
+                ResetForOvershell();
+                RebuildFromCurrentTop();
+            }
+            else
+            {
+                OpenForSong();
+            }
+        }
+
+        private void OpenForSong()
+        {
+            Player.Profile.RestoreSavedModifiers();
             Ready = false;
             _warning = null;
             _locked = false;
@@ -253,33 +284,25 @@ namespace YARG.Menu.DifficultySelect
                     continue;
                 }
 
-                ApplyInstrument(candidate, mode, false);
+                SetGameMode(mode);
+                profile.CurrentInstrument = candidate;
+                profile.ResolveHarmonyIndex(_menu.MaxHarmonyIndex);
+                CollectOptions();
                 State = BandColumnState.Main;
                 Rebuild();
                 return;
             }
 
-            OpenPicker(false);
+            OpenPicker(canCancel: false);
         }
 
-        public void OpenOvershell(bool animate)
+        private void ResetForOvershell()
         {
-            JoinDevice = null;
-            CreatedProfile = null;
             Ready = false;
             _warning = null;
             _locked = false;
             _collapsed = true;
             State = BandColumnState.Main;
-
-            if (animate)
-            {
-                RebuildFromCurrentTop();
-            }
-            else
-            {
-                Rebuild();
-            }
         }
 
         public void Back()
@@ -297,7 +320,7 @@ namespace YARG.Menu.DifficultySelect
                     SlideDownAndCollapse();
                     break;
                 case BandColumnState.SittingOut:
-                    OpenPicker(true);
+                    OpenPicker(canCancel: true);
                     break;
                 case BandColumnState.Instrument when _pickerCanCancel:
                     SetState(_pickerReturnState);
@@ -333,12 +356,11 @@ namespace YARG.Menu.DifficultySelect
             }
 
             _nav.ClearNavigatables();
-            _difficultyItems.Clear();
             ClearAvatars();
             _modifierToggles.Clear();
             _readyButton = null;
             _difficultyButton = null;
-            _returnButton = null;
+            _defaultButton = null;
             _moveLeftButton = null;
             _moveRightButton = null;
             for (int i = Rows.childCount - 1; i >= 0; i--)
@@ -385,9 +407,14 @@ namespace YARG.Menu.DifficultySelect
             _builtState = State;
 
             StyleRows();
-            SelectDefault(sameState, previousIndex);
+            SelectDefault(sameState ? previousIndex : null);
             UpdateDividers();
-            FitRows(!sameState);
+            if (!sameState)
+            {
+                Rows.anchoredPosition = Vector2.zero;
+            }
+
+            FitRows();
         }
 
         private void StyleRows()
@@ -456,37 +483,28 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        private void SelectDefault(bool sameState, int? previousIndex)
+        private void SelectDefault(int? restoreIndex)
         {
-            bool selectReady = _selectReady;
-            _selectReady = false;
-
             if (_nav.Count == 0 || _nav.SelectedIndex is not null)
             {
                 return;
             }
 
-            var currentDifficulty = Player.Profile.CurrentDifficulty;
-            if (sameState && previousIndex is { } index)
+            if (restoreIndex is { } index)
             {
                 _nav.SelectAt(Mathf.Clamp(index, 0, _nav.Count - 1));
             }
-            else if (_returnButton != null)
+            else if (_defaultButton != null)
             {
-                _nav.SelectAt(IndexOf(_returnButton));
+                _nav.SelectAt(IndexOf(_defaultButton));
             }
-            else if (_readyButton != null && (Ready || selectReady))
+            else if (_readyButton != null && Ready)
             {
                 _nav.SelectAt(IndexOf(_readyButton));
             }
-            else if (_difficultyButton != null && !Ready)
+            else if (_difficultyButton != null)
             {
                 _nav.SelectAt(IndexOf(_difficultyButton));
-            }
-            else if (State == BandColumnState.Difficulty && _difficulties.Contains(currentDifficulty) &&
-                _difficultyItems.TryGetValue(currentDifficulty, out var current))
-            {
-                _nav.SelectAt(IndexOf(current.Button));
             }
             else
             {
@@ -494,7 +512,7 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        private void FitRows(bool resetScroll)
+        private void FitRows()
         {
             _cardLayout.padding.bottom = IsCollapsed
                 ? _expandedBottomPadding - COLLAPSED_PADDING_TRIM
@@ -511,11 +529,6 @@ namespace YARG.Menu.DifficultySelect
             _viewportLayout.preferredHeight = Mathf.Min(contentHeight, maxHeight);
             scrollbar.gameObject.SetActive(scrollable);
             _rowLayout.padding.right = scrollable ? Mathf.CeilToInt(scrollbar.sizeDelta.x) : 0;
-
-            if (resetScroll)
-            {
-                rows.anchoredPosition = Vector2.zero;
-            }
 
             LayoutRebuilder.ForceRebuildLayoutImmediate(_card);
             ScrollToSelection();
@@ -592,6 +605,11 @@ namespace YARG.Menu.DifficultySelect
             var row = AddRow(taken ? Localize.Key("Menu.DifficultySelect.Band.InUse") : null, profile.Name,
                 () => _menu.ChooseJoinProfile(this, profile), !taken, _profilePrefab, height);
             AddAvatar(row, profile, height);
+
+            if (current)
+            {
+                _defaultButton = row.Button;
+            }
         }
 
         private void AddAvatar(DifficultyItem row, YargProfile profile, float rowHeight)
@@ -647,17 +665,17 @@ namespace YARG.Menu.DifficultySelect
                 warning.SetTextColor(WARNING_COLOR);
             }
 
-            var ready = AddRow(null,
+            _readyButton = AddRow(null,
                 Localize.Key("Menu.DifficultySelect.Band", Ready ? "Unready" : "Ready"),
-                ToggleReady, true, _readyPrefab);
-            _readyButton = ready.Button;
+                ToggleReady, true, _readyPrefab).Button;
 
             AddInstrumentRow();
 
+            bool canPickDifficulty = !Ready && _difficulties.Count > 0;
             var difficulty = AddRow(Localize.Key("Menu.DifficultySelect.Difficulty"),
                 profile.CurrentDifficulty.ToLocalizedName(), () => SetState(BandColumnState.Difficulty),
-                !Ready && _difficulties.Count > 0, height: TWO_LINE_ROW_HEIGHT);
-            if (!Ready && _difficulties.Count > 0)
+                canPickDifficulty, height: TWO_LINE_ROW_HEIGHT);
+            if (canPickDifficulty)
             {
                 _difficultyButton = difficulty.Button;
             }
@@ -731,7 +749,7 @@ namespace YARG.Menu.DifficultySelect
 
             var row = AddRow(Localize.Key("Menu.DifficultySelect.Instrument"),
                 PlayerSelectionRules.GetInstrumentDisplayName(profile.CurrentInstrument, profile.GameMode),
-                () => OpenPicker(true), !Ready, height: height);
+                () => OpenPicker(canCancel: true), !Ready, height: height);
 
             if (showRings)
             {
@@ -744,14 +762,21 @@ namespace YARG.Menu.DifficultySelect
         {
             SetPlayerHeading();
 
+            var current = Player.Profile.CurrentDifficulty;
             foreach (var difficulty in EnumExtensions<Difficulty>.Values)
             {
-                var capture = difficulty;
-                _difficultyItems[difficulty] = AddRow(null, difficulty.ToLocalizedName(),
-                    () => ConfirmDifficulty(capture), _difficulties.Contains(difficulty));
-            }
+                if (!_difficulties.Contains(difficulty))
+                {
+                    continue;
+                }
 
-            UpdateDifficultyHighlight();
+                var row = AddRow(null, difficulty.ToLocalizedName(), () => ConfirmDifficulty(difficulty), true);
+                if (difficulty == current)
+                {
+                    row.SetTextColor(BandSelectMenu.READY_COLOR);
+                    _defaultButton = row.Button;
+                }
+            }
         }
 
         private void BuildInstrumentPicker()
@@ -770,9 +795,8 @@ namespace YARG.Menu.DifficultySelect
                 }
 
                 anyPlayable = true;
-                var capture = instrument;
                 var row = AddRow(null, PlayerSelectionRules.GetInstrumentLabelWithTier(song, instrument, mode),
-                    () => PickInstrument(capture, mode), true, height: TWO_LINE_ROW_HEIGHT);
+                    () => PickInstrument(instrument), true, height: TWO_LINE_ROW_HEIGHT);
 
                 if (instrument == profile.CurrentInstrument && _pickerCanCancel)
                 {
@@ -869,17 +893,16 @@ namespace YARG.Menu.DifficultySelect
 
             foreach (var displayType in PlayerSelectionRules.OPEN_LANE_OPTIONS)
             {
-                var capture = displayType;
                 var row = AddRow(null, displayType.ToLocalizedName(), () =>
                 {
-                    profile.OpenLaneDisplayType = capture;
+                    profile.OpenLaneDisplayType = displayType;
                     SetState(BandColumnState.Modifiers);
                 }, true);
 
                 if (displayType == profile.OpenLaneDisplayType)
                 {
                     row.SetTextColor(BandSelectMenu.READY_COLOR);
-                    _returnButton = row.Button;
+                    _defaultButton = row.Button;
                 }
             }
         }
@@ -887,18 +910,20 @@ namespace YARG.Menu.DifficultySelect
         private void BuildSittingOut()
         {
             SetPlayerHeading();
-            AddRow(null, Localize.Key("Menu.DifficultySelect.Band.SittingOut"), () => OpenPicker(true), !_locked);
+            AddRow(null, Localize.Key("Menu.DifficultySelect.Band.SittingOut"), () => OpenPicker(canCancel: true), !_locked);
         }
 
-        private void PickInstrument(Instrument instrument, GameMode mode)
+        private void PickInstrument(Instrument instrument)
         {
-            if (_menu.GetInstrumentBlocker(this, instrument, out mode) is not null)
+            if (_menu.GetInstrumentBlocker(this, instrument, out var mode) is not null)
             {
                 Rebuild();
                 return;
             }
 
-            ApplyInstrument(instrument, mode, true);
+            SetGameMode(mode);
+            PlayerSelectionRules.PickInstrument(Player.Profile, instrument, _menu.Instruments, _menu.MaxHarmonyIndex);
+            CollectOptions();
             Ready = false;
             _warning = null;
             SetState(BandColumnState.Main);
@@ -945,7 +970,8 @@ namespace YARG.Menu.DifficultySelect
 
         public bool Expand()
         {
-            if (State != BandColumnState.Main || Ready || !_collapsed)
+            bool canExpand = State == BandColumnState.Main && !Ready && _collapsed;
+            if (!canExpand)
             {
                 return false;
             }
@@ -981,15 +1007,9 @@ namespace YARG.Menu.DifficultySelect
 
         private void ConfirmDifficulty(Difficulty difficulty)
         {
-            SetDifficulty(difficulty);
-            _selectReady = true;
-            SetState(BandColumnState.Main);
-        }
-
-        private void SetDifficulty(Difficulty difficulty)
-        {
             Player.Profile.CurrentDifficulty = Player.Profile.DifficultyFallback = difficulty;
-            UpdateDifficultyHighlight();
+            SetState(BandColumnState.Main);
+            _nav.SelectAt(IndexOf(_readyButton));
         }
 
         private void CycleHarmonyPart()
@@ -1013,52 +1033,30 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        private void UpdateDifficultyHighlight()
-        {
-            var current = Player.Profile.CurrentDifficulty;
-            foreach (var (difficulty, item) in _difficultyItems)
-            {
-                if (difficulty == current)
-                {
-                    item.SetTextColor(BandSelectMenu.READY_COLOR);
-                }
-                else
-                {
-                    item.ResetTextColor();
-                }
-            }
-        }
-
-        private void ApplyInstrument(Instrument instrument, GameMode mode, bool deliberate)
+        private void SetGameMode(GameMode mode)
         {
             var profile = Player.Profile;
-
-            if (profile.GameMode != mode)
+            if (profile.GameMode == mode)
             {
-                profile.GameMode = mode;
-                Player.DeviceInfo?.RefreshGameMode();
-                PlayerContainer.NotifyProfileChanged(profile);
+                return;
             }
 
-            if (deliberate)
-            {
-                PlayerSelectionRules.PickInstrument(profile, instrument, _menu.Instruments, _menu.MaxHarmonyIndex);
-            }
-            else
-            {
-                profile.CurrentInstrument = instrument;
-                profile.ResolveHarmonyIndex(_menu.MaxHarmonyIndex);
-            }
+            profile.GameMode = mode;
+            Player.DeviceInfo.RefreshGameMode();
+            PlayerContainer.NotifyProfileChanged(profile);
+        }
 
-            _excusableModifiers = PlayerSelectionRules.CollectPossibleModifiers(profile, _modifiers);
-            PlayerSelectionRules.CollectPossibleDifficulties(profile, _menu.Songs, _difficulties);
+        private void CollectOptions()
+        {
+            _excusableModifiers = PlayerSelectionRules.CollectPossibleModifiers(Player.Profile, _modifiers);
+            PlayerSelectionRules.CollectPossibleDifficulties(Player.Profile, _menu.Songs, _difficulties);
         }
 
         private void SetPlayerHeading()
         {
             string mode = Player.Profile.GameMode.ToResourceName();
             _header.SetIcon(mode is null ? null : $"InstrumentIcons[{mode}]");
-            SetHeading(Player.Profile.Name, true);
+            SetHeading(Player.Profile.Name, showIcon: true);
             if (Ready)
             {
                 _heading.color = BandSelectMenu.READY_COLOR;
@@ -1114,7 +1112,7 @@ namespace YARG.Menu.DifficultySelect
             var row = AddRow(header, body, () => SetState(state), interactable, height: height);
             if (interactable && _builtState == state)
             {
-                _returnButton = row.Button;
+                _defaultButton = row.Button;
             }
 
             return row;

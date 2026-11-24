@@ -127,6 +127,10 @@ namespace YARG.Menu.Persistent
                 var button = _buttons[buttonIndex];
                 button.gameObject.SetActive(true);
                 button.SetInfoFromSchemeEntry(entry);
+                if (scheme.IsActionDisabled(entry.Action))
+                {
+                    button.DisableButton(false);
+                }
 
                 buttonIndex++;
             }
@@ -163,7 +167,38 @@ namespace YARG.Menu.Persistent
                 if (button.gameObject.activeSelf && button.Action == entry.Action)
                 {
                     button.SetInfoFromSchemeEntry(entry);
+                    if (scheme.IsActionDisabled(entry.Action))
+                    {
+                        button.DisableButton(false);
+                    }
+
                     return;
+                }
+            }
+        }
+
+        public void RefreshDisabledActions(NavigationScheme scheme)
+        {
+            if (scheme != _scheme)
+            {
+                return;
+            }
+
+            foreach (var button in _buttons)
+            {
+                if (!button.gameObject.activeSelf || button.Action is not { } action)
+                {
+                    continue;
+                }
+
+                bool disabled = scheme.IsActionDisabled(action);
+                if (disabled && !button.IsDisabledState)
+                {
+                    button.DisableButton(false);
+                }
+                else if (!disabled && button.IsDisabledState)
+                {
+                    button.EnableButton();
                 }
             }
         }

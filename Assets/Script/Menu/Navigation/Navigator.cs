@@ -372,7 +372,7 @@ namespace YARG.Menu.Navigation
 
         private void InvokeHoldEvent(NavigationContext ctx)
         {
-            if (ShouldBlockInputs())
+            if (ShouldBlockInputs() || InputInterceptor?.Invoke(ctx) == true)
             {
                 return;
             }

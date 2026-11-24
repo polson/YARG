@@ -380,8 +380,7 @@
                 "MoveLeft": "Move Left",
                 "MoveRight": "Move Right",
                 "Part": "Part {0}",
-                "NobodyPlaying": "Everyone is sitting out",
-                "NoPlayers": "Waiting for players"
+                "NobodyPlaying": "Everyone is sitting out"
             }
         },
         "GameModes": {

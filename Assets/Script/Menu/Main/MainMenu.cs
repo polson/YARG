@@ -63,6 +63,18 @@ namespace YARG.Menu.Main
 
         private void Update()
         {
+            if (MusicLibraryMenu.UseOvershell != _overshell.IsOpen)
+            {
+                if (_overshell.IsOpen)
+                {
+                    _overshell.Close();
+                }
+                else
+                {
+                    _overshell.OpenOvershell(CanEngageOvershell);
+                }
+            }
+
             _overshell.SetOvershellHidden(IsSettingsOpen());
         }
 

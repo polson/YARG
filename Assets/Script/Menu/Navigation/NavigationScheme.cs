@@ -122,6 +122,15 @@ namespace YARG.Menu.Navigation
         /// </summary>
         public MenuAction? VerticalDirectionsModifier;
 
+        private readonly HashSet<MenuAction> _disabledActions = new();
+
+        public bool IsActionDisabled(MenuAction action) => _disabledActions.Contains(action);
+
+        public bool SetActionDisabled(MenuAction action, bool disabled)
+        {
+            return disabled ? _disabledActions.Add(action) : _disabledActions.Remove(action);
+        }
+
         public NavigationScheme(List<Entry> entries, bool? allowsMusicPlayer, Action popCallback = null)
         {
             _entries = entries;
