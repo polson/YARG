@@ -44,6 +44,54 @@ namespace YARG.Menu.DifficultySelect
         private readonly List<(string Label, bool Current, Action Pick)> _settingOptions = new();
         private string _settingOptionsTitle;
         private string _settingKey;
+        private DifficultyItem _editingRow;
+
+        public void Confirm()
+        {
+            if (_nav.SelectedIndex is { } index && _steppers.ContainsKey(_nav.Navigatables[index]))
+            {
+                var row = _nav.Navigatables[index].GetComponentInParent<DifficultyItem>();
+                if (!StopEditing())
+                {
+                    _editingRow = row;
+                    row.SetBodyColor(BandSelectMenu.READY_COLOR);
+                }
+
+                return;
+            }
+
+            _nav.ConfirmSelection();
+        }
+
+        public void NavigateVertical(int direction, bool isRepeat)
+        {
+            if (_editingRow != null && _steppers.TryGetValue(_editingRow.Button, out var step))
+            {
+                step(-direction);
+                return;
+            }
+
+            if (direction < 0)
+            {
+                _nav.SelectPrevious(isRepeat);
+            }
+            else
+            {
+                _nav.SelectNext(isRepeat);
+            }
+        }
+
+        private bool StopEditing()
+        {
+            if (_editingRow == null)
+            {
+                return false;
+            }
+
+            _editingRow.SetBodyColor(null);
+            _editingRow = null;
+            return true;
+        }
 
         public bool AdjustSelection(int direction)
         {
@@ -79,7 +127,7 @@ namespace YARG.Menu.DifficultySelect
                         (mode.ToLocalizedName(), mode == profile.GameMode, (Action) (() => ChangeInputMode(mode)))));
             }
 
-            foreach (var (setting, _) in profile.GameMode.PossibleProfileSettings(new()))
+            foreach (var setting in profile.GameMode.PossibleProfileSettings(new()).Select(s => s.setting).Distinct())
             {
                 if (_settingsOutsideCard.Contains(setting) ||
                     (profile.IsBot && setting == ProfileSettingStrings.INPUT_CALIBRATION))
@@ -217,7 +265,7 @@ namespace YARG.Menu.DifficultySelect
         private void BuildSettingOptions()
         {
             SetPlayerHeading();
-            AddLabel(_settingOptionsTitle);
+            _wrappableRows.Add(AddLabel(_settingOptionsTitle));
 
             foreach (var (label, current, pick) in _settingOptions)
             {
@@ -226,6 +274,7 @@ namespace YARG.Menu.DifficultySelect
                     pick();
                     SetState(BandColumnState.Settings);
                 }, true);
+                _wrappableRows.Add(row);
 
                 if (current)
                 {

@@ -129,9 +129,9 @@ namespace YARG.Menu.DifficultySelect
             _scheme = new NavigationScheme(new()
             {
                 new NavigationScheme.Entry(MenuAction.Up, "Menu.Common.Up",
-                    ctx => ColumnFor(ctx.Player)?.Nav.SelectPrevious(ctx.IsRepeat)),
+                    ctx => ColumnFor(ctx.Player)?.NavigateVertical(-1, ctx.IsRepeat)),
                 new NavigationScheme.Entry(MenuAction.Down, "Menu.Common.Down",
-                    ctx => ColumnFor(ctx.Player)?.Nav.SelectNext(ctx.IsRepeat)),
+                    ctx => ColumnFor(ctx.Player)?.NavigateVertical(1, ctx.IsRepeat)),
                 new NavigationScheme.Entry(MenuAction.Green, "Menu.Common.Confirm", OnConfirm),
                 new NavigationScheme.Entry(MenuAction.Red, "Menu.Common.Back", OnBack),
             }, allowsMusicPlayer: false);
@@ -682,7 +682,7 @@ namespace YARG.Menu.DifficultySelect
             var column = ColumnFor(context.Player);
             if (column is not null && !column.Expand())
             {
-                column.Nav.ConfirmSelection();
+                column.Confirm();
             }
         }
 
@@ -769,13 +769,13 @@ namespace YARG.Menu.DifficultySelect
             switch (context.Action)
             {
                 case MenuAction.Up:
-                    column.Nav.SelectPrevious(context.IsRepeat);
+                    column.NavigateVertical(-1, context.IsRepeat);
                     break;
                 case MenuAction.Down:
-                    column.Nav.SelectNext(context.IsRepeat);
+                    column.NavigateVertical(1, context.IsRepeat);
                     break;
                 case MenuAction.Green:
-                    column.Nav.ConfirmSelection();
+                    column.Confirm();
                     break;
                 case MenuAction.Red:
                     column.Back();

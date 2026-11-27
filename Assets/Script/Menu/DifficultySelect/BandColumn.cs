@@ -45,6 +45,7 @@ namespace YARG.Menu.DifficultySelect
         private const float HEADER_FONT_SIZE_MIN = 6f;
         private const float HEADER_ICON_MIN_CARD_WIDTH = 110f;
         private const float SCROLLBAR_WIDTH = 15f;
+        private const int SCROLL_FADE = 28;
         private const float SCROLLBAR_WIDTH_SHARE = 0.08f;
         private const float ROW_HEIGHT = 52f;
         private const float TWO_LINE_ROW_HEIGHT = 72f;
@@ -73,6 +74,7 @@ namespace YARG.Menu.DifficultySelect
         private bool _wantsHeaderIcon;
         [SerializeField]
         private ScrollRect _scroll;
+        private RectMask2D _viewportMask;
         [SerializeField]
         private VerticalLayoutGroup _rowLayout;
         [SerializeField]
@@ -105,6 +107,7 @@ namespace YARG.Menu.DifficultySelect
         private PlayerCardHeader _header;
         private float _appliedWidth = -1f;
         private readonly List<(DifficultyItem Row, float Height)> _profileRows = new();
+        private readonly List<DifficultyItem> _wrappableRows = new();
         private Tween _rise;
         private Tween _collapse;
         private readonly List<Modifier> _modifiers = new();
@@ -166,6 +169,9 @@ namespace YARG.Menu.DifficultySelect
             _iconLayout = _icon.GetComponent<LayoutElement>();
             _headerContent = _icon.GetComponentInParent<HorizontalLayoutGroup>(true);
             _heading.fontSizeMin = HEADER_FONT_SIZE_MIN;
+            _viewportMask = _scroll.viewport.GetComponent<RectMask2D>();
+            _viewportMask.softness = new Vector2Int(0, SCROLL_FADE);
+            _scroll.onValueChanged.AddListener(_ => UpdateScrollFade());
             _expandedBottomPadding = _cardLayout.padding.bottom;
             _borderColor = _border.color;
             _headingColor = _heading.color;
@@ -341,6 +347,11 @@ namespace YARG.Menu.DifficultySelect
 
         public void Back()
         {
+            if (StopEditing())
+            {
+                return;
+            }
+
             switch (State)
             {
                 case BandColumnState.ChooseProfile:
@@ -397,6 +408,8 @@ namespace YARG.Menu.DifficultySelect
             ClearAvatars();
             _profileRows.Clear();
             _steppers.Clear();
+            _editingRow = null;
+            _wrappableRows.Clear();
             _modifierToggles.Clear();
             _readyButton = null;
             _difficultyButton = null;
@@ -564,6 +577,8 @@ namespace YARG.Menu.DifficultySelect
                 ? _expandedBottomPadding - COLLAPSED_PADDING_TRIM
                 : _expandedBottomPadding;
 
+            WrapLongRows();
+
             var rows = Rows;
             LayoutRebuilder.ForceRebuildLayoutImmediate(rows);
 
@@ -581,11 +596,38 @@ namespace YARG.Menu.DifficultySelect
 
             LayoutRebuilder.ForceRebuildLayoutImmediate(_card);
             ScrollToSelection();
+            UpdateScrollFade();
+        }
+
+        private void UpdateScrollFade()
+        {
+            float hidden = Rows.rect.height - _scroll.viewport.rect.height;
+            float offset = Rows.anchoredPosition.y;
+            bool atTop = offset <= 0.5f;
+            bool atBottom = offset >= hidden - 0.5f;
+            _viewportMask.padding = new Vector4(0f, atBottom ? -SCROLL_FADE : 0f, 0f, atTop ? -SCROLL_FADE : 0f);
         }
 
         public void OnScroll(PointerEventData eventData)
         {
             _scroll.OnScroll(eventData);
+        }
+
+        private void WrapLongRows()
+        {
+            if (_wrappableRows.Count == 0)
+            {
+                return;
+            }
+
+            LayoutRebuilder.ForceRebuildLayoutImmediate(_card);
+            foreach (var row in _wrappableRows)
+            {
+                if (row.WrapIfLong())
+                {
+                    row.GetComponent<LayoutElement>().preferredHeight = TWO_LINE_ROW_HEIGHT;
+                }
+            }
         }
 
         private void ScrollToSelection()
@@ -988,6 +1030,7 @@ namespace YARG.Menu.DifficultySelect
                     profile.OpenLaneDisplayType = displayType;
                     SetState(BandColumnState.Modifiers);
                 }, true);
+                _wrappableRows.Add(row);
 
                 if (displayType == profile.OpenLaneDisplayType)
                 {
@@ -1142,6 +1185,11 @@ namespace YARG.Menu.DifficultySelect
 
         private void OnSelectionChanged(NavigatableBehaviour selected, SelectionOrigin origin)
         {
+            if (_editingRow != null && selected != _editingRow.Button)
+            {
+                StopEditing();
+            }
+
             UpdateDividers();
 
             if (origin == SelectionOrigin.Mouse)

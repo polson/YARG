@@ -24,6 +24,8 @@ namespace YARG.Menu.DifficultySelect
         [SerializeField]
         private Image _avatar;
 
+        private Color? _bodyColor;
+
         [field: SerializeField]
         public NavigatableButton Button { get; private set; }
 
@@ -129,6 +131,30 @@ namespace YARG.Menu.DifficultySelect
         public void SetBody(string body)
         {
             _body.text = body;
+        }
+
+        public void SetBodyColor(Color? color)
+        {
+            _bodyColor ??= _body.color;
+            _body.color = color ?? _bodyColor.Value;
+        }
+
+        public bool WrapIfLong()
+        {
+            var label = _body.gameObject.activeSelf ? _body : _header;
+            if (label.textWrappingMode != TextWrappingModes.NoWrap)
+            {
+                return false;
+            }
+
+            float width = label.rectTransform.rect.width;
+            if (width <= 0f || label.GetPreferredValues(label.text).x <= width)
+            {
+                return false;
+            }
+
+            label.textWrappingMode = TextWrappingModes.Normal;
+            return true;
         }
 
         public void AllowTinyText()
