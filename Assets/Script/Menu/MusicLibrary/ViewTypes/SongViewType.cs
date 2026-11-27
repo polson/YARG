@@ -152,7 +152,7 @@ namespace YARG.Menu.MusicLibrary
         {
             base.PrimaryButtonClick();
 
-            if (MusicLibraryMenu.NeedsPlayers)
+            if (MenuManager.NeedsPlayers)
             {
                 return;
             }

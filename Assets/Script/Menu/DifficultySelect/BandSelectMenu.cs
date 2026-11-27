@@ -66,6 +66,7 @@ namespace YARG.Menu.DifficultySelect
 
         private readonly List<BandColumn> _columns = new();
         private readonly List<Instrument> _instruments = new();
+        private readonly List<GameMode> _modeBuffer = new();
         private readonly Dictionary<RectTransform, Tween> _shifts = new();
         private readonly Dictionary<RectTransform, Tween> _resizes = new();
         private BandColumn _profilesInUse;
@@ -104,17 +105,6 @@ namespace YARG.Menu.DifficultySelect
 
         private bool IsJoinBlocked => _started || DialogManager.Instance.IsDialogShowing || IsFull ||
             (IsOvershell && (_hidden || !_canEngage()));
-
-        public void DiscardCopiedContent()
-        {
-            foreach (Transform child in _band)
-            {
-                if (child != _joinSlot.transform)
-                {
-                    Destroy(child.gameObject);
-                }
-            }
-        }
 
         public void Open(List<SongEntry> songs, DifficultyRing ringTemplate, Action startSong)
         {
@@ -310,6 +300,11 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
+        private void OnDisable()
+        {
+            Unsubscribe();
+        }
+
         private void OnDestroy()
         {
             Unsubscribe();
@@ -429,58 +424,20 @@ namespace YARG.Menu.DifficultySelect
 
         internal string GetInstrumentBlocker(BandColumn column, Instrument instrument, out GameMode mode)
         {
-            var player = column.Player;
-            var profile = player.Profile;
-
-            var candidates = GetCandidateModes(profile, instrument);
-            mode = candidates[0];
-
-            if (instrument is Instrument.Vocals or Instrument.Harmony or Instrument.PartyVocals)
+            IEnumerable<Instrument> OtherChosenInstruments()
             {
-                foreach (var other in _columns)
+                for (int i = 0; i < _columns.Count; i++)
                 {
-                    if (other == column || !other.HasChosenInstrument)
+                    var other = _columns[i];
+                    if (other != column && other.HasChosenInstrument)
                     {
-                        continue;
-                    }
-
-                    var otherInstrument = other.Player.Profile.CurrentInstrument;
-                    if (otherInstrument is Instrument.Vocals or Instrument.Harmony or Instrument.PartyVocals &&
-                        otherInstrument != instrument)
-                    {
-                        return Localize.Key("Menu.DifficultySelect.Band.SingersMustMatch");
+                        yield return other.Player.Profile.CurrentInstrument;
                     }
                 }
-
-                mode = GameMode.Vocals;
-                if (profile.IsBot || player.DeviceInfo.HasMicrophoneAssigned)
-                {
-                    return null;
-                }
-
-                return Localize.Key("Menu.DifficultySelect.Band.NeedsMicrophone");
             }
 
-            if (profile.IsBot)
-            {
-                return null;
-            }
-
-            if (!player.DeviceInfo.HasControllerAssigned)
-            {
-                return Localize.Key("Menu.DifficultySelect.Band.NeedsController");
-            }
-
-            foreach (var candidate in candidates)
-            {
-                if (player.DeviceInfo.HasGameplayBindingsForMode(candidate))
-                {
-                    mode = candidate;
-                    return null;
-                }
-            }
-
-            return Localize.Key("Menu.DifficultySelect.Band.NoBinding");
+            return PlayerSelectionRules.GetInstrumentBlocker(GlobalVariables.State.CurrentSong, column.Player,
+                instrument, OtherChosenInstruments(), out mode, _modeBuffer);
         }
 
         private void UpdateStatus()
@@ -564,66 +521,8 @@ namespace YARG.Menu.DifficultySelect
         private void UpdateInstruments()
         {
             var song = GlobalVariables.State.CurrentSong;
-
-            MaxHarmonyIndex = song.VocalsCount;
-            foreach (var showSong in _songs)
-            {
-                MaxHarmonyIndex = Mathf.Min(MaxHarmonyIndex, showSong.VocalsCount);
-            }
-
-            var instruments = new HashSet<Instrument>();
-            foreach (var mode in EnumExtensions<GameMode>.Values)
-            {
-                if (mode == GameMode.Menu)
-                {
-                    continue;
-                }
-
-                foreach (var instrument in mode.PossibleInstrumentsForSong(song))
-                {
-                    instruments.Add(instrument);
-                }
-            }
-
-            _instruments.Clear();
-            foreach (var instrument in instruments.OrderBy(i => i))
-            {
-                if (_songs.All(s => PlayerSelectionRules.SongHasInstrument(s, instrument)))
-                {
-                    _instruments.Add(instrument);
-                }
-            }
-        }
-
-        private static List<GameMode> GetCandidateModes(YargProfile profile, Instrument instrument)
-        {
-            var song = GlobalVariables.State.CurrentSong;
-            var candidates = new List<GameMode>();
-
-            void TryAdd(GameMode mode)
-            {
-                if (!candidates.Contains(mode) && mode.PossibleInstrumentsForSong(song).Contains(instrument))
-                {
-                    candidates.Add(mode);
-                }
-            }
-
-            TryAdd(profile.GameMode);
-            TryAdd(instrument.ToNativeGameMode());
-            foreach (var mode in EnumExtensions<GameMode>.Values)
-            {
-                if (mode != GameMode.Menu)
-                {
-                    TryAdd(mode);
-                }
-            }
-
-            if (candidates.Count == 0)
-            {
-                candidates.Add(instrument.ToNativeGameMode());
-            }
-
-            return candidates;
+            MaxHarmonyIndex = PlayerSelectionRules.GetMaxHarmonyIndex(song, _songs);
+            PlayerSelectionRules.CollectSongInstruments(song, _songs, _instruments);
         }
 
     }

@@ -387,6 +387,8 @@ namespace YARG.Menu.DifficultySelect
 
         private void OnPlayerRemoved(YargPlayer player)
         {
+            _seats.Remove(player);
+
             if (_suppressPlayerEvents)
             {
                 return;

@@ -18,11 +18,6 @@ namespace YARG.Menu.DifficultySelect
     {
         private const string SETTING_LABEL_PREFIX = "Menu.ProfileList.Tooltip.Profiles.Settings";
         private const string INPUT_MODE_KEY = "InputMode";
-        private const float NOTE_SPEED_STEP = 0.5f;
-        private const float NOTE_SPEED_MAX = 100f;
-        private const float HIGHWAY_LENGTH_STEP = 0.1f;
-        private const float HIGHWAY_LENGTH_MIN = 0.1f;
-        private const float HIGHWAY_LENGTH_MAX = 10f;
 
         private static readonly HashSet<string> _settingsOutsideCard = new()
         {
@@ -34,16 +29,7 @@ namespace YARG.Menu.DifficultySelect
             ProfileSettingStrings.CONFIGURE_FIVE_LANE_DRUMS_HIGHWAY,
         };
 
-        private static readonly StarPowerActivationType[] _starPowerActivationTypes =
-        {
-            StarPowerActivationType.RightmostNote,
-            StarPowerActivationType.AllNotes,
-        };
-
         private readonly Dictionary<NavigatableBehaviour, Action<int>> _steppers = new();
-        private readonly List<(string Label, bool Current, Action Pick)> _settingOptions = new();
-        private string _settingOptionsTitle;
-        private string _settingKey;
         private DifficultyItem _editingRow;
 
         public void Confirm()
@@ -107,8 +93,8 @@ namespace YARG.Menu.DifficultySelect
         private void AddSettingsRow()
         {
             var row = AddRow(null, Localize.Key("Menu.DifficultySelect.Band.Settings"),
-                () => SetState(BandColumnState.Settings), !Ready);
-            if (_builtState == BandColumnState.Settings)
+                () => PushView(BandColumnState.Settings, nameof(BandColumnState.Settings)), !Ready);
+            if (_restoreFocusKey == nameof(BandColumnState.Settings))
             {
                 _defaultButton = row.Button;
             }
@@ -130,7 +116,7 @@ namespace YARG.Menu.DifficultySelect
             foreach (var setting in profile.GameMode.PossibleProfileSettings(new()).Select(s => s.setting).Distinct())
             {
                 if (_settingsOutsideCard.Contains(setting) ||
-                    (profile.IsBot && setting == ProfileSettingStrings.INPUT_CALIBRATION))
+                    (profile.IsBot && ProfileSettingsCatalog.BOT_IRRELEVANT_SETTINGS.Contains(setting)))
                 {
                     continue;
                 }
@@ -138,7 +124,7 @@ namespace YARG.Menu.DifficultySelect
                 AddSetting(profile, setting);
             }
 
-            AddRow(null, Localize.Key("Menu.DifficultySelect.Done"), () => SetState(BandColumnState.Main), true);
+            AddRow(null, Localize.Key("Menu.DifficultySelect.Done"), PopView, true);
         }
 
         private void AddSetting(YargProfile profile, string setting)
@@ -147,7 +133,7 @@ namespace YARG.Menu.DifficultySelect
             {
                 case ProfileSettingStrings.ENGINE_PRESET:
                     AddPresetRow("EnginePreset", CustomContentManager.EnginePresets, profile.EnginePreset,
-                        id => profile.EnginePreset = id, id => IsEngineAllowed(profile.GameMode, id));
+                        id => profile.EnginePreset = id, id => ProfileSettingsCatalog.IsEngineAllowed(profile.GameMode, id));
                     break;
                 case ProfileSettingStrings.THEME_SELECT:
                     AddPresetRow("NoteTheme", CustomContentManager.ThemePresets, profile.ThemePreset,
@@ -171,10 +157,13 @@ namespace YARG.Menu.DifficultySelect
                     break;
                 case ProfileSettingStrings.NOTE_SPEED_AND_HIGHWAY_LENGTH:
                     AddNumberRow("NoteSpeed", () => FormatNumber(profile.NoteSpeed), direction =>
-                        profile.NoteSpeed = Step(profile.NoteSpeed, direction, NOTE_SPEED_STEP, 0f, NOTE_SPEED_MAX));
+                        profile.NoteSpeed = Step(profile.NoteSpeed, direction, ProfileSettingsCatalog.NOTE_SPEED_STEP,
+                            ProfileSettingsCatalog.NOTE_SPEED_MIN, ProfileSettingsCatalog.NOTE_SPEED_MAX));
                     AddNumberRow("HighwayLength", () => FormatNumber(profile.HighwayLength), direction =>
-                        profile.HighwayLength = Step(profile.HighwayLength, direction, HIGHWAY_LENGTH_STEP,
-                            HIGHWAY_LENGTH_MIN, HIGHWAY_LENGTH_MAX));
+                        profile.HighwayLength = Step(profile.HighwayLength, direction,
+                            ProfileSettingsCatalog.HIGHWAY_LENGTH_STEP,
+                            ProfileSettingsCatalog.HIGHWAY_LENGTH_STEP_MIN,
+                            ProfileSettingsCatalog.HIGHWAY_LENGTH_MAX));
                     break;
                 case ProfileSettingStrings.INPUT_CALIBRATION:
                     AddNumberRow("InputCalibration", () => $"{profile.InputCalibrationMilliseconds} ms",
@@ -192,13 +181,13 @@ namespace YARG.Menu.DifficultySelect
                     break;
                 case ProfileSettingStrings.OPEN_LANE_DISPLAY_TYPE:
                     AddChoiceRow("DedicatedOpenNoteLane", profile.OpenLaneDisplayType.ToLocalizedName(),
-                        PlayerSelectionRules.OPEN_LANE_OPTIONS.Select(type => (type.ToLocalizedName(),
+                        ProfileSettingsCatalog.OPEN_LANE_DISPLAY_TYPES.Select(type => (type.ToLocalizedName(),
                             type == profile.OpenLaneDisplayType,
                             (Action) (() => profile.OpenLaneDisplayType = type))));
                     break;
                 case ProfileSettingStrings.DRUM_STAR_POWER_ACTIVATION_TYPE:
                     AddChoiceRow("StarPowerActivationType", profile.StarPowerActivationType.ToLocalizedName(),
-                        _starPowerActivationTypes.Select(type => (type.ToLocalizedName(),
+                        ProfileSettingsCatalog.STAR_POWER_ACTIVATION_TYPES.Select(type => (type.ToLocalizedName(),
                             type == profile.StarPowerActivationType,
                             (Action) (() => profile.StarPowerActivationType = type))));
                     break;
@@ -247,7 +236,7 @@ namespace YARG.Menu.DifficultySelect
 
         private void MarkSettingDefault(string key, DifficultyItem row)
         {
-            if (key == _settingKey)
+            if (key == _restoreFocusKey)
             {
                 _defaultButton = row.Button;
             }
@@ -255,24 +244,20 @@ namespace YARG.Menu.DifficultySelect
 
         private void OpenSettingOptions(string key, string title, List<(string Label, bool Current, Action Pick)> options)
         {
-            _settingKey = key;
-            _settingOptionsTitle = title;
-            _settingOptions.Clear();
-            _settingOptions.AddRange(options);
-            SetState(BandColumnState.SettingOptions);
+            PushView(BandColumnState.SettingOptions, key, title, options);
         }
 
         private void BuildSettingOptions()
         {
             SetPlayerHeading();
-            _wrappableRows.Add(AddLabel(_settingOptionsTitle));
+            _wrappableRows.Add(AddLabel(_currentView.SettingTitle));
 
-            foreach (var (label, current, pick) in _settingOptions)
+            foreach (var (label, current, pick) in _currentView.SettingOptions)
             {
                 var row = AddRow(null, label, () =>
                 {
                     pick();
-                    SetState(BandColumnState.Settings);
+                    PopView();
                 }, true);
                 _wrappableRows.Add(row);
 
@@ -292,29 +277,9 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            profile.CurrentInstrument = mode.PossibleInstruments()[0];
-            if (!IsEngineAllowed(mode, profile.EnginePreset))
-            {
-                profile.EnginePreset = EnginePreset.Default.Id;
-            }
-
+            ProfileSettingsCatalog.ApplyGameModeDefaults(profile, mode);
             SetGameMode(mode);
             FiltersMenu.ResetIntensityFiltersForProfile(profile);
-        }
-
-        private static bool IsEngineAllowed(GameMode mode, Guid id)
-        {
-            if (id == EnginePreset.SoloTaps.Id)
-            {
-                return mode is GameMode.FiveFretGuitar;
-            }
-
-            if (id == EnginePreset.Casual.Id)
-            {
-                return mode is GameMode.FiveFretGuitar or GameMode.Vocals or GameMode.SixFretGuitar;
-            }
-
-            return id != EnginePreset.Precision.Id || mode is not GameMode.ProKeys;
         }
 
         private static string SettingLabel(string key)

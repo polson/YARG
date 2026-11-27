@@ -146,11 +146,11 @@ namespace YARG.Menu.MusicLibrary
         [SerializeField]
         private PopupMenu _popupMenu;
         [SerializeField]
-        private BandSelectMenu _overshell;
-        [SerializeField]
         private LayoutElement _helpBarSpacer;
         [SerializeField]
         private VerticalLayoutGroup _sidebarLayout;
+
+        private bool _overshellLayoutActive;
 
         protected override int ExtraListViewPadding => 15;
         protected override bool CanScroll => !_popupMenu.gameObject.activeSelf;
@@ -243,11 +243,8 @@ namespace YARG.Menu.MusicLibrary
             SetNavigationScheme();
 
             SettingsManager.Settings.ShowOvershell.OnChange += OnOvershellSettingChanged;
-            SetOvershellLayout(UseOvershell);
-            if (UseOvershell)
-            {
-                _overshell.OpenOvershell(CanEngageOvershell);
-            }
+            _overshellLayoutActive = MenuManager.UseOvershell;
+            SetOvershellLayout(_overshellLayoutActive);
 
             // Restore search
             if (SearchAllowed)
@@ -348,7 +345,7 @@ namespace YARG.Menu.MusicLibrary
             GlobalVariables.State.PlayingWithReplay = false;
 
             // Show no player warning
-            _noPlayerWarning.SetActive(NeedsPlayers);
+            _noPlayerWarning.SetActive(MenuManager.NeedsPlayers);
 
             // Make sure sort is not by play count if there are only bots
             if (PlayerContainer.OnlyHasBotsActive() &&
@@ -535,7 +532,7 @@ namespace YARG.Menu.MusicLibrary
         private NavigationScheme.Entry CreateGreenEntry()
         {
             return new NavigationScheme.Entry(MenuAction.Green, GetGreenLabelKey(), OnGreenTap,
-                holdSeconds: GREEN_HOLD_SECONDS, onHoldHandler: OnGreenHold, hide: !UseOvershell);
+                holdSeconds: GREEN_HOLD_SECONDS, onHoldHandler: OnGreenHold, hide: !MenuManager.UseOvershell);
         }
 
         private string GetGreenLabelKey()
@@ -563,7 +560,7 @@ namespace YARG.Menu.MusicLibrary
 
         public void RefreshGreenHint()
         {
-            bool showsGreenHint = UseOvershell && MenuState != MenuState.PlaylistSelect;
+            bool showsGreenHint = MenuManager.UseOvershell && MenuState != MenuState.PlaylistSelect;
             if (!showsGreenHint || _navigationScheme is null || HelpBar.Instance == null)
             {
                 return;
@@ -572,11 +569,6 @@ namespace YARG.Menu.MusicLibrary
             var entry = CreateGreenEntry();
             _navigationScheme.ReplaceEntry(entry);
             HelpBar.Instance.RefreshEntry(_navigationScheme, entry);
-        }
-
-        private bool CanEngageOvershell()
-        {
-            return !IsNavigationSchemeBlocked() && !IsFiltersMenuOpen();
         }
 
         private void SetOvershellLayout(bool visible)
@@ -1102,30 +1094,19 @@ namespace YARG.Menu.MusicLibrary
 
         private void OnOvershellSettingChanged(OvershellMode _)
         {
-            if (UseOvershell == _overshell.IsOpen)
+            if (MenuManager.UseOvershell == _overshellLayoutActive)
             {
                 return;
             }
 
-            SetOvershellLayout(UseOvershell);
-            if (UseOvershell)
-            {
-                _overshell.OpenOvershell(CanEngageOvershell);
-            }
-            else
-            {
-                _overshell.Close();
-            }
-
+            _overshellLayoutActive = MenuManager.UseOvershell;
+            SetOvershellLayout(_overshellLayoutActive);
             _sidebar.UpdatePlayButtonLabel(ShowPlaylist.Count > 0);
             _needsNavigationSchemeRefresh = true;
         }
 
         protected void Update()
         {
-            _overshell.SetOvershellHidden(IsFiltersMenuOpen() ||
-                (SettingsMenu.Instance != null && SettingsMenu.Instance.gameObject.activeSelf));
-
             if (_needsNavigationSchemeRefresh && !IsNavigationSchemeBlocked())
             {
                 _needsNavigationSchemeRefresh = false;
@@ -1173,8 +1154,6 @@ namespace YARG.Menu.MusicLibrary
             SettingsManager.Settings.ShowOvershell.OnChange -= OnOvershellSettingChanged;
             PlayerContainer.PlayerAdded -= OnPlayerAdded;
             PlayerContainer.PlayerRemoved -= OnPlayerRemoved;
-
-            _overshell.Close();
 
             if (Navigator.Instance == null) return;
 
@@ -1706,20 +1685,15 @@ namespace YARG.Menu.MusicLibrary
 
         private void OnPlayerAdded(YargPlayer player)
         {
-            _noPlayerWarning.SetActive(NeedsPlayers);
+            _noPlayerWarning.SetActive(MenuManager.NeedsPlayers);
             _needsReload = true;
         }
 
         private void OnPlayerRemoved(YargPlayer player)
         {
-            _noPlayerWarning.SetActive(NeedsPlayers);
+            _noPlayerWarning.SetActive(MenuManager.NeedsPlayers);
             _needsReload = true;
         }
-
-        public static bool UseOvershell => SettingsManager.Settings.ShowOvershell.Value == OvershellMode.Everywhere;
-
-        public static bool NeedsPlayers =>
-            PlayerContainer.Players.Count <= 0 && SettingsManager.Settings.ShowOvershell.Value == OvershellMode.Off;
 
         public static void ResetMainLibraryIndex()
         {

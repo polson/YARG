@@ -122,5 +122,15 @@ namespace YARG.Editor.Tests
             var tier6 = new PartValues { Intensity = 6, SubTracks = 1 };
             StringAssert.StartsWith("<color=#FB443F>6 - ", PlayerSelectionRules.GetTierLabel(tier6));
         }
+
+        [Test]
+        public void IsVocalsInstrument_MatchesAllVocalsModesOnly()
+        {
+            Assert.IsTrue(PlayerSelectionRules.IsVocalsInstrument(Instrument.Vocals));
+            Assert.IsTrue(PlayerSelectionRules.IsVocalsInstrument(Instrument.Harmony));
+            Assert.IsTrue(PlayerSelectionRules.IsVocalsInstrument(Instrument.PartyVocals));
+            Assert.IsFalse(PlayerSelectionRules.IsVocalsInstrument(Instrument.FiveFretGuitar));
+            Assert.IsFalse(PlayerSelectionRules.IsVocalsInstrument(Instrument.ProKeys));
+        }
     }
 }

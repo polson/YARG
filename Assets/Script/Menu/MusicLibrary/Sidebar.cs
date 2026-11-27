@@ -551,7 +551,7 @@ namespace YARG.Menu.MusicLibrary
 
         public void UpdatePlayButtonLabel(bool setListNotEmpty)
         {
-            bool visible = !MusicLibraryMenu.UseOvershell;
+            bool visible = !MenuManager.UseOvershell;
             _playButton.transform.parent.gameObject.SetActive(visible);
             if (!visible)
             {

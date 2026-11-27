@@ -31,13 +31,6 @@ namespace YARG.Menu.DifficultySelect
             Instrument.SixFretCoopGuitar,
         };
 
-        public static readonly OpenLaneDisplayType[] OPEN_LANE_OPTIONS =
-        {
-            OpenLaneDisplayType.Never,
-            OpenLaneDisplayType.Always,
-            OpenLaneDisplayType.IfChartContainsOpens,
-        };
-
         public static void PickInstrument(YargProfile profile, Instrument instrument,
             IReadOnlyCollection<Instrument> availableInstruments, int maxHarmonyIndex)
         {
@@ -405,6 +398,136 @@ namespace YARG.Menu.DifficultySelect
         private static string LocalizeHeader(string key)
         {
             return Localize.Key("Menu.DifficultySelect", key);
+        }
+
+        public static bool IsVocalsInstrument(Instrument instrument)
+        {
+            return instrument is Instrument.Vocals or Instrument.Harmony or Instrument.PartyVocals;
+        }
+
+        public static int GetMaxHarmonyIndex(SongEntry currentSong, IReadOnlyList<SongEntry> songs)
+        {
+            int max = currentSong.VocalsCount;
+            if (songs == null)
+            {
+                return max;
+            }
+
+            for (int i = 0; i < songs.Count; i++)
+            {
+                if (songs[i].VocalsCount < max)
+                {
+                    max = songs[i].VocalsCount;
+                }
+            }
+
+            return max;
+        }
+
+        public static void CollectSongInstruments(SongEntry currentSong, IReadOnlyList<SongEntry> songs,
+            List<Instrument> destination)
+        {
+            var instruments = new HashSet<Instrument>();
+            foreach (var mode in EnumExtensions<GameMode>.Values)
+            {
+                if (mode == GameMode.Menu)
+                {
+                    continue;
+                }
+
+                foreach (var instrument in mode.PossibleInstrumentsForSong(currentSong))
+                {
+                    instruments.Add(instrument);
+                }
+            }
+
+            destination.Clear();
+            foreach (var instrument in instruments.OrderBy(i => i))
+            {
+                if (songs.All(s => SongHasInstrument(s, instrument)))
+                {
+                    destination.Add(instrument);
+                }
+            }
+        }
+
+        public static void GetCandidateModes(SongEntry song, YargProfile profile, Instrument instrument,
+            List<GameMode> destination)
+        {
+            destination.Clear();
+
+            void TryAdd(GameMode mode)
+            {
+                if (!destination.Contains(mode) && mode.PossibleInstrumentsForSong(song).Contains(instrument))
+                {
+                    destination.Add(mode);
+                }
+            }
+
+            TryAdd(profile.GameMode);
+            TryAdd(instrument.ToNativeGameMode());
+            foreach (var mode in EnumExtensions<GameMode>.Values)
+            {
+                if (mode != GameMode.Menu)
+                {
+                    TryAdd(mode);
+                }
+            }
+
+            if (destination.Count == 0)
+            {
+                destination.Add(instrument.ToNativeGameMode());
+            }
+        }
+
+        public static string GetInstrumentBlocker(SongEntry song, YargPlayer player, Instrument instrument,
+            IEnumerable<Instrument> otherChosenInstruments, out GameMode mode, List<GameMode> modeBuffer = null)
+        {
+            var profile = player.Profile;
+            modeBuffer ??= new List<GameMode>();
+            GetCandidateModes(song, profile, instrument, modeBuffer);
+            mode = modeBuffer[0];
+
+            if (IsVocalsInstrument(instrument))
+            {
+                foreach (var otherInstrument in otherChosenInstruments)
+                {
+                    if (IsVocalsInstrument(otherInstrument) && otherInstrument != instrument)
+                    {
+                        return Localize.Key("Menu.DifficultySelect.Band.SingersMustMatch");
+                    }
+                }
+
+                mode = GameMode.Vocals;
+                if (profile.IsBot || player.DeviceInfo.HasMicrophoneAssigned)
+                {
+                    return null;
+                }
+
+                return Localize.Key("Menu.DifficultySelect.Band.NeedsMicrophone");
+            }
+
+            if (profile.IsBot)
+            {
+                return null;
+            }
+
+            if (!player.DeviceInfo.HasControllerAssigned)
+            {
+                return Localize.Key("Menu.DifficultySelect.Band.NeedsController");
+            }
+
+            for (int i = 0; i < modeBuffer.Count; i++)
+            {
+                var candidate = modeBuffer[i];
+                if (player.DeviceInfo.HasGameplayBindingsForMode(candidate))
+                {
+                    mode = candidate;
+                    return null;
+                }
+            }
+
+            return Localize.Key("Menu.DifficultySelect.Band.NoBinding");
         }
     }
 }

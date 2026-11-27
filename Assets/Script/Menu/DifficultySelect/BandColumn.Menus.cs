@@ -13,6 +13,7 @@ using YARG.Gameplay.HUD;
 using YARG.Helpers.Extensions;
 using YARG.Localization;
 using YARG.Menu.Navigation;
+using YARG.Menu.ProfileList;
 using YARG.Player;
 
 namespace YARG.Menu.DifficultySelect
@@ -50,7 +51,8 @@ namespace YARG.Menu.DifficultySelect
 
         public void ShowProfilesInUse()
         {
-            State = BandColumnState.ChooseProfile;
+            _history.Clear();
+            _currentView = new ColumnView(BandColumnState.ChooseProfile);
             Rebuild();
         }
 
@@ -143,9 +145,9 @@ namespace YARG.Menu.DifficultySelect
             AddInstrumentRow();
 
             bool canPickDifficulty = !Ready && _difficulties.Count > 0;
-            var difficulty = AddRow(Localize.Key("Menu.DifficultySelect.Difficulty"),
-                profile.CurrentDifficulty.ToLocalizedName(), () => SetState(BandColumnState.Difficulty),
-                canPickDifficulty, height: TWO_LINE_ROW_HEIGHT);
+            var difficulty = AddStateRow(Localize.Key("Menu.DifficultySelect.Difficulty"),
+                profile.CurrentDifficulty.ToLocalizedName(), BandColumnState.Difficulty,
+                canPickDifficulty);
             if (canPickDifficulty)
             {
                 _difficultyButton = difficulty.Button;
@@ -171,8 +173,12 @@ namespace YARG.Menu.DifficultySelect
 
         private void AddPositionRow()
         {
-            AddRow(null, Localize.Key("Menu.DifficultySelect.Band.Position"),
-                () => SetState(BandColumnState.Position), true);
+            var row = AddRow(null, Localize.Key("Menu.DifficultySelect.Band.Position"),
+                () => PushView(BandColumnState.Position, nameof(BandColumnState.Position)), true);
+            if (_restoreFocusKey == nameof(BandColumnState.Position))
+            {
+                _defaultButton = row.Button;
+            }
         }
 
         private void BuildPosition()
@@ -184,7 +190,7 @@ namespace YARG.Menu.DifficultySelect
             _moveRightButton = AddRow(null, Localize.Key("Menu.DifficultySelect.Band.MoveRight"), () => Move(1),
                 _menu.CanMoveColumn(this, 1)).Button;
 
-            AddRow(null, Localize.Key("Menu.DifficultySelect.Done"), () => SetState(BandColumnState.Main), true);
+            AddRow(null, Localize.Key("Menu.DifficultySelect.Done"), PopView, true);
         }
 
         private void Move(int direction)
@@ -270,7 +276,7 @@ namespace YARG.Menu.DifficultySelect
                 var row = AddRow(null, PlayerSelectionRules.GetInstrumentLabelWithTier(song, instrument, mode),
                     () => PickInstrument(instrument), true, height: TWO_LINE_ROW_HEIGHT);
 
-                if (instrument == profile.CurrentInstrument && _pickerCanCancel)
+                if (instrument == profile.CurrentInstrument && _history.Count > 0)
                 {
                     _nav.SelectAt(IndexOf(row.Button));
                 }
@@ -301,7 +307,7 @@ namespace YARG.Menu.DifficultySelect
                     BandColumnState.Accessibility);
             }
 
-            AddRow(null, Localize.Key("Menu.DifficultySelect.Done"), () => SetState(BandColumnState.Main), true);
+            AddRow(null, Localize.Key("Menu.DifficultySelect.Done"), PopView, true);
         }
 
         private void BuildModifiers()
@@ -324,8 +330,7 @@ namespace YARG.Menu.DifficultySelect
                     profile.OpenLaneDisplayType.ToLocalizedName(), BandColumnState.OpenLane);
             }
 
-            AddRow(null, Localize.Key("Menu.DifficultySelect.Done"), () => SetState(BandColumnState.Adjustments),
-                true);
+            AddRow(null, Localize.Key("Menu.DifficultySelect.Done"), PopView, true);
         }
 
         private void BuildAccessibility()
@@ -355,8 +360,7 @@ namespace YARG.Menu.DifficultySelect
                 }
             }
 
-            AddRow(null, Localize.Key("Menu.DifficultySelect.Done"), () => SetState(BandColumnState.Adjustments),
-                true);
+            AddRow(null, Localize.Key("Menu.DifficultySelect.Done"), PopView, true);
         }
 
         private void BuildOpenLane()
@@ -365,12 +369,12 @@ namespace YARG.Menu.DifficultySelect
 
             SetPlayerHeading();
 
-            foreach (var displayType in PlayerSelectionRules.OPEN_LANE_OPTIONS)
+            foreach (var displayType in ProfileSettingsCatalog.OPEN_LANE_DISPLAY_TYPES)
             {
                 var row = AddRow(null, displayType.ToLocalizedName(), () =>
                 {
                     profile.OpenLaneDisplayType = displayType;
-                    SetState(BandColumnState.Modifiers);
+                    PopView();
                 }, true);
                 _wrappableRows.Add(row);
 
@@ -425,8 +429,9 @@ namespace YARG.Menu.DifficultySelect
         private DifficultyItem AddStateRow(string header, string body, BandColumnState state,
             bool interactable = true, float height = TWO_LINE_ROW_HEIGHT)
         {
-            var row = AddRow(header, body, () => SetState(state), interactable, height: height);
-            if (interactable && _builtState == state)
+            string key = state.ToString();
+            var row = AddRow(header, body, () => PushView(state, key), interactable, height: height);
+            if (interactable && _restoreFocusKey == key)
             {
                 _defaultButton = row.Button;
             }

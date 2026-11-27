@@ -18,6 +18,7 @@ using YARG.Localization;
 using YARG.Menu.Data;
 using YARG.Menu.Navigation;
 using YARG.Menu.Persistent;
+using YARG.Menu.ProfileList;
 using YARG.Menu.Filters;
 using YARG.Menu.MusicLibrary;
 using YARG.Player;
@@ -606,7 +607,7 @@ namespace YARG.Menu.DifficultySelect
             Instantiate(_difficultyItemPrefab, _container)
                 .InitializeAsTitle(LocalizeHeader("DedicatedOpenLane"));
 
-            foreach (var displayType in OPEN_LANE_OPTIONS)
+            foreach (var displayType in ProfileSettingsCatalog.OPEN_LANE_DISPLAY_TYPES)
             {
                 var capture = displayType;
                 bool selected = profile.OpenLaneDisplayType == displayType;
@@ -822,11 +823,7 @@ namespace YARG.Menu.DifficultySelect
             }
 
             // Get the possible harmonies for this show
-            _maxHarmonyIndex = song.VocalsCount;
-            foreach (var showsong in _songList)
-            {
-                _maxHarmonyIndex = Mathf.Min(_maxHarmonyIndex, showsong.VocalsCount);
-            }
+            _maxHarmonyIndex = PlayerSelectionRules.GetMaxHarmonyIndex(song, _songList);
 
             // Resolve the effective harmony index for this song from the player's last
             // explicit selection (clamped to the available parts). Uses ResolveHarmonyIndex
@@ -963,7 +960,7 @@ namespace YARG.Menu.DifficultySelect
         private bool HasPlayableInstrument(SongEntry entry, in Instrument instrument)
         {
             // For vocals, all players *must* select the same gamemode (solo/harmony/party)
-            if (instrument is Instrument.Vocals or Instrument.Harmony or Instrument.PartyVocals)
+            if (PlayerSelectionRules.IsVocalsInstrument(instrument))
             {
                 if (!entry.HasInstrument(instrument))
                 {
@@ -978,7 +975,7 @@ namespace YARG.Menu.DifficultySelect
                     var player = PlayerContainer.Players[i];
                     if (player.SittingOut) continue;
                     var playerInstrument = player.Profile.CurrentInstrument;
-                    if (playerInstrument is Instrument.Vocals or Instrument.Harmony or Instrument.PartyVocals)
+                    if (PlayerSelectionRules.IsVocalsInstrument(playerInstrument))
                     {
                         return playerInstrument == instrument;
                     }

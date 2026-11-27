@@ -30,6 +30,7 @@ namespace YARG.Menu.Filters
     [DefaultExecutionOrder(-10000)]
     public class FiltersMenu : MonoSingleton<FiltersMenu>
     {
+        public static event Action<bool> OpenStateChanged;
         private const float ResetAllFiltersHoldSeconds = 1f;
 
         private readonly struct FilterHelpBarState
@@ -298,6 +299,8 @@ namespace YARG.Menu.Filters
         private void OnEnable()
         {
             if (!_ready) return;
+
+            OpenStateChanged?.Invoke(true);
 
             _leftNavGroup.SelectionChanged += OnSelectionChanged;
                 _rightNavGroup.SelectionChanged += OnRightSelectionChanged;
@@ -2144,6 +2147,8 @@ namespace YARG.Menu.Filters
         private void OnDisable()
         {
             if (!_ready) return;
+
+            OpenStateChanged?.Invoke(false);
 
             bool showRecommendationsChanged = _showRecommendationsOnOpen !=
                 SettingsManager.Settings.ShowRecommendedSongs.Value;
