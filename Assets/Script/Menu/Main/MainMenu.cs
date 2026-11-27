@@ -55,13 +55,22 @@ namespace YARG.Menu.Main
                 new NavigationScheme.Entry(MenuAction.Select, "Menu.Main.GoToCurrentlyPlaying", CurrentlyPlaying)
             }, true));
 
-            if (MusicLibraryMenu.UseOvershell)
-            {
-                _overshell.OpenOvershell(CanEngageOvershell);
-            }
+            SettingsManager.Settings.ShowOvershell.OnChange += OnOvershellSettingChanged;
+            SettingsMenu.OpenStateChanged += OnSettingsOpenStateChanged;
+            RefreshOvershell();
         }
 
-        private void Update()
+        private void OnOvershellSettingChanged(OvershellMode _)
+        {
+            RefreshOvershell();
+        }
+
+        private void OnSettingsOpenStateChanged(bool _)
+        {
+            _overshell.SetOvershellHidden(IsSettingsOpen());
+        }
+
+        private void RefreshOvershell()
         {
             if (MusicLibraryMenu.UseOvershell != _overshell.IsOpen)
             {
@@ -80,6 +89,8 @@ namespace YARG.Menu.Main
 
         private void OnDisable()
         {
+            SettingsManager.Settings.ShowOvershell.OnChange -= OnOvershellSettingChanged;
+            SettingsMenu.OpenStateChanged -= OnSettingsOpenStateChanged;
             _overshell.Close();
             Navigator.Instance?.PopScheme();
         }

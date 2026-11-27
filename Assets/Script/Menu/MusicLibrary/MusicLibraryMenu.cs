@@ -242,6 +242,7 @@ namespace YARG.Menu.MusicLibrary
             // Set navigation scheme
             SetNavigationScheme();
 
+            SettingsManager.Settings.ShowOvershell.OnChange += OnOvershellSettingChanged;
             SetOvershellLayout(UseOvershell);
             if (UseOvershell)
             {
@@ -1099,24 +1100,29 @@ namespace YARG.Menu.MusicLibrary
             }
         }
 
-        protected void Update()
+        private void OnOvershellSettingChanged(OvershellMode _)
         {
-            if (UseOvershell != _overshell.IsOpen)
+            if (UseOvershell == _overshell.IsOpen)
             {
-                SetOvershellLayout(UseOvershell);
-                if (UseOvershell)
-                {
-                    _overshell.OpenOvershell(CanEngageOvershell);
-                }
-                else
-                {
-                    _overshell.Close();
-                }
-
-                _sidebar.UpdatePlayButtonLabel(ShowPlaylist.Count > 0);
-                _needsNavigationSchemeRefresh = true;
+                return;
             }
 
+            SetOvershellLayout(UseOvershell);
+            if (UseOvershell)
+            {
+                _overshell.OpenOvershell(CanEngageOvershell);
+            }
+            else
+            {
+                _overshell.Close();
+            }
+
+            _sidebar.UpdatePlayButtonLabel(ShowPlaylist.Count > 0);
+            _needsNavigationSchemeRefresh = true;
+        }
+
+        protected void Update()
+        {
             _overshell.SetOvershellHidden(IsFiltersMenuOpen() ||
                 (SettingsMenu.Instance != null && SettingsMenu.Instance.gameObject.activeSelf));
 
@@ -1164,6 +1170,7 @@ namespace YARG.Menu.MusicLibrary
             // Unsubscribe before the early-out below, or the static player events keep calling into a
             // destroyed menu when the Navigator is already gone at shutdown.
             _searchField.OnSearchQueryUpdated -= UpdateSearch;
+            SettingsManager.Settings.ShowOvershell.OnChange -= OnOvershellSettingChanged;
             PlayerContainer.PlayerAdded -= OnPlayerAdded;
             PlayerContainer.PlayerRemoved -= OnPlayerRemoved;
 

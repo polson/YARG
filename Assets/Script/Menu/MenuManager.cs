@@ -6,6 +6,7 @@ using YARG.Menu.DifficultySelect;
 using YARG.Menu.MusicLibrary;
 using YARG.Menu.Persistent;
 using YARG.Menu.Settings;
+using YARG.Settings;
 
 namespace YARG.Menu
 {
@@ -86,13 +87,17 @@ namespace YARG.Menu
             }
         }
 
-        private void Update()
+        private void OnEnable()
         {
+            SettingsManager.Settings.ShowOvershell.OnChange += OnOvershellSettingChanged;
+            SettingsMenu.OpenStateChanged += OnSettingsOpenStateChanged;
             RefreshOvershell();
         }
 
         private void OnDisable()
         {
+            SettingsManager.Settings.ShowOvershell.OnChange -= OnOvershellSettingChanged;
+            SettingsMenu.OpenStateChanged -= OnSettingsOpenStateChanged;
             SetOvershellHost(null);
             _lastOpenMenu = Menu.None;
 
@@ -170,6 +175,16 @@ namespace YARG.Menu
             RefreshOvershell();
         }
 
+        private void OnOvershellSettingChanged(OvershellMode _)
+        {
+            RefreshOvershell();
+        }
+
+        private void OnSettingsOpenStateChanged(bool _)
+        {
+            RefreshOvershell();
+        }
+
         private void RefreshOvershell()
         {
             MenuObject host = null;
@@ -238,6 +253,8 @@ namespace YARG.Menu
             {
                 currentMenu.gameObject.SetActive(false);
             }
+
+            RefreshOvershell();
         }
 
         public void ReactivateCurrentMenu(bool forceRefreshIfActive = true)
@@ -282,6 +299,7 @@ namespace YARG.Menu
             }
 
             menuObject.SetActive(true);
+            RefreshOvershell();
             _reactivateCoroutine = null;
         }
     }

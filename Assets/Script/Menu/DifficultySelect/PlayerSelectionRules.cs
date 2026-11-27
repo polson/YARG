@@ -12,7 +12,7 @@ using YARG.Player;
 
 namespace YARG.Menu.DifficultySelect
 {
-    internal static class PlayerSelectionRules
+    public static class PlayerSelectionRules
     {
         // Modifiers relocated from the Modifiers menu to the Accessibility menu.
         // RangeCompress is folded into the "No Range Shifts" toggle there.
@@ -57,7 +57,10 @@ namespace YARG.Menu.DifficultySelect
                 profile.PreferredInstrument = instrument;
             }
 
-            FiltersMenu.ResetIntensityFiltersForProfile(profile);
+            if (UnityEngine.Application.isPlaying)
+            {
+                FiltersMenu.ResetIntensityFiltersForProfile(profile);
+            }
         }
 
         // Apply the primary player's modifiers to the other vocal players

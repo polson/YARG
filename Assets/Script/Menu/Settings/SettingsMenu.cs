@@ -76,6 +76,7 @@ namespace YARG.Menu.Settings
         public string SearchQuery => _searchBar.text;
 
         public event Action SettingChanged;
+        public static event Action<bool> OpenStateChanged;
 
         private static bool _openOnNextMenuLoad;
         private static bool _skipMenuReactivationOnDisable;
@@ -230,6 +231,7 @@ namespace YARG.Menu.Settings
             }
 
             FocusCategories(animate: false);
+            OpenStateChanged?.Invoke(true);
         }
 
         private void OnTabChanged(string tab)
@@ -965,6 +967,7 @@ namespace YARG.Menu.Settings
             // Save on close
             SettingsManager.SaveSettings();
             CustomContentManager.SaveAll();
+            OpenStateChanged?.Invoke(false);
 
             if (_skipMenuReactivationOnDisable)
             {
