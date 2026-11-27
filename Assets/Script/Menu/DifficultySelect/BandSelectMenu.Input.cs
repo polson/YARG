@@ -9,7 +9,7 @@ namespace YARG.Menu.DifficultySelect
     {
         private void OnConfirm(NavigationContext context)
         {
-            if (_started)
+            if (_session.Started)
             {
                 return;
             }
@@ -23,7 +23,7 @@ namespace YARG.Menu.DifficultySelect
 
         private void OnBack(NavigationContext context)
         {
-            if (_started)
+            if (_session.Started)
             {
                 return;
             }
@@ -48,7 +48,7 @@ namespace YARG.Menu.DifficultySelect
                 _                => 0,
             };
 
-            if (direction != 0 && !_started)
+            if (direction != 0 && !_session.Started)
             {
                 var column = ColumnFor(context.Player);
                 if (column != null && column.AdjustSelection(direction))
@@ -62,13 +62,12 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            _focusIndex = Mathf.Clamp(_focusIndex + direction, 0, _columns.Count - 1);
-            OnColumnChanged();
+            _session.MoveFocus(direction);
         }
 
         private bool InterceptOvershellInput(NavigationContext context)
         {
-            if (_hidden || !_canEngage())
+            if (_session.Hidden || !_canEngage())
             {
                 return false;
             }
@@ -76,7 +75,7 @@ namespace YARG.Menu.DifficultySelect
             var column = FindColumn(context.Player);
             if (column == null)
             {
-                return IsMenuExitAction(context.Action) && AnyColumnOpen();
+                return IsMenuExitAction(context.Action) && _session.AnyOvershellColumnOpen();
             }
 
             if (context.Action == MenuAction.Start)
@@ -86,7 +85,7 @@ namespace YARG.Menu.DifficultySelect
 
             if (!column.IsExpanded)
             {
-                return IsMenuExitAction(context.Action) && AnyColumnOpen();
+                return IsMenuExitAction(context.Action) && _session.AnyOvershellColumnOpen();
             }
 
             DispatchOvershellAction(column, context);
@@ -142,43 +141,16 @@ namespace YARG.Menu.DifficultySelect
             return action is MenuAction.Green or MenuAction.Red;
         }
 
-        private bool AnyColumnOpen()
-        {
-            foreach (var column in _columns)
-            {
-                if (column.IsExpanded && !column.IsSittingOut && column.Player.DeviceInfo.HasControllerAssigned)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
         private BandColumn ColumnFor(YargPlayer player)
         {
-            return player == null ? FocusedColumn : FindColumn(player);
+            var model = _session.ColumnFor(player);
+            return model != null && _columnViews.TryGetValue(model, out var column) ? column : null;
         }
 
         private BandColumn FindColumn(YargPlayer player)
         {
-            if (player == null)
-            {
-                return null;
-            }
-
-            foreach (var column in _columns)
-            {
-                if (column.Player == player)
-                {
-                    return column;
-                }
-            }
-
-            return null;
+            var model = _session.FindColumn(player);
+            return model != null && _columnViews.TryGetValue(model, out var column) ? column : null;
         }
-
-        private BandColumn FocusedColumn =>
-            _columns.Count > 0 ? _columns[Mathf.Clamp(_focusIndex, 0, _columns.Count - 1)] : null;
     }
 }

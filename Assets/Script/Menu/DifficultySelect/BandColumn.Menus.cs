@@ -53,7 +53,7 @@ namespace YARG.Menu.DifficultySelect
 
         public void ShowProfilesInUse()
         {
-            _viewStack.SetRoot(BandColumnState.ChooseProfile);
+            Model.ViewStack.SetRoot(BandColumnState.ChooseProfile);
             Rebuild();
         }
 
@@ -128,7 +128,7 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            if (_menu.IsOvershell)
+            if (_session.IsOvershell)
             {
                 AddSettingsRow();
                 AddPositionRow();
@@ -137,9 +137,9 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            if (_warning != null)
+            if (Model.Warning != null)
             {
-                var warning = AddLabel(_warning);
+                var warning = AddLabel(Model.Warning);
                 warning.SetTextColor(WARNING_COLOR);
             }
 
@@ -149,7 +149,7 @@ namespace YARG.Menu.DifficultySelect
 
             AddInstrumentRow();
 
-            bool canPickDifficulty = !Ready && _difficulties.Count > 0;
+            bool canPickDifficulty = !Ready && Model.Difficulties.Count > 0;
             var difficulty = AddStateRow(Localize.Key("Menu.DifficultySelect.Difficulty"),
                 profile.CurrentDifficulty.ToLocalizedName(), BandColumnState.Difficulty,
                 canPickDifficulty);
@@ -158,15 +158,15 @@ namespace YARG.Menu.DifficultySelect
                 _difficultyButton = difficulty.Button;
             }
 
-            if (profile.CurrentInstrument == Instrument.Harmony && _menu.MaxHarmonyIndex > 1)
+            if (profile.CurrentInstrument == Instrument.Harmony && _session.MaxHarmonyIndex > 1)
             {
                 AddRow(null,
                     Localize.KeyFormat("Menu.DifficultySelect.Band.Part", profile.HarmonyIndex + 1),
                     CycleHarmonyPart, !Ready);
             }
 
-            string adjustments = PlayerSelectionRules.BuildAdjustmentsSummary(profile, _modifiers,
-                _excusableModifiers, out int optionCount);
+            string adjustments = PlayerSelectionRules.BuildAdjustmentsSummary(profile, Model.Modifiers,
+                Model.ExcusableModifiers, out int optionCount);
             AddStateRow(Localize.Key("Menu.DifficultySelect.Adjustments"), adjustments,
                 BandColumnState.Adjustments, !Ready, MultiLineHeight(optionCount));
 
@@ -180,7 +180,7 @@ namespace YARG.Menu.DifficultySelect
         {
             var row = AddRow(null, Localize.Key("Menu.DifficultySelect.Band.Position"),
                 () => PushView(BandColumnState.Position, nameof(BandColumnState.Position)), true);
-            if (_viewStack.RestoreFocusKey == nameof(BandColumnState.Position))
+            if (Model.ViewStack.RestoreFocusKey == nameof(BandColumnState.Position))
             {
                 _defaultButton = row.Button;
             }
@@ -191,9 +191,9 @@ namespace YARG.Menu.DifficultySelect
             SetPlayerHeading();
 
             _moveLeftButton = AddRow(null, Localize.Key("Menu.DifficultySelect.Band.MoveLeft"), () => Move(-1),
-                _menu.CanMoveColumn(this, -1)).Button;
+                _session.CanMoveColumn(Model, -1)).Button;
             _moveRightButton = AddRow(null, Localize.Key("Menu.DifficultySelect.Band.MoveRight"), () => Move(1),
-                _menu.CanMoveColumn(this, 1)).Button;
+                _session.CanMoveColumn(Model, 1)).Button;
 
             AddRow(null, Localize.Key("Menu.DifficultySelect.Done"), PopView, true);
         }
@@ -206,7 +206,7 @@ namespace YARG.Menu.DifficultySelect
             }
 
             Rebuild();
-            var button = _menu.CanMoveColumn(this, direction)
+            var button = _session.CanMoveColumn(Model, direction)
                 ? (direction < 0 ? _moveLeftButton : _moveRightButton)
                 : (direction < 0 ? _moveRightButton : _moveLeftButton);
             if (_nav.Navigatables.Contains(button))
@@ -220,7 +220,7 @@ namespace YARG.Menu.DifficultySelect
             var profile = Player.Profile;
             var song = GlobalVariables.State.CurrentSong;
             var instruments = profile.GameMode.PossibleInstrumentsForSong(song)
-                .Where(instrument => _menu.Instruments.ContainsInstrument(instrument))
+                .Where(instrument => _session.Instruments.ContainsInstrument(instrument))
                 .ToList();
             bool showRings = _menu.RingTemplate != null && instruments.Count > 0;
 
@@ -248,7 +248,7 @@ namespace YARG.Menu.DifficultySelect
             var current = Player.Profile.CurrentDifficulty;
             foreach (var difficulty in EnumExtensions<Difficulty>.Values)
             {
-                if (!_difficulties.Contains(difficulty))
+                if (!Model.Difficulties.Contains(difficulty))
                 {
                     continue;
                 }
@@ -270,9 +270,9 @@ namespace YARG.Menu.DifficultySelect
             var song = GlobalVariables.State.CurrentSong;
 
             bool anyPlayable = false;
-            foreach (var instrument in _menu.Instruments)
+            foreach (var instrument in _session.Instruments)
             {
-                if (_menu.GetInstrumentBlocker(this, instrument, out var mode) != null)
+                if (_session.GetInstrumentBlocker(Model, instrument, out var mode) != null)
                 {
                     continue;
                 }
@@ -281,7 +281,7 @@ namespace YARG.Menu.DifficultySelect
                 var row = AddRow(null, PlayerSelectionRules.GetInstrumentLabelWithTier(song, instrument, mode),
                     () => PickInstrument(instrument), true, height: TWO_LINE_ROW_HEIGHT);
 
-                if (instrument == profile.CurrentInstrument && _viewStack.Depth > 0)
+                if (instrument == profile.CurrentInstrument && Model.ViewStack.Depth > 0)
                 {
                     _nav.SelectButton(row.Button);
                 }
@@ -302,13 +302,13 @@ namespace YARG.Menu.DifficultySelect
             SetPlayerHeading();
 
             AddStateRow(Localize.Key("Menu.DifficultySelect.Modifiers"),
-                PlayerSelectionRules.BuildModifierSummary(profile, _modifiers, _excusableModifiers),
+                PlayerSelectionRules.BuildModifierSummary(profile, Model.Modifiers, Model.ExcusableModifiers),
                 BandColumnState.Modifiers);
 
-            if (PlayerSelectionRules.HasAccessibilityOptions(profile, _modifiers))
+            if (PlayerSelectionRules.HasAccessibilityOptions(profile, Model.Modifiers))
             {
                 AddStateRow(Localize.Key("Menu.DifficultySelect.Accessibility"),
-                    PlayerSelectionRules.BuildAccessibilitySummary(profile, _modifiers),
+                    PlayerSelectionRules.BuildAccessibilitySummary(profile, Model.Modifiers),
                     BandColumnState.Accessibility);
             }
 
@@ -321,7 +321,7 @@ namespace YARG.Menu.DifficultySelect
 
             SetPlayerHeading();
 
-            foreach (var modifier in _modifiers)
+            foreach (var modifier in Model.Modifiers)
             {
                 if ((modifier & PlayerSelectionRules.ACCESSIBILITY_MODIFIERS) == 0)
                 {
@@ -353,11 +353,11 @@ namespace YARG.Menu.DifficultySelect
             if (PlayerSelectionRules.SupportsRangeShifts(profile.GameMode))
             {
                 AddToggle(Localize.Key("Menu.DifficultySelect.NoRangeShifts"),
-                    PlayerSelectionRules.HasNoRangeShifts(profile, _modifiers),
-                    on => PlayerSelectionRules.SetNoRangeShifts(profile, _modifiers, on));
+                    PlayerSelectionRules.HasNoRangeShifts(profile, Model.Modifiers),
+                    on => PlayerSelectionRules.SetNoRangeShifts(profile, Model.Modifiers, on));
             }
 
-            foreach (var modifier in _modifiers)
+            foreach (var modifier in Model.Modifiers)
             {
                 if ((modifier & PlayerSelectionRules.ACCESSIBILITY_MODIFIERS) != 0 && modifier != Modifier.RangeCompress)
                 {
@@ -394,7 +394,8 @@ namespace YARG.Menu.DifficultySelect
         private void BuildSittingOut()
         {
             SetPlayerHeading();
-            AddRow(null, Localize.Key("Menu.DifficultySelect.Band.SittingOut"), () => OpenPicker(canCancel: true), !_locked);
+            AddRow(null, Localize.Key("Menu.DifficultySelect.Band.SittingOut"), () => OpenPicker(canCancel: true),
+                !Model.Locked);
         }
 
         private DifficultyItem AddLabel(string text)
@@ -441,7 +442,7 @@ namespace YARG.Menu.DifficultySelect
         {
             string key = state.ToString();
             var row = AddRow(header, body, () => PushView(state, key), interactable, height: height);
-            if (interactable && _viewStack.RestoreFocusKey == key)
+            if (interactable && Model.ViewStack.RestoreFocusKey == key)
             {
                 _defaultButton = row.Button;
             }

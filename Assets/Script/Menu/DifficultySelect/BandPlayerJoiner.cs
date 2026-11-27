@@ -4,6 +4,7 @@ using System.Linq;
 using UnityEngine.InputSystem;
 using YARG.Core;
 using YARG.Core.Extensions;
+using YARG.Core.Game;
 using YARG.Helpers;
 using YARG.Input.Bindings;
 using YARG.Menu.ProfileList;
@@ -39,7 +40,7 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        private readonly Dictionary<BandColumn, PendingJoin> _joins = new();
+        private readonly Dictionary<YargPlayer, PendingJoin> _joins = new();
 
         public bool IsSuppressingPlayerEvents { get; private set; }
 
@@ -82,34 +83,34 @@ namespace YARG.Menu.DifficultySelect
             return true;
         }
 
-        public bool TryReattachProfile(BandColumn column, YargProfile profile, out YargPlayer player)
+        public bool TryReattachProfile(YargPlayer currentPlayer, YargProfile profile, out YargPlayer player)
         {
-            var device = _joins[column].Device;
-            ReleaseJoin(column);
+            var device = _joins[currentPlayer].Device;
+            ReleaseJoin(currentPlayer);
 
             player = AttachPlayer(profile, device, out _);
             return player != null;
         }
 
-        public void TrackJoin(BandColumn column, PendingJoin join)
+        public void TrackJoin(YargPlayer player, PendingJoin join)
         {
-            _joins[column] = join;
+            _joins[player] = join;
         }
 
-        public void CompleteJoin(BandColumn column)
+        public void CompleteJoin(YargPlayer player)
         {
-            _joins.Remove(column);
+            _joins.Remove(player);
         }
 
-        public void UntrackJoin(BandColumn column)
+        public void UntrackJoin(YargPlayer player)
         {
-            _joins.Remove(column);
+            _joins.Remove(player);
         }
 
-        public void ReleaseJoin(BandColumn column)
+        public void ReleaseJoin(YargPlayer player)
         {
-            var join = _joins[column];
-            var player = column.Player;
+            var join = _joins[player];
+            _joins.Remove(player);
 
             if (!join.Owned)
             {
@@ -130,9 +131,9 @@ namespace YARG.Menu.DifficultySelect
             RunWithSuppressedPlayerEvents(() => PlayerContainer.DisposePlayer(player));
         }
 
-        public List<BandColumn> SnapshotJoiningColumns()
+        public List<YargPlayer> SnapshotJoiningPlayers()
         {
-            return new List<BandColumn>(_joins.Keys);
+            return new List<YargPlayer>(_joins.Keys);
         }
 
         public static YargProfile FindAvailableProfile()

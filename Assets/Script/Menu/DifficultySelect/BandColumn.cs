@@ -84,63 +84,41 @@ namespace YARG.Menu.DifficultySelect
         private Sprite _profileBotSprite;
 
         private BandSelectMenu _menu;
+        private BandSessionState _session;
         private Color _borderColor;
         private Color _headingColor;
 
         private PlayerCardHeader _header;
         private float _appliedWidth = -1f;
-        private readonly BandColumnViewStack _viewStack = new();
         private readonly List<(DifficultyItem Row, VerticalLayoutGroup Layout, float Height)> _profileRows = new();
         private readonly List<(DifficultyItem Row, LayoutElement Layout)> _wrappableRows = new();
         private Tween _rise;
         private Tween _collapse;
-        private readonly List<Modifier> _modifiers = new();
-        [NonSerialized]
-        private Modifier _excusableModifiers;
         private readonly List<Texture2D> _avatarTextures = new();
-        private readonly List<Difficulty> _difficulties = new();
         private readonly List<(ModifierItem Item, Modifier Modifier)> _modifierToggles = new();
         private readonly List<(Transform Row, GameObject Divider)> _dividers = new();
 
         private BandColumnState _builtState;
-        private bool _locked;
-        private bool _collapsed;
         private int _expandedBottomPadding;
-        private string _warning;
         private NavigatableBehaviour _readyButton;
         private NavigatableBehaviour _difficultyButton;
         private NavigatableBehaviour _defaultButton;
         private NavigatableBehaviour _moveLeftButton;
         private NavigatableBehaviour _moveRightButton;
 
-        public YargPlayer Player { get; set; }
+        public BandColumnModel Model { get; private set; }
+        public YargPlayer Player => Model?.Player;
 
-        public BandColumnState State => _viewStack.State;
-        public bool Ready { get; private set; }
+        public BandColumnState State => Model.State;
+        public bool Ready => Model.Ready;
 
-        public bool IsJoining => State == BandColumnState.ChooseProfile;
-        private bool IsCollapsed => State == BandColumnState.Main && (Ready || _collapsed);
-        public bool IsExpanded => !IsCollapsed;
-        public bool IsAtTopLevel => _viewStack.IsAtTopLevel(Ready);
-        public bool IsSittingOut => State == BandColumnState.SittingOut || HasNoPlayableInstrument;
-        public bool HasChosenInstrument => _viewStack.HasChosenInstrument();
-        public bool IsDecided => IsSittingOut || (State == BandColumnState.Main && Ready);
-
-        private bool HasNoPlayableInstrument =>
-            State == BandColumnState.Instrument && !HasPlayableInstrument();
-
-        private bool HasPlayableInstrument()
-        {
-            foreach (var instrument in _menu.Instruments)
-            {
-                if (_menu.GetInstrumentBlocker(this, instrument, out _) == null)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
+        public bool IsJoining => Model.IsJoining;
+        private bool IsCollapsed => Model.IsCollapsed;
+        public bool IsExpanded => Model.IsExpanded;
+        public bool IsAtTopLevel => Model.IsAtTopLevel;
+        public bool IsSittingOut => _session.IsSittingOut(Model);
+        public bool HasChosenInstrument => Model.HasChosenInstrument;
+        public bool IsDecided => _session.IsDecided(Model);
 
         public NavigationGroup Nav => _nav;
         public RectTransform Card => _card;
@@ -161,10 +139,11 @@ namespace YARG.Menu.DifficultySelect
             _headingColor = _heading.color;
         }
 
-        public void Initialize(BandSelectMenu menu, YargPlayer player)
+        public void Initialize(BandSelectMenu menu, BandSessionState session, BandColumnModel model)
         {
             _menu = menu;
-            Player = player;
+            _session = session;
+            Model = model;
             _border.raycastTarget = true;
             _nav.SelectionChanged += OnSelectionChanged;
         }
@@ -225,99 +204,30 @@ namespace YARG.Menu.DifficultySelect
 
         public void BeginJoin()
         {
-            Ready = false;
-            _viewStack.SetRoot(BandColumnState.ChooseProfile);
             Rebuild();
         }
 
         public void Open()
         {
-            if (_menu.IsOvershell)
-            {
-                Collapse();
-            }
-            else
-            {
-                OpenForSong();
-            }
+            Rebuild();
         }
 
         public void Collapse()
         {
-            ResetForOvershell();
+            _session.ResetForOvershell(Model);
             Rebuild();
         }
 
         public void CompleteJoin()
         {
-            if (_menu.IsOvershell)
+            if (_session.IsOvershell)
             {
-                ResetForOvershell();
                 RebuildFromCurrentTop();
             }
             else
             {
-                OpenForSong();
-            }
-        }
-
-        private void OpenForSong()
-        {
-            Player.Profile.RestoreSavedModifiers();
-            Ready = false;
-            _warning = null;
-            _locked = false;
-            _collapsed = false;
-
-            if (GlobalVariables.State.CurrentCareer != null && Player.Profile.IsBot)
-            {
-                _locked = true;
-                _viewStack.SetRoot(BandColumnState.SittingOut);
                 Rebuild();
-                return;
             }
-
-            if (TryAutoSelectInstrument(Player.Profile))
-            {
-                CollectOptions();
-                _viewStack.SetRoot(BandColumnState.Main);
-                Rebuild();
-                return;
-            }
-
-            OpenPicker(canCancel: false);
-        }
-
-        private bool TryAutoSelectInstrument(YargProfile profile)
-        {
-            foreach (var candidate in new[] { profile.PreferredInstrument, profile.CurrentInstrument })
-            {
-                if (!_menu.Instruments.ContainsInstrument(candidate))
-                {
-                    continue;
-                }
-
-                if (_menu.GetInstrumentBlocker(this, candidate, out var mode) != null)
-                {
-                    continue;
-                }
-
-                SetGameMode(mode);
-                profile.CurrentInstrument = candidate;
-                profile.ResolveHarmonyIndex(_menu.MaxHarmonyIndex);
-                return true;
-            }
-
-            return false;
-        }
-
-        private void ResetForOvershell()
-        {
-            Ready = false;
-            _warning = null;
-            _locked = false;
-            _collapsed = true;
-            _viewStack.SetRoot(BandColumnState.Main);
         }
 
         public void Back()
@@ -327,7 +237,8 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            if (State == BandColumnState.ChooseProfile || (State == BandColumnState.Instrument && _viewStack.Depth == 0))
+            if (State == BandColumnState.ChooseProfile ||
+                (State == BandColumnState.Instrument && Model.ViewStack.Depth == 0))
             {
                 _menu.Disconnect(this);
                 return;
@@ -339,9 +250,8 @@ namespace YARG.Menu.DifficultySelect
                 {
                     ToggleReady();
                 }
-                else if (!_collapsed)
+                else if (_session.CollapseColumn(Model))
                 {
-                    _collapsed = true;
                     SlideDownAndCollapse();
                 }
 
@@ -429,7 +339,7 @@ namespace YARG.Menu.DifficultySelect
             }
 
             _builtState = State;
-            _viewStack.RestoreFocusKey = null;
+            Model.ViewStack.RestoreFocusKey = null;
 
             StyleRows();
             SelectDefault(sameState ? previousIndex : null);
@@ -445,89 +355,31 @@ namespace YARG.Menu.DifficultySelect
         private void PushView(BandColumnState state, string focusKey = null, string settingTitle = null,
             List<(string Label, bool Current, Action Pick)> settingOptions = null)
         {
-            _viewStack.Push(state, focusKey, settingTitle, settingOptions);
-            _collapsed = false;
-            Rebuild();
-            _menu.OnColumnChanged();
+            _session.PushView(Model, state, focusKey, settingTitle, settingOptions);
         }
 
         private void PopView()
         {
-            if (!_viewStack.Pop())
-            {
-                return;
-            }
-
-            _collapsed = false;
-            Rebuild();
-            _menu.OnColumnChanged();
-        }
-
-        private void SetRootState(BandColumnState state)
-        {
-            _viewStack.SetRoot(state);
-            _collapsed = false;
-            Rebuild();
-            _menu.OnColumnChanged();
+            _session.PopView(Model);
         }
 
         private void OpenPicker(bool canCancel)
         {
-            if (_locked)
-            {
-                return;
-            }
-
-            Ready = false;
-            if (canCancel)
-            {
-                PushView(BandColumnState.Instrument, nameof(BandColumnState.Instrument));
-            }
-            else
-            {
-                SetRootState(BandColumnState.Instrument);
-            }
+            _session.OpenPicker(Model, canCancel);
         }
 
         private void PickInstrument(Instrument instrument)
         {
-            if (_menu.GetInstrumentBlocker(this, instrument, out var mode) != null)
-            {
-                Rebuild();
-                return;
-            }
-
-            SetGameMode(mode);
-            PlayerSelectionRules.PickInstrument(Player.Profile, instrument, _menu.Instruments, _menu.MaxHarmonyIndex);
-            CollectOptions();
-            Ready = false;
-            _warning = null;
-            SetRootState(BandColumnState.Main);
+            _session.PickInstrument(Model, instrument);
         }
 
         private void ToggleReady()
         {
-            if (!Ready)
-            {
-                if (Player.IsMissingMicrophone)
-                {
-                    _warning = Localize.Key("Menu.DifficultySelect.Band.NoMicrophone");
-                    Rebuild();
-                    return;
-                }
+            _session.ToggleReady(Model);
+        }
 
-                if (Player.IsMissingController)
-                {
-                    _warning = Localize.Key("Menu.DifficultySelect.Band.NoController");
-                    Rebuild();
-                    return;
-                }
-            }
-
-            _warning = null;
-            _collapsed = false;
-            Ready = !Ready;
-
+        public void ApplyReadyVisuals()
+        {
             if (Ready)
             {
                 SlideDownAndCollapse();
@@ -540,13 +392,12 @@ namespace YARG.Menu.DifficultySelect
                     _nav.SelectButton(_readyButton);
                 }
             }
-
-            _menu.OnColumnChanged();
         }
 
         public void OnPointerClick(PointerEventData eventData)
         {
-            if (eventData.button != PointerEventData.InputButton.Left || !_menu.CanClickCards || State != BandColumnState.Main)
+            if (eventData.button != PointerEventData.InputButton.Left || !_session.CanClickCards ||
+                State != BandColumnState.Main)
             {
                 return;
             }
@@ -569,7 +420,7 @@ namespace YARG.Menu.DifficultySelect
 
             bool onHeader = !RectTransformUtility.RectangleContainsScreenPoint((RectTransform) _scroll.transform,
                 eventData.position, eventData.pressEventCamera);
-            if (_menu.IsOvershell && onHeader)
+            if (_session.IsOvershell && onHeader)
             {
                 Back();
             }
@@ -577,18 +428,10 @@ namespace YARG.Menu.DifficultySelect
 
         public bool Expand()
         {
-            bool canExpand = State == BandColumnState.Main && !Ready && _collapsed;
-            if (!canExpand)
-            {
-                return false;
-            }
-
-            _collapsed = false;
-            RebuildFromCurrentTop();
-            return true;
+            return _session.ExpandColumn(Model);
         }
 
-        private void RebuildFromCurrentTop()
+        public void RebuildFromCurrentTop()
         {
             float top = _card.anchoredPosition.y + _card.rect.height;
             Rebuild();
@@ -597,16 +440,13 @@ namespace YARG.Menu.DifficultySelect
 
         private void ConfirmDifficulty(Difficulty difficulty)
         {
-            Player.Profile.CurrentDifficulty = Player.Profile.DifficultyFallback = difficulty;
-            SetRootState(BandColumnState.Main);
+            _session.ConfirmDifficulty(Model, difficulty);
             _nav.SelectButton(_readyButton);
         }
 
         private void CycleHarmonyPart()
         {
-            var profile = Player.Profile;
-            profile.HarmonyIndex = (byte) ((profile.HarmonyIndex + 1) % _menu.MaxHarmonyIndex);
-            Rebuild();
+            _session.CycleHarmonyPart(Model);
         }
 
         private void OnSelectionChanged(NavigatableBehaviour selected, SelectionOrigin origin)
@@ -620,31 +460,12 @@ namespace YARG.Menu.DifficultySelect
 
             if (origin == SelectionOrigin.Mouse)
             {
-                _menu.FocusColumn(this);
+                _session.FocusColumn(Model);
             }
             else
             {
                 ScrollToSelection();
             }
-        }
-
-        private void SetGameMode(GameMode mode)
-        {
-            var profile = Player.Profile;
-            if (profile.GameMode == mode)
-            {
-                return;
-            }
-
-            profile.GameMode = mode;
-            Player.DeviceInfo.RefreshGameMode();
-            PlayerContainer.NotifyProfileChanged(profile);
-        }
-
-        private void CollectOptions()
-        {
-            _excusableModifiers = PlayerSelectionRules.CollectPossibleModifiers(Player.Profile, _modifiers);
-            PlayerSelectionRules.CollectPossibleDifficulties(Player.Profile, _menu.Songs, _difficulties);
         }
 
         private void SetPlayerHeading()

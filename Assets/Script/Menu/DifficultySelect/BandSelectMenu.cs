@@ -5,12 +5,12 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
-using YARG.Core;
-using YARG.Core.Game;
+using YARG.Core.Input;
 using YARG.Core.Song;
-using YARG.Gameplay.Visuals;
+using YARG.Gameplay.HUD;
 using YARG.Input;
 using YARG.Localization;
+using YARG.Menu.MusicLibrary;
 using YARG.Menu.Navigation;
 using YARG.Menu.Persistent;
 using YARG.Player;
@@ -20,9 +20,6 @@ namespace YARG.Menu.DifficultySelect
     public sealed partial class BandSelectMenu : MonoBehaviour
     {
         internal static readonly Color READY_COLOR = new Color32(0x00, 0xD3, 0xFF, 0xFF);
-
-        private const int MAX_PLAYERS = HighwayCameraRendering.MAX_MATRICES;
-        private const int MIN_SLOTS = 4;
 
         private const float MAX_COLUMN_WIDTH = 460f;
         internal const float SLIDE_DISTANCE = 900f;
@@ -43,27 +40,20 @@ namespace YARG.Menu.DifficultySelect
         [SerializeField]
         private BandColumn _columnPrefab;
 
-        private static readonly BandSeatTracker _seatTracker = new();
-
+        private readonly BandSessionState _session = new();
         private readonly BandCardAnimator _animator = new();
-        private readonly BandPlayerJoiner _joiner = new();
+        private readonly Dictionary<BandColumnModel, BandColumn> _columnViews = new();
         private readonly List<BandColumn> _columns = new();
-        private readonly List<Instrument> _instruments = new();
-        private readonly List<GameMode> _modeBuffer = new();
-        private readonly List<Instrument> _otherInstrumentBuffer = new();
-        private readonly List<Transform> _slotOrderBuffer = new();
         private readonly Dictionary<RectTransform, (float Position, float Width)> _cardSnapshotBuffer = new();
         private readonly List<JoinSlotEntry> _joinSlots = new();
         private readonly List<InputDevice> _pendingJoins = new();
+        private readonly List<BandColumnModel> _cancelJoinBuffer = new();
+        private readonly List<BandColumnModel> _collapseBuffer = new();
 
         private BandColumn _profilesInUse;
         private LayoutElement _profilesInUseSlot;
         private HorizontalLayoutGroup _bandLayout;
-        private List<SongEntry> _songs;
         private Action _startSong;
-        private int _focusIndex;
-        private bool _startPending;
-        private bool _started;
         private IDisposable _startInputBlocker;
         private Tween _startDelay;
         private Canvas _bandCanvas;
@@ -71,38 +61,27 @@ namespace YARG.Menu.DifficultySelect
         private float _fittedBandHeight;
         private Func<bool> _canEngage;
         private NavigationScheme _scheme;
-        private bool _hidden;
 
-        internal IReadOnlyList<SongEntry> Songs => _songs;
-        internal IReadOnlyList<Instrument> Instruments => _instruments;
-        internal int MaxHarmonyIndex { get; private set; }
         internal DifficultyRing RingTemplate { get; private set; }
 
-        public bool IsOpen { get; private set; }
-        public bool IsOvershell { get; private set; }
-
-        private bool IsFull => PlayerContainer.Players.Count >= MAX_PLAYERS;
-
-        internal bool CanClickCards => !_started && !DialogManager.Instance.IsDialogShowing &&
-            (!IsOvershell || (!_hidden && _canEngage()));
-
-        private bool IsJoinBlocked => _started || DialogManager.Instance.IsDialogShowing || IsFull ||
-            (IsOvershell && (_hidden || !_canEngage()));
+        public bool IsOpen => _session.IsOpen;
+        public bool IsOvershell => _session.IsOvershell;
 
         private void Awake()
         {
             _bandLayout = _band.GetComponent<HorizontalLayoutGroup>();
+            _session.ColumnsChanged += OnSessionColumnsChanged;
+            _session.ColumnRebuildRequested += OnSessionColumnRebuildRequested;
+            _session.ColumnExpanded += OnSessionColumnExpanded;
+            _session.ColumnReadyChanged += OnSessionColumnReadyChanged;
         }
 
         public void Open(List<SongEntry> songs, DifficultyRing ringTemplate, Action startSong)
         {
-            _songs = songs;
             RingTemplate = ringTemplate;
             _startSong = startSong;
-            UpdateInstruments();
 
-            IsOvershell = false;
-            OpenBand();
+            OpenBand(songs, isOvershell: false, canEngage: null);
 
             _scheme = new NavigationScheme(new()
             {
@@ -131,60 +110,24 @@ namespace YARG.Menu.DifficultySelect
             Navigator.Instance.NavigationEvent += OnNavigationEvent;
 
             ListenForPlayers();
-            OnColumnChanged();
         }
 
         public void OpenOvershell(Func<bool> canEngage)
         {
             _canEngage = canEngage;
-            _hidden = false;
-
-            IsOvershell = true;
-            OpenBand();
+            OpenBand(songs: null, isOvershell: true, canEngage: canEngage);
             Navigator.Instance.InputInterceptor = InterceptOvershellInput;
-
             ListenForPlayers();
-            OnColumnChanged();
         }
 
-        private void OpenBand()
+        private void OpenBand(List<SongEntry> songs, bool isOvershell, Func<bool> canEngage)
         {
-            IsOpen = true;
-            _startPending = false;
-            _started = false;
-            _focusIndex = 0;
-
             _joinSlot.gameObject.SetActive(false);
             _band.gameObject.SetActive(true);
-            _footer.gameObject.SetActive(!IsOvershell);
+            _footer.gameObject.SetActive(!isOvershell);
             ShowFooterBackground(true);
 
-            var seats = _seatTracker.Snapshot();
-            foreach (var player in PlayerContainer.Players)
-            {
-                var column = InsertColumn(player, before: null);
-                if (!IsOvershell)
-                {
-                    column.RiseFrom(-SLIDE_DISTANCE);
-                }
-
-                column.Open();
-            }
-
-            SetJoinSlotCount(Mathf.Max(MIN_SLOTS, _columns.Count + 1) - _columns.Count);
-            ApplySeats(seats);
-        }
-
-        private void ApplySeats(Dictionary<YargPlayer, int> seats)
-        {
-            var joinSlotTransforms = new List<Transform>(_joinSlots.Count);
-            foreach (var entry in _joinSlots)
-            {
-                joinSlotTransforms.Add(entry.Slot.transform);
-            }
-
-            joinSlotTransforms.Sort((a, b) => a.GetSiblingIndex().CompareTo(b.GetSiblingIndex()));
-            _seatTracker.Apply(seats, _columns, joinSlotTransforms);
+            _session.Open(songs, isOvershell, canEngage);
         }
 
         private void ListenForPlayers()
@@ -196,25 +139,26 @@ namespace YARG.Menu.DifficultySelect
 
         public void SetOvershellHidden(bool hidden)
         {
-            if (!IsOpen || !IsOvershell || hidden == _hidden)
+            _cancelJoinBuffer.Clear();
+            _collapseBuffer.Clear();
+            if (!_session.SetOvershellHidden(hidden, _cancelJoinBuffer, _collapseBuffer))
             {
                 return;
             }
 
-            _hidden = hidden;
-            if (hidden)
+            foreach (var model in _cancelJoinBuffer)
             {
-                for (int i = _columns.Count - 1; i >= 0; i--)
+                if (_columnViews.TryGetValue(model, out var column))
                 {
-                    var column = _columns[i];
-                    if (column.IsJoining)
-                    {
-                        CancelJoin(column);
-                    }
-                    else if (column.IsExpanded)
-                    {
-                        column.Collapse();
-                    }
+                    CancelJoin(column);
+                }
+            }
+
+            foreach (var model in _collapseBuffer)
+            {
+                if (_columnViews.TryGetValue(model, out var column))
+                {
+                    column.Rebuild();
                 }
             }
 
@@ -224,22 +168,19 @@ namespace YARG.Menu.DifficultySelect
 
         public void Close()
         {
-            if (!IsOpen)
+            if (!_session.IsOpen)
             {
                 return;
             }
 
-            IsOpen = false;
+            bool wasOvershell = _session.IsOvershell;
             _pendingJoins.Clear();
             _startDelay?.Kill();
             _startDelay = null;
             ReleaseStartInputBlocker();
             Unsubscribe();
 
-            foreach (var column in _joiner.SnapshotJoiningColumns())
-            {
-                CancelJoin(column);
-            }
+            _session.Close();
 
             foreach (var column in _columns)
             {
@@ -247,6 +188,7 @@ namespace YARG.Menu.DifficultySelect
             }
 
             _columns.Clear();
+            _columnViews.Clear();
             if (_profilesInUse != null)
             {
                 Destroy(_profilesInUse.gameObject);
@@ -259,7 +201,7 @@ namespace YARG.Menu.DifficultySelect
             _footer.gameObject.SetActive(false);
             ShowFooterBackground(false);
 
-            if (!IsOvershell)
+            if (!wasOvershell)
             {
                 Navigator.Instance.PopScheme();
             }
@@ -272,6 +214,10 @@ namespace YARG.Menu.DifficultySelect
 
         private void OnDestroy()
         {
+            _session.ColumnsChanged -= OnSessionColumnsChanged;
+            _session.ColumnRebuildRequested -= OnSessionColumnRebuildRequested;
+            _session.ColumnExpanded -= OnSessionColumnExpanded;
+            _session.ColumnReadyChanged -= OnSessionColumnReadyChanged;
             Unsubscribe();
         }
 
@@ -300,7 +246,7 @@ namespace YARG.Menu.DifficultySelect
 
         private void Update()
         {
-            if (!IsOpen)
+            if (!_session.IsOpen)
             {
                 return;
             }
@@ -309,7 +255,7 @@ namespace YARG.Menu.DifficultySelect
             {
                 for (int i = 0; i < _pendingJoins.Count; i++)
                 {
-                    if (!IsJoinBlocked)
+                    if (!_session.IsJoinBlocked)
                     {
                         Join(_pendingJoins[i]);
                     }
@@ -318,9 +264,9 @@ namespace YARG.Menu.DifficultySelect
                 _pendingJoins.Clear();
             }
 
-            if (_startPending)
+            if (_session.StartPending)
             {
-                _startPending = false;
+                _session.ConsumeStartPending();
                 StartSong();
             }
 
@@ -328,52 +274,96 @@ namespace YARG.Menu.DifficultySelect
             UpdateSortingOrder();
         }
 
-        internal void OnColumnChanged()
+        private void OnSessionColumnsChanged()
         {
-            if (!IsOpen)
+            if (!_session.IsOpen)
             {
                 return;
             }
 
-            bool anyJoining = SyncPlayerOrder();
-            int slots = UpdateJoinSlotLayout(anyJoining);
-            _seatTracker.Record(_columns, OrderedSlots());
+            SyncViewsWithSession();
 
-            float width = GetColumnWidth(slots);
+            float width = GetColumnWidth(_session.SlotAssignments.Count);
             UpdateJoinSlotCards(width);
             ApplyColumnWidthsAndFocus(width);
             UpdateStatus();
         }
 
-        private bool SyncPlayerOrder()
+        private void OnSessionColumnRebuildRequested(BandColumnModel model)
         {
-            var playerOrder = new List<YargPlayer>(_columns.Count);
-            bool anyJoining = false;
-            foreach (var column in _columns)
+            if (_columnViews.TryGetValue(model, out var column))
             {
-                playerOrder.Add(column.Player);
-                if (column.IsJoining)
+                column.Rebuild();
+            }
+        }
+
+        private void OnSessionColumnExpanded(BandColumnModel model)
+        {
+            if (_columnViews.TryGetValue(model, out var column))
+            {
+                column.RebuildFromCurrentTop();
+            }
+        }
+
+        private void OnSessionColumnReadyChanged(BandColumnModel model)
+        {
+            if (_columnViews.TryGetValue(model, out var column))
+            {
+                column.ApplyReadyVisuals();
+            }
+        }
+
+        private void SyncViewsWithSession()
+        {
+            int joinSlotTarget = 0;
+            foreach (var player in _session.SlotAssignments)
+            {
+                if (player == null)
                 {
-                    anyJoining = true;
+                    joinSlotTarget++;
                 }
             }
 
-            PlayerContainer.SetPlayerOrder(playerOrder);
-            return anyJoining;
-        }
+            SetJoinSlotCount(joinSlotTarget);
 
-        private int UpdateJoinSlotLayout(bool anyJoining)
-        {
-            int spare = anyJoining ? 0 : 1;
-            int slots = Mathf.Max(MIN_SLOTS, _columns.Count + spare);
-            SetJoinSlotCount(slots - _columns.Count);
-            return slots;
+            foreach (var model in _session.Columns)
+            {
+                if (!_columnViews.ContainsKey(model))
+                {
+                    var column = CreateColumnView(model);
+                    if (!_session.IsOvershell)
+                    {
+                        column.RiseFrom(-SLIDE_DISTANCE);
+                    }
+
+                    column.Open();
+                }
+            }
+
+            _columns.Clear();
+            int joinIndex = 0;
+            foreach (var player in _session.SlotAssignments)
+            {
+                if (player == null)
+                {
+                    _joinSlots[joinIndex++].Slot.transform.SetAsLastSibling();
+                }
+                else
+                {
+                    var model = _session.FindColumn(player);
+                    if (model != null && _columnViews.TryGetValue(model, out var column))
+                    {
+                        column.transform.SetAsLastSibling();
+                        _columns.Add(column);
+                    }
+                }
+            }
         }
 
         private void UpdateJoinSlotCards(float width)
         {
-            string joinText = IsFull
-                ? Localize.KeyFormat("Menu.DifficultySelect.Band.Full", MAX_PLAYERS)
+            string joinText = _session.IsFull
+                ? Localize.KeyFormat("Menu.DifficultySelect.Band.Full", BandSessionState.MAX_PLAYERS)
                 : Localize.Key("Menu.DifficultySelect.Band.JoinPrompt");
 
             foreach (var entry in _joinSlots)
@@ -395,71 +385,25 @@ namespace YARG.Menu.DifficultySelect
                 _profilesInUse.SetWidth(width);
             }
 
-            _focusIndex = Mathf.Clamp(_focusIndex, 0, Mathf.Max(0, _columns.Count - 1));
             bool hasKeyboard = PlayerContainer.HasConnectedKeyboardProfile();
             for (int i = 0; i < _columns.Count; i++)
             {
                 _columns[i].SetWidth(width);
-                _columns[i].SetFocused(IsOvershell || (i == _focusIndex && !hasKeyboard));
+                _columns[i].SetFocused(_session.IsOvershell || (i == _session.FocusIndex && !hasKeyboard));
             }
-        }
-
-        internal void FocusColumn(BandColumn column)
-        {
-            int index = _columns.IndexOf(column);
-            if (index < 0 || index == _focusIndex)
-            {
-                return;
-            }
-
-            _focusIndex = index;
-            OnColumnChanged();
-        }
-
-        internal string GetInstrumentBlocker(BandColumn column, Instrument instrument, out GameMode mode)
-        {
-            _otherInstrumentBuffer.Clear();
-            foreach (var other in _columns)
-            {
-                if (other != column && other.HasChosenInstrument)
-                {
-                    _otherInstrumentBuffer.Add(other.Player.Profile.CurrentInstrument);
-                }
-            }
-
-            return PlayerSelectionRules.GetInstrumentBlocker(GlobalVariables.State.CurrentSong, column.Player,
-                instrument, _otherInstrumentBuffer, out mode, _modeBuffer);
         }
 
         private void UpdateStatus()
         {
-            if (IsOvershell)
+            if (_session.IsOvershell)
             {
                 return;
             }
 
-            int ready = 0;
-            bool allDecided = _columns.Count > 0;
-            foreach (var column in _columns)
-            {
-                if (!column.IsDecided)
-                {
-                    allDecided = false;
-                }
-                else if (!column.IsSittingOut)
-                {
-                    ready++;
-                }
-            }
-
-            _footer.text = allDecided && ready == 0
-                ? Localize.Key("Menu.DifficultySelect.Band.NobodyPlaying")
-                : string.Empty;
-
-            _startPending = allDecided && ready > 0;
+            _footer.text = _session.FooterText;
 
             if (_scheme != null &&
-                _scheme.SetActionDisabled(MenuAction.Green, _columns.Count == 0) &&
+                _scheme.SetActionDisabled(MenuAction.Green, _session.GreenDisabled) &&
                 HelpBar.Instance != null)
             {
                 HelpBar.Instance.RefreshDisabledActions(_scheme);
@@ -468,30 +412,12 @@ namespace YARG.Menu.DifficultySelect
 
         private void StartSong()
         {
-            if (_started)
+            if (_session.Started)
             {
                 return;
             }
 
-            _started = true;
-            var players = new List<YargPlayer>(_columns.Count);
-            YargPlayer vocalLeader = null;
-            foreach (var column in _columns)
-            {
-                column.Player.SittingOut = column.IsSittingOut;
-                players.Add(column.Player);
-                if (vocalLeader == null && !column.Player.SittingOut &&
-                    column.Player.Profile.GameMode == GameMode.Vocals)
-                {
-                    vocalLeader = column.Player;
-                }
-            }
-
-            if (vocalLeader != null)
-            {
-                PlayerSelectionRules.ShareVocalModifiers(vocalLeader, players);
-            }
-
+            _session.MarkStarted();
             _startInputBlocker = Navigator.Instance.PushInputBlocker();
             foreach (var column in _columns)
             {
@@ -514,13 +440,6 @@ namespace YARG.Menu.DifficultySelect
         {
             _startInputBlocker?.Dispose();
             _startInputBlocker = null;
-        }
-
-        private void UpdateInstruments()
-        {
-            var song = GlobalVariables.State.CurrentSong;
-            MaxHarmonyIndex = PlayerSelectionRules.GetMaxHarmonyIndex(song, _songs);
-            PlayerSelectionRules.CollectSongInstruments(song, _songs, _instruments);
         }
     }
 }

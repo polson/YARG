@@ -2,7 +2,6 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using YARG.Menu.Persistent;
-using YARG.Player;
 
 namespace YARG.Menu.DifficultySelect
 {
@@ -43,7 +42,7 @@ namespace YARG.Menu.DifficultySelect
             }
 
             bool raise = false;
-            if (IsOvershell)
+            if (_session.IsOvershell)
             {
                 raise = _profilesInUse != null;
                 for (int i = 0; !raise && i < _columns.Count; i++)
@@ -58,148 +57,65 @@ namespace YARG.Menu.DifficultySelect
             _bandCanvas.sortingOrder = raise ? OPEN_CARD_SORTING_ORDER : _bandSortingOrder;
         }
 
-        private BandColumn InsertColumn(YargPlayer player, Dictionary<RectTransform, (float Position, float Width)> before,
-            LayoutElement target = null)
+        private BandColumn CreateColumnView(BandColumnModel model)
         {
             var column = Instantiate(_columnPrefab, _band);
-            column.Initialize(this, player);
-
-            if (target == null)
-            {
-                target = EarliestJoinSlot();
-            }
-
-            if (target != null)
-            {
-                column.transform.SetSiblingIndex(target.transform.GetSiblingIndex());
-                _animator.RemapCard(before, JoinCard(target), column.Card);
-                DestroyJoinSlot(target);
-            }
-
-            int index = CountPrecedingColumns(column.transform.GetSiblingIndex());
-
-            _columns.Insert(index, column);
-            if (_columns.Count > 1 && index <= _focusIndex)
-            {
-                _focusIndex++;
-            }
-
+            column.Initialize(this, _session, model);
+            _columnViews[model] = column;
             RefreshProfilePickers(column);
             return column;
         }
 
-        private int CountPrecedingColumns(int siblingIndex)
+        private BandColumn CreateAndRemapColumnView(BandColumnModel model, int replacedSlotIndex)
         {
-            int index = 0;
-            foreach (var column in _columns)
+            var column = CreateColumnView(model);
+            if (replacedSlotIndex >= 0)
             {
-                if (column.transform.GetSiblingIndex() < siblingIndex)
+                var target = FindJoinSlotAtSiblingIndex(replacedSlotIndex);
+                if (target != null)
                 {
-                    index++;
+                    column.transform.SetSiblingIndex(replacedSlotIndex);
+                    _animator.RemapCard(_cardSnapshotBuffer, JoinCard(target), column.Card);
+                    DestroyJoinSlot(target);
                 }
             }
 
-            return index;
+            return column;
         }
 
-        internal bool CanMoveColumn(BandColumn column, int direction)
+        private LayoutElement FindJoinSlotAtSiblingIndex(int siblingIndex)
         {
-            return SlotBeside(column, direction) != null;
-        }
+            foreach (var entry in _joinSlots)
+            {
+                if (entry.Slot.transform.GetSiblingIndex() == siblingIndex)
+                {
+                    return entry.Slot;
+                }
+            }
 
-        private Transform SlotBeside(BandColumn column, int direction)
-        {
-            var slots = OrderedSlots();
-            int index = slots.IndexOf(column.transform);
-            int target = index + direction;
-            return index >= 0 && target >= 0 && target < slots.Count ? slots[target] : null;
+            return null;
         }
 
         internal bool MoveColumn(BandColumn column, int direction)
         {
-            var other = SlotBeside(column, direction);
-            if (other == null)
+            CaptureCardPositions();
+            if (!_session.MoveColumn(column.Model, direction))
             {
                 return false;
             }
 
-            var focused = FocusedColumn;
-            CaptureCardPositions();
-
-            int siblingIndex = column.transform.GetSiblingIndex();
-            column.transform.SetSiblingIndex(other.GetSiblingIndex());
-            other.SetSiblingIndex(siblingIndex);
-
-            _columns.Sort((a, b) => a.transform.GetSiblingIndex().CompareTo(b.transform.GetSiblingIndex()));
-            _focusIndex = _columns.IndexOf(focused);
-
-            OnColumnChanged();
-            PlayerContainer.SaveProfiles();
             _animator.ShiftCards(_band, _columns, _joinSlots, _cardSnapshotBuffer, delay: 0f, riseDelay: null);
-
-            foreach (var otherColumn in _columns)
-            {
-                if (otherColumn != column && otherColumn.State == BandColumnState.Position)
-                {
-                    otherColumn.Rebuild();
-                }
-            }
-
             return true;
         }
 
-        private List<Transform> OrderedSlots()
+        private void RemoveColumnView(BandColumn column)
         {
-            _slotOrderBuffer.Clear();
-            foreach (Transform child in _band)
-            {
-                if (IsManagedSlot(child))
-                {
-                    _slotOrderBuffer.Add(child);
-                }
-            }
-
-            return _slotOrderBuffer;
-        }
-
-        private bool IsManagedSlot(Transform child)
-        {
-            foreach (var column in _columns)
-            {
-                if (column.transform == child)
-                {
-                    return true;
-                }
-            }
-
-            foreach (var entry in _joinSlots)
-            {
-                if (entry.Slot.transform == child)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private void RemoveColumn(BandColumn column)
-        {
-            CaptureCardPositions();
-            int siblingIndex = column.transform.GetSiblingIndex();
-
             _columns.Remove(column);
-            _joiner.UntrackJoin(column);
+            _columnViews.Remove(column.Model);
             _animator.KillTweens(column.Card);
             column.DismissAndDestroy();
 
-            if (_columns.Count + 1 < MIN_SLOTS)
-            {
-                CreateJoinSlot(siblingIndex);
-            }
-
             RefreshProfilePickers(column);
-            OnColumnChanged();
             _animator.ShiftCards(_band, _columns, _joinSlots, _cardSnapshotBuffer, delay: SLIDE_SECONDS,
                 riseDelay: SLIDE_SECONDS);
         }
@@ -211,7 +127,7 @@ namespace YARG.Menu.DifficultySelect
 
         private void ShowFooterBackground(bool show)
         {
-            if (IsOvershell)
+            if (_session.IsOvershell)
             {
                 return;
             }

@@ -95,7 +95,7 @@ namespace YARG.Menu.DifficultySelect
         {
             var row = AddRow(null, Localize.Key("Menu.DifficultySelect.Band.Settings"),
                 () => PushView(BandColumnState.Settings, nameof(BandColumnState.Settings)), !Ready);
-            if (_viewStack.RestoreFocusKey == nameof(BandColumnState.Settings))
+            if (Model.ViewStack.RestoreFocusKey == nameof(BandColumnState.Settings))
             {
                 _defaultButton = row.Button;
             }
@@ -107,11 +107,12 @@ namespace YARG.Menu.DifficultySelect
 
             SetPlayerHeading();
 
-            if (_menu.IsOvershell)
+            if (_session.IsOvershell)
             {
                 AddChoiceRow(INPUT_MODE_KEY, profile.GameMode.ToLocalizedName(),
                     ProfileCenterPane.GAME_MODES.Select(mode =>
-                        (mode.ToLocalizedName(), mode == profile.GameMode, (Action) (() => ChangeInputMode(mode)))));
+                        (mode.ToLocalizedName(), mode == profile.GameMode,
+                            (Action) (() => _session.ChangeInputMode(Model, mode)))));
             }
 
             foreach (var setting in profile.GameMode.PossibleProfileSettings(new()).Select(s => s.setting).Distinct())
@@ -237,7 +238,7 @@ namespace YARG.Menu.DifficultySelect
 
         private void MarkSettingDefault(string key, DifficultyItem row)
         {
-            if (key == _viewStack.RestoreFocusKey)
+            if (key == Model.ViewStack.RestoreFocusKey)
             {
                 _defaultButton = row.Button;
             }
@@ -251,9 +252,9 @@ namespace YARG.Menu.DifficultySelect
         private void BuildSettingOptions()
         {
             SetPlayerHeading();
-            AddWrappableRow(AddLabel(_viewStack.SettingTitle));
+            AddWrappableRow(AddLabel(Model.ViewStack.SettingTitle));
 
-            foreach (var (label, current, pick) in _viewStack.SettingOptions)
+            foreach (var (label, current, pick) in Model.ViewStack.SettingOptions)
             {
                 var row = AddRow(null, label, () =>
                 {
@@ -268,19 +269,6 @@ namespace YARG.Menu.DifficultySelect
                     _defaultButton = row.Button;
                 }
             }
-        }
-
-        private void ChangeInputMode(GameMode mode)
-        {
-            var profile = Player.Profile;
-            if (profile.GameMode == mode)
-            {
-                return;
-            }
-
-            ProfileSettingsCatalog.ApplyGameModeDefaults(profile, mode);
-            SetGameMode(mode);
-            FiltersMenu.ResetIntensityFiltersForProfile(profile);
         }
 
         private static string SettingLabel(string key)

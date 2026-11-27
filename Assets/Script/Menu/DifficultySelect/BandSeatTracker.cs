@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using UnityEngine;
 using YARG.Player;
 
 namespace YARG.Menu.DifficultySelect
@@ -18,90 +17,54 @@ namespace YARG.Menu.DifficultySelect
             _seats.Remove(player);
         }
 
-        public void Record(IReadOnlyList<BandColumn> columns, IReadOnlyList<Transform> orderedSlots)
+        public void Record(IReadOnlyList<YargPlayer> slotAssignments)
         {
             _seats.Clear();
-            foreach (var column in columns)
+            for (int i = 0; i < slotAssignments.Count; i++)
             {
-                _seats[column.Player] = FindSlotIndex(column.transform, orderedSlots);
-            }
-        }
-
-        public void Apply(
-            Dictionary<YargPlayer, int> seats,
-            List<BandColumn> columns,
-            IReadOnlyList<Transform> joinSlotTransforms)
-        {
-            int count = columns.Count + joinSlotTransforms.Count;
-            var seated = new Transform[count];
-            var unseated = AssignExistingSeats(seats, columns, seated);
-
-            AssignRemainingColumns(unseated, seated);
-            ApplySiblingOrder(seated, joinSlotTransforms);
-
-            columns.Sort((a, b) => a.transform.GetSiblingIndex().CompareTo(b.transform.GetSiblingIndex()));
-        }
-
-        private static int FindSlotIndex(Transform target, IReadOnlyList<Transform> orderedSlots)
-        {
-            for (int i = 0; i < orderedSlots.Count; i++)
-            {
-                if (orderedSlots[i] == target)
+                if (slotAssignments[i] != null)
                 {
-                    return i;
+                    _seats[slotAssignments[i]] = i;
                 }
             }
-
-            return -1;
         }
 
-        private static List<BandColumn> AssignExistingSeats(
+        public static void ComputeOrder(
             Dictionary<YargPlayer, int> seats,
-            IReadOnlyList<BandColumn> columns,
-            Transform[] seated)
+            IReadOnlyList<YargPlayer> players,
+            int joinSlotCount,
+            List<YargPlayer> slotAssignments)
         {
-            var unseated = new List<BandColumn>();
-            foreach (var column in columns)
+            int count = players.Count + joinSlotCount;
+            slotAssignments.Clear();
+            for (int i = 0; i < count; i++)
             {
-                if (seats.TryGetValue(column.Player, out int seat) && seat >= 0 && seat < seated.Length &&
-                    seated[seat] == null)
+                slotAssignments.Add(null);
+            }
+
+            var unseated = new List<YargPlayer>();
+            foreach (var player in players)
+            {
+                if (seats.TryGetValue(player, out int seat) && seat >= 0 && seat < count &&
+                    slotAssignments[seat] == null)
                 {
-                    seated[seat] = column.transform;
+                    slotAssignments[seat] = player;
                 }
                 else
                 {
-                    unseated.Add(column);
+                    unseated.Add(player);
                 }
             }
 
-            return unseated;
-        }
-
-        private static void AssignRemainingColumns(IReadOnlyList<BandColumn> unseated, Transform[] seated)
-        {
             int next = 0;
-            foreach (var column in unseated)
+            foreach (var player in unseated)
             {
-                while (seated[next] != null)
+                while (slotAssignments[next] != null)
                 {
                     next++;
                 }
 
-                seated[next] = column.transform;
-            }
-        }
-
-        private static void ApplySiblingOrder(Transform[] seated, IReadOnlyList<Transform> joinSlotTransforms)
-        {
-            int joinIndex = 0;
-            for (int i = 0; i < seated.Length; i++)
-            {
-                if (seated[i] == null)
-                {
-                    seated[i] = joinSlotTransforms[joinIndex++];
-                }
-
-                seated[i].SetAsLastSibling();
+                slotAssignments[next] = player;
             }
         }
     }
