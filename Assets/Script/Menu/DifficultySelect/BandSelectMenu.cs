@@ -18,6 +18,11 @@ using YARG.Player;
 
 namespace YARG.Menu.DifficultySelect
 {
+    /// <summary>
+    /// Coordinates the band strip: takes controller input, tells each card what to do, manages the join slots,
+    /// and slides cards when players join, leave, or move. Who is in the band lives in
+    /// <see cref="BandSessionState"/>; what each card shows is decided by its <see cref="BandCardController"/>.
+    /// </summary>
     public sealed class BandSelectMenu : MonoBehaviour
     {
         internal static readonly Color READY_COLOR = new Color32(0x00, 0xD3, 0xFF, 0xFF);
@@ -41,18 +46,32 @@ namespace YARG.Menu.DifficultySelect
         [SerializeField]
         private BandColumn _columnPrefab;
 
+        private readonly struct JoinSlotEntry
+        {
+            public readonly LayoutElement Slot;
+            public readonly RectTransform Card;
+            public readonly TextMeshProUGUI Label;
+
+            public JoinSlotEntry(LayoutElement slot, RectTransform card, TextMeshProUGUI label)
+            {
+                Slot = slot;
+                Card = card;
+                Label = label;
+            }
+        }
+
         private readonly BandSessionState _session = new();
-        private readonly BandCardAnimator _animator = new();
-        private readonly Dictionary<BandColumnModel, BandColumn> _columnViews = new();
-        private readonly List<BandColumn> _columns = new();
+        private readonly Dictionary<BandColumnModel, BandCardController> _cardsByModel = new();
+        private readonly List<BandCardController> _cards = new();
+        private readonly List<JoinSlotEntry> _joinSlots = new();
         private readonly Dictionary<RectTransform, (float Position, float Width)> _cardSnapshotBuffer = new();
+        private readonly Dictionary<RectTransform, Tween> _shifts = new();
+        private readonly Dictionary<RectTransform, Tween> _resizes = new();
         private readonly List<InputDevice> _pendingJoins = new();
         private readonly List<BandColumnModel> _cancelJoinBuffer = new();
         private readonly List<BandColumnModel> _collapseBuffer = new();
 
-        private BandInputRouter _input;
-        private BandJoinSlots _joinSlots;
-        private BandColumn _profilesInUse;
+        private BandCardController _profilesInUse;
         private LayoutElement _profilesInUseSlot;
         private HorizontalLayoutGroup _bandLayout;
         private Action _startSong;
@@ -72,8 +91,6 @@ namespace YARG.Menu.DifficultySelect
         private void Awake()
         {
             _bandLayout = _band.GetComponent<HorizontalLayoutGroup>();
-            _input = new BandInputRouter(_session, _columnViews);
-            _joinSlots = new BandJoinSlots(_band, _joinSlot, _animator, slot => JoinWithoutDevice(slot));
             _session.ColumnsChanged += OnSessionColumnsChanged;
             _session.ColumnRebuildRequested += OnSessionColumnRebuildRequested;
             _session.ColumnExpanded += OnSessionColumnExpanded;
@@ -87,9 +104,9 @@ namespace YARG.Menu.DifficultySelect
 
             OpenBand(songs, isOvershell: false, canEngage: null);
 
-            _scheme = _input.CreateBandScheme();
+            _scheme = CreateBandScheme();
             _ = Navigator.Instance.PushScheme(_scheme);
-            Navigator.Instance.NavigationEvent += _input.OnNavigationEvent;
+            Navigator.Instance.NavigationEvent += OnNavigationEvent;
 
             ListenForPlayers();
         }
@@ -97,7 +114,7 @@ namespace YARG.Menu.DifficultySelect
         public void OpenOvershell(Func<bool> canEngage)
         {
             OpenBand(songs: null, isOvershell: true, canEngage: canEngage);
-            Navigator.Instance.InputInterceptor = _input.InterceptOvershellInput;
+            Navigator.Instance.InputInterceptor = InterceptOvershellInput;
             ListenForPlayers();
         }
 
@@ -129,17 +146,17 @@ namespace YARG.Menu.DifficultySelect
 
             foreach (var model in _cancelJoinBuffer)
             {
-                if (_columnViews.TryGetValue(model, out var column))
+                if (_cardsByModel.TryGetValue(model, out var card))
                 {
-                    CancelJoin(column);
+                    CancelJoin(card);
                 }
             }
 
             foreach (var model in _collapseBuffer)
             {
-                if (_columnViews.TryGetValue(model, out var column))
+                if (_cardsByModel.TryGetValue(model, out var card))
                 {
-                    column.Rebuild();
+                    card.Rebuild();
                 }
             }
 
@@ -163,16 +180,16 @@ namespace YARG.Menu.DifficultySelect
 
             _session.Close();
 
-            foreach (var column in _columns)
+            foreach (var card in _cards)
             {
-                Destroy(column.gameObject);
+                Destroy(card.View.gameObject);
             }
 
-            _columns.Clear();
-            _columnViews.Clear();
+            _cards.Clear();
+            _cardsByModel.Clear();
             if (_profilesInUse != null)
             {
-                Destroy(_profilesInUse.gameObject);
+                Destroy(_profilesInUse.View.gameObject);
             }
 
             _profilesInUse = null;
@@ -218,8 +235,8 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            navigator.NavigationEvent -= _input.OnNavigationEvent;
-            if (navigator.InputInterceptor == _input.InterceptOvershellInput)
+            navigator.NavigationEvent -= OnNavigationEvent;
+            if (navigator.InputInterceptor == InterceptOvershellInput)
             {
                 navigator.InputInterceptor = null;
             }
@@ -234,11 +251,11 @@ namespace YARG.Menu.DifficultySelect
 
             if (_pendingJoins.Count > 0)
             {
-                for (int i = 0; i < _pendingJoins.Count; i++)
+                for (int pendingIndex = 0; pendingIndex < _pendingJoins.Count; pendingIndex++)
                 {
                     if (!_session.IsJoinBlocked)
                     {
-                        Join(_pendingJoins[i]);
+                        Join(_pendingJoins[pendingIndex]);
                     }
                 }
 
@@ -262,84 +279,83 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            SyncViewsWithSession();
+            SyncCardsWithSession();
 
             float width = GetColumnWidth(_session.SlotAssignments.Count);
             string joinText = _session.IsFull
                 ? Localize.KeyFormat("Menu.DifficultySelect.Band.Full", BandSessionState.MAX_PLAYERS)
                 : Localize.Key("Menu.DifficultySelect.Band.JoinPrompt");
-            _joinSlots.UpdateCards(width, joinText);
+            UpdateJoinCards(width, joinText);
             ApplyColumnWidthsAndFocus(width);
             UpdateStatus();
         }
 
         private void OnSessionColumnRebuildRequested(BandColumnModel model)
         {
-            if (_columnViews.TryGetValue(model, out var column))
+            if (_cardsByModel.TryGetValue(model, out var card))
             {
-                column.Rebuild();
+                card.Rebuild();
             }
         }
 
         private void OnSessionColumnExpanded(BandColumnModel model)
         {
-            if (_columnViews.TryGetValue(model, out var column))
+            if (_cardsByModel.TryGetValue(model, out var card))
             {
-                column.RebuildFromCurrentTop();
+                card.RebuildFromCurrentTop();
             }
         }
 
         private void OnSessionColumnReadyChanged(BandColumnModel model)
         {
-            if (_columnViews.TryGetValue(model, out var column))
+            if (_cardsByModel.TryGetValue(model, out var card))
             {
-                column.ApplyReadyVisuals();
+                card.ApplyReadyVisuals();
             }
         }
 
-        private void SyncViewsWithSession()
+        private void SyncCardsWithSession()
         {
-            int joinSlotTarget = 0;
+            int joinSlotCount = 0;
             foreach (var player in _session.SlotAssignments)
             {
                 if (player == null)
                 {
-                    joinSlotTarget++;
+                    joinSlotCount++;
                 }
             }
 
-            _joinSlots.SetCount(joinSlotTarget);
+            SetJoinSlotCount(joinSlotCount);
 
             foreach (var model in _session.Columns)
             {
-                if (!_columnViews.ContainsKey(model))
+                if (!_cardsByModel.ContainsKey(model))
                 {
-                    var column = CreateColumnView(model);
+                    var card = CreateCard(model);
                     if (!_session.IsOvershell)
                     {
-                        column.RiseFrom(-SLIDE_DISTANCE);
+                        card.View.RiseFrom(-SLIDE_DISTANCE);
                     }
 
-                    column.Open();
+                    card.Rebuild();
                 }
             }
 
-            _columns.Clear();
-            int joinIndex = 0;
+            _cards.Clear();
+            int joinSlotIndex = 0;
             foreach (var player in _session.SlotAssignments)
             {
                 if (player == null)
                 {
-                    _joinSlots.Entries[joinIndex++].Slot.transform.SetAsLastSibling();
+                    _joinSlots[joinSlotIndex++].Slot.transform.SetAsLastSibling();
+                    continue;
                 }
-                else
+
+                var model = _session.FindColumn(player);
+                if (model != null && _cardsByModel.TryGetValue(model, out var card))
                 {
-                    var model = _session.FindColumn(player);
-                    if (model != null && _columnViews.TryGetValue(model, out var column))
-                    {
-                        column.transform.SetAsLastSibling();
-                        _columns.Add(column);
-                    }
+                    card.View.transform.SetAsLastSibling();
+                    _cards.Add(card);
                 }
             }
         }
@@ -348,14 +364,15 @@ namespace YARG.Menu.DifficultySelect
         {
             if (_profilesInUse != null)
             {
-                _profilesInUse.SetWidth(width);
+                _profilesInUse.View.SetWidth(width);
             }
 
             bool hasKeyboard = PlayerContainer.HasConnectedKeyboardProfile();
-            for (int i = 0; i < _columns.Count; i++)
+            for (int cardIndex = 0; cardIndex < _cards.Count; cardIndex++)
             {
-                _columns[i].SetWidth(width);
-                _columns[i].SetFocused(_session.IsOvershell || (i == _session.FocusIndex && !hasKeyboard));
+                bool isFocused = _session.IsOvershell || (cardIndex == _session.FocusIndex && !hasKeyboard);
+                _cards[cardIndex].View.SetWidth(width);
+                _cards[cardIndex].View.SetFocused(isFocused);
             }
         }
 
@@ -374,6 +391,165 @@ namespace YARG.Menu.DifficultySelect
             {
                 HelpBar.Instance.RefreshDisabledActions(_scheme);
             }
+        }
+
+        private NavigationScheme CreateBandScheme()
+        {
+            return new NavigationScheme(new()
+            {
+                new NavigationScheme.Entry(MenuAction.Up, "Menu.Common.Up",
+                    ctx => CardFor(ctx.Player)?.NavigateVertical(-1, ctx.IsRepeat)),
+                new NavigationScheme.Entry(MenuAction.Down, "Menu.Common.Down",
+                    ctx => CardFor(ctx.Player)?.NavigateVertical(1, ctx.IsRepeat)),
+                new NavigationScheme.Entry(MenuAction.Green, "Menu.Common.Confirm", OnConfirm),
+                new NavigationScheme.Entry(MenuAction.Red, "Menu.Common.Back", OnBack),
+            }, allowsMusicPlayer: false);
+        }
+
+        private void OnConfirm(NavigationContext context)
+        {
+            if (_session.IsStartingSong)
+            {
+                return;
+            }
+
+            var card = CardFor(context.Player);
+            if (card != null && !card.Expand())
+            {
+                card.Confirm();
+            }
+        }
+
+        private void OnBack(NavigationContext context)
+        {
+            if (_session.IsStartingSong)
+            {
+                return;
+            }
+
+            var card = CardFor(context.Player);
+            if (card == null || card.IsAtTopLevel)
+            {
+                MenuManager.Instance.PopMenu();
+            }
+            else
+            {
+                card.Back();
+            }
+        }
+
+        private void OnNavigationEvent(NavigationContext context)
+        {
+            int direction = context.Action switch
+            {
+                MenuAction.Left  => -1,
+                MenuAction.Right => 1,
+                _                => 0,
+            };
+
+            if (direction != 0 && !_session.IsStartingSong)
+            {
+                var card = CardFor(context.Player);
+                if (card != null && card.AdjustSelection(direction))
+                {
+                    return;
+                }
+            }
+
+            if (direction == 0 || context.Player != null || _cardsByModel.Count == 0)
+            {
+                return;
+            }
+
+            _session.MoveFocus(direction);
+        }
+
+        private bool InterceptOvershellInput(NavigationContext context)
+        {
+            if (_session.Hidden || !_session.CanEngage)
+            {
+                return false;
+            }
+
+            var card = FindCard(context.Player);
+            if (card == null)
+            {
+                return IsMenuExitAction(context.Action) && _session.AnyOvershellColumnOpen();
+            }
+
+            if (context.Action == MenuAction.Start)
+            {
+                return HandleOvershellStart(card);
+            }
+
+            if (!card.IsExpanded)
+            {
+                return IsMenuExitAction(context.Action) && _session.AnyOvershellColumnOpen();
+            }
+
+            DispatchOvershellAction(card, context);
+            return true;
+        }
+
+        private bool HandleOvershellStart(BandCardController card)
+        {
+            if (card.IsJoining)
+            {
+                return true;
+            }
+
+            if (card.IsExpanded)
+            {
+                card.Back();
+            }
+            else if (_session.CanEngage)
+            {
+                card.Expand();
+            }
+
+            return true;
+        }
+
+        private static void DispatchOvershellAction(BandCardController card, NavigationContext context)
+        {
+            switch (context.Action)
+            {
+                case MenuAction.Up:
+                    card.NavigateVertical(-1, context.IsRepeat);
+                    break;
+                case MenuAction.Down:
+                    card.NavigateVertical(1, context.IsRepeat);
+                    break;
+                case MenuAction.Green:
+                    card.Confirm();
+                    break;
+                case MenuAction.Red:
+                    card.Back();
+                    break;
+                case MenuAction.Left:
+                    card.AdjustSelection(-1);
+                    break;
+                case MenuAction.Right:
+                    card.AdjustSelection(1);
+                    break;
+            }
+        }
+
+        private static bool IsMenuExitAction(MenuAction action)
+        {
+            return action is MenuAction.Green or MenuAction.Red;
+        }
+
+        private BandCardController CardFor(YargPlayer player)
+        {
+            var model = _session.ColumnFor(player);
+            return model != null && _cardsByModel.TryGetValue(model, out var card) ? card : null;
+        }
+
+        private BandCardController FindCard(YargPlayer player)
+        {
+            var model = _session.FindColumn(player);
+            return model != null && _cardsByModel.TryGetValue(model, out var card) ? card : null;
         }
 
         private bool OnUnclaimedDevicePressed(InputDevice device)
@@ -396,13 +572,13 @@ namespace YARG.Menu.DifficultySelect
             CaptureCardPositions();
             if (_session.TryStartJoinWithDevice(device, out var model, out int replacedSlotIndex))
             {
-                FinishJoinView(model, replacedSlotIndex);
+                FinishJoin(model, replacedSlotIndex);
             }
         }
 
-        private BandColumn JoinWithoutDevice(LayoutElement slot, YargProfile chosen = null)
+        private BandCardController JoinWithoutDevice(LayoutElement slot, YargProfile chosen = null)
         {
-            if (_profilesInUse != null || !_joinSlots.Contains(slot))
+            if (_profilesInUse != null || JoinSlotIndexOf(slot) < 0)
             {
                 return null;
             }
@@ -420,41 +596,39 @@ namespace YARG.Menu.DifficultySelect
                 return null;
             }
 
-            return FinishJoinView(model, replacedSlotIndex);
+            return FinishJoin(model, replacedSlotIndex);
         }
 
-        private BandColumn FinishJoinView(BandColumnModel model, int replacedSlotIndex)
+        private BandCardController FinishJoin(BandColumnModel model, int replacedSlotIndex)
         {
-            var column = CreateAndRemapColumnView(model, replacedSlotIndex);
-            column.BeginJoin();
+            var card = CreateCardInSlot(model, replacedSlotIndex);
+            card.Rebuild();
             _session.SyncColumnsAndSlots();
-            _animator.ShiftCards(_band, _columns, _joinSlots.Entries, _cardSnapshotBuffer, delay: SLIDE_SECONDS,
-                riseDelay: SLIDE_SECONDS * 2f);
+            ShiftCards(delay: SLIDE_SECONDS, riseDelay: SLIDE_SECONDS * 2f);
 
-            LayoutRebuilder.ForceRebuildLayoutImmediate(column.Card);
-            column.RiseFrom(_joinCard.rect.height - column.Card.rect.height);
-            return column;
+            LayoutRebuilder.ForceRebuildLayoutImmediate(card.View.Card);
+            card.View.RiseFrom(_joinCard.rect.height - card.View.Card.rect.height);
+            return card;
         }
 
-        internal void ChooseJoinProfile(BandColumn column, YargProfile profile)
+        internal void ChooseJoinProfile(BandCardController card, YargProfile profile)
         {
-            if (column == _profilesInUse)
+            if (card == _profilesInUse)
             {
                 ChooseProfileForPendingSlot(profile);
                 return;
             }
 
             CaptureCardPositions();
-            if (!_session.ChooseJoinProfile(column.Model, profile))
+            if (!_session.ChooseJoinProfile(card.Model, profile))
             {
-                RemoveColumnView(column);
+                RemoveCard(card);
                 return;
             }
 
-            column.CompleteJoin();
-            _animator.ShiftCards(_band, _columns, _joinSlots.Entries, _cardSnapshotBuffer, delay: 0f,
-                riseDelay: SLIDE_SECONDS);
-            RefreshProfilePickers(column);
+            card.CompleteJoin();
+            ShiftCards(delay: 0f, riseDelay: SLIDE_SECONDS);
+            RefreshProfilePickers(card);
         }
 
         private void ChooseProfileForPendingSlot(YargProfile profile)
@@ -468,61 +642,73 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        private void RefreshProfilePickers(BandColumn changed)
+        private void RefreshProfilePickers(BandCardController changed)
         {
             if (_profilesInUse != null)
             {
                 _profilesInUse.Rebuild();
             }
 
-            foreach (var column in _columns)
+            foreach (var card in _cards)
             {
-                if (column != changed && column.State == BandColumnState.ChooseProfile)
+                if (card != changed && card.State == BandColumnState.ChooseProfile)
                 {
-                    column.Rebuild();
+                    card.Rebuild();
                 }
             }
         }
 
-        internal void CancelJoin(BandColumn column)
+        private void CancelJoin(BandCardController card)
         {
             CaptureCardPositions();
-            _session.CancelJoin(column.Model);
-            RemoveColumnView(column);
+            _session.CancelJoin(card.Model);
+            RemoveCard(card);
         }
 
-        internal void Disconnect(BandColumn column)
+        internal void Disconnect(BandCardController card)
         {
             CaptureCardPositions();
-            _session.Disconnect(column.Model);
-            RemoveColumnView(column);
+            _session.Disconnect(card.Model);
+            RemoveCard(card);
+        }
+
+        internal bool MoveColumn(BandCardController card, int direction)
+        {
+            CaptureCardPositions();
+            if (!_session.MoveColumn(card.Model, direction))
+            {
+                return false;
+            }
+
+            ShiftCards(delay: 0f, riseDelay: null);
+            return true;
         }
 
         private void ShowProfilesInUse(LayoutElement slot)
         {
-            var column = Instantiate(_columnPrefab, slot.transform);
-            var rect = (RectTransform) column.transform;
+            var view = Instantiate(_columnPrefab, slot.transform);
+            var rect = (RectTransform) view.transform;
             rect.anchorMin = Vector2.zero;
             rect.anchorMax = Vector2.one;
             rect.offsetMin = Vector2.zero;
             rect.offsetMax = Vector2.zero;
 
-            column.Initialize(this, _session, new BandColumnModel());
-            column.SetWidth(slot.preferredWidth);
-            column.ShowProfilesInUse();
+            var card = new BandCardController(this, _session, new BandColumnModel(), view);
+            view.SetWidth(slot.preferredWidth);
+            card.ShowProfilesInUse();
 
-            _profilesInUse = column;
+            _profilesInUse = card;
             _profilesInUseSlot = slot;
 
-            LayoutRebuilder.ForceRebuildLayoutImmediate(column.Card);
-            column.RiseFrom(_joinCard.rect.height - column.Card.rect.height);
+            LayoutRebuilder.ForceRebuildLayoutImmediate(view.Card);
+            view.RiseFrom(_joinCard.rect.height - view.Card.rect.height);
         }
 
         internal void CloseProfilesInUse()
         {
             if (_profilesInUse != null)
             {
-                _profilesInUse.DismissAndDestroy();
+                _profilesInUse.View.DismissAndDestroy();
             }
 
             _profilesInUse = null;
@@ -538,76 +724,60 @@ namespace YARG.Menu.DifficultySelect
 
             CaptureCardPositions();
             var model = _session.HandleExternalPlayerAdded(player, out int replacedSlotIndex);
-            var column = CreateAndRemapColumnView(model, replacedSlotIndex);
-            column.RiseFrom(-SLIDE_DISTANCE);
-            column.Open();
+            var card = CreateCardInSlot(model, replacedSlotIndex);
+            card.View.RiseFrom(-SLIDE_DISTANCE);
+            card.Rebuild();
             _session.SyncColumnsAndSlots();
-            _animator.ShiftCards(_band, _columns, _joinSlots.Entries, _cardSnapshotBuffer, delay: 0f, riseDelay: null);
+            ShiftCards(delay: 0f, riseDelay: null);
         }
 
         private void OnPlayerRemoved(YargPlayer player)
         {
             CaptureCardPositions();
             _session.HandleExternalPlayerRemoved(player, out var removedModel);
-            if (removedModel != null && _columnViews.TryGetValue(removedModel, out var column))
+            if (removedModel != null && _cardsByModel.TryGetValue(removedModel, out var card))
             {
-                RemoveColumnView(column);
+                RemoveCard(card);
             }
         }
 
-        private BandColumn CreateColumnView(BandColumnModel model)
+        private BandCardController CreateCard(BandColumnModel model)
         {
-            var column = Instantiate(_columnPrefab, _band);
-            column.Initialize(this, _session, model);
-            _columnViews[model] = column;
-            RefreshProfilePickers(column);
-            return column;
+            var view = Instantiate(_columnPrefab, _band);
+            var card = new BandCardController(this, _session, model, view);
+            _cardsByModel[model] = card;
+            RefreshProfilePickers(card);
+            return card;
         }
 
-        private BandColumn CreateAndRemapColumnView(BandColumnModel model, int replacedSlotIndex)
+        private BandCardController CreateCardInSlot(BandColumnModel model, int replacedSlotIndex)
         {
-            var column = CreateColumnView(model);
-            if (replacedSlotIndex >= 0)
+            var card = CreateCard(model);
+            if (replacedSlotIndex < 0)
             {
-                var target = _joinSlots.FindAtSiblingIndex(replacedSlotIndex);
-                if (target != null)
-                {
-                    column.transform.SetSiblingIndex(replacedSlotIndex);
-                    _animator.RemapCard(_cardSnapshotBuffer, BandJoinSlots.CardOf(target), column.Card);
-                    _joinSlots.Destroy(target);
-                }
+                return card;
             }
 
-            return column;
-        }
-
-        internal bool MoveColumn(BandColumn column, int direction)
-        {
-            CaptureCardPositions();
-            if (!_session.MoveColumn(column.Model, direction))
+            var replacedSlot = FindJoinSlotAtSiblingIndex(replacedSlotIndex);
+            if (replacedSlot != null)
             {
-                return false;
+                card.View.transform.SetSiblingIndex(replacedSlotIndex);
+                RemapCardSnapshot(JoinCardOf(replacedSlot), card.View.Card);
+                DestroyJoinSlot(replacedSlot);
             }
 
-            _animator.ShiftCards(_band, _columns, _joinSlots.Entries, _cardSnapshotBuffer, delay: 0f, riseDelay: null);
-            return true;
+            return card;
         }
 
-        private void RemoveColumnView(BandColumn column)
+        private void RemoveCard(BandCardController card)
         {
-            _columns.Remove(column);
-            _columnViews.Remove(column.Model);
-            _animator.KillTweens(column.Card);
-            column.DismissAndDestroy();
+            _cards.Remove(card);
+            _cardsByModel.Remove(card.Model);
+            KillCardTweens(card.View.Card);
+            card.View.DismissAndDestroy();
 
-            RefreshProfilePickers(column);
-            _animator.ShiftCards(_band, _columns, _joinSlots.Entries, _cardSnapshotBuffer, delay: SLIDE_SECONDS,
-                riseDelay: SLIDE_SECONDS);
-        }
-
-        private void CaptureCardPositions()
-        {
-            _animator.Capture(_columns, _joinSlots.Entries, _cardSnapshotBuffer);
+            RefreshProfilePickers(card);
+            ShiftCards(delay: SLIDE_SECONDS, riseDelay: SLIDE_SECONDS);
         }
 
         private void RefitOnBandResize()
@@ -619,9 +789,9 @@ namespace YARG.Menu.DifficultySelect
             }
 
             _fittedBandHeight = height;
-            for (int i = 0; i < _columns.Count; i++)
+            foreach (var card in _cards)
             {
-                _columns[i].FitRows();
+                card.FitRows();
             }
 
             if (_profilesInUse != null)
@@ -642,20 +812,21 @@ namespace YARG.Menu.DifficultySelect
                 _bandSortingOrder = _bandCanvas.sortingOrder;
             }
 
-            bool raise = false;
-            if (_session.IsOvershell)
+            bool raise = _session.IsOvershell && (_profilesInUse != null || AnyCardExpanded());
+            _bandCanvas.sortingOrder = raise ? OPEN_CARD_SORTING_ORDER : _bandSortingOrder;
+        }
+
+        private bool AnyCardExpanded()
+        {
+            foreach (var card in _cards)
             {
-                raise = _profilesInUse != null;
-                for (int i = 0; !raise && i < _columns.Count; i++)
+                if (card.IsExpanded)
                 {
-                    if (_columns[i].IsExpanded)
-                    {
-                        raise = true;
-                    }
+                    return true;
                 }
             }
 
-            _bandCanvas.sortingOrder = raise ? OPEN_CARD_SORTING_ORDER : _bandSortingOrder;
+            return false;
         }
 
         private void ShowFooterBackground(bool show)
@@ -683,21 +854,253 @@ namespace YARG.Menu.DifficultySelect
             return Mathf.Min(MAX_COLUMN_WIDTH, available / slots);
         }
 
-        private void StartSong()
+        private void SetJoinSlotCount(int count)
         {
-            if (_session.Started)
+            while (_joinSlots.Count > count)
+            {
+                DestroyJoinSlot(_joinSlots[_joinSlots.Count - 1].Slot);
+            }
+
+            while (_joinSlots.Count < count)
+            {
+                CreateJoinSlot();
+            }
+        }
+
+        private void CreateJoinSlot()
+        {
+            int siblingIndex = _band.childCount;
+            var slot = Instantiate(_joinSlot, _band);
+            slot.transform.SetSiblingIndex(siblingIndex);
+            slot.preferredWidth = -1f;
+
+            var card = JoinCardOf(slot);
+            card.anchoredPosition = Vector2.zero;
+            foreach (var graphic in card.GetComponentsInChildren<Graphic>())
+            {
+                graphic.raycastTarget = true;
+            }
+
+            card.gameObject.AddComponent<JoinSlotClick>().Clicked = () => JoinWithoutDevice(slot);
+            slot.gameObject.SetActive(true);
+
+            var label = slot.GetComponentInChildren<TextMeshProUGUI>(true);
+            _joinSlots.Add(new JoinSlotEntry(slot, card, label));
+        }
+
+        private void DestroyJoinSlot(LayoutElement slot)
+        {
+            if (slot == null)
             {
                 return;
             }
 
-            _session.MarkStarted();
-            _startInputBlocker = Navigator.Instance.PushInputBlocker();
-            foreach (var column in _columns)
+            var card = JoinCardOf(slot);
+            int joinSlotIndex = JoinSlotIndexOf(slot);
+            if (joinSlotIndex >= 0)
             {
-                column.SlideOut();
+                _joinSlots.RemoveAt(joinSlotIndex);
             }
 
-            _animator.SlideOutJoinCards(_joinSlots.Entries);
+            KillCardTweens(card);
+            slot.gameObject.SetActive(false);
+            Destroy(slot.gameObject);
+        }
+
+        private void UpdateJoinCards(float width, string text)
+        {
+            foreach (var entry in _joinSlots)
+            {
+                if (!Mathf.Approximately(entry.Slot.preferredWidth, width))
+                {
+                    entry.Slot.preferredWidth = width;
+                    entry.Card.sizeDelta = new Vector2(width, entry.Card.sizeDelta.y);
+                }
+
+                entry.Label.text = text;
+            }
+        }
+
+        private LayoutElement FindJoinSlotAtSiblingIndex(int siblingIndex)
+        {
+            foreach (var entry in _joinSlots)
+            {
+                if (entry.Slot.transform.GetSiblingIndex() == siblingIndex)
+                {
+                    return entry.Slot;
+                }
+            }
+
+            return null;
+        }
+
+        private int JoinSlotIndexOf(LayoutElement slot)
+        {
+            for (int joinSlotIndex = 0; joinSlotIndex < _joinSlots.Count; joinSlotIndex++)
+            {
+                if (_joinSlots[joinSlotIndex].Slot == slot)
+                {
+                    return joinSlotIndex;
+                }
+            }
+
+            return -1;
+        }
+
+        private static RectTransform JoinCardOf(LayoutElement slot)
+        {
+            return (RectTransform) slot.transform.GetChild(0);
+        }
+
+        private void CaptureCardPositions()
+        {
+            _cardSnapshotBuffer.Clear();
+            foreach (var card in _cards)
+            {
+                var rect = card.View.Card;
+                _cardSnapshotBuffer[rect] = (CardPosition(rect), rect.sizeDelta.x);
+            }
+
+            foreach (var entry in _joinSlots)
+            {
+                _cardSnapshotBuffer[entry.Card] = (CardPosition(entry.Card), entry.Card.sizeDelta.x);
+            }
+        }
+
+        private void RemapCardSnapshot(RectTransform oldCard, RectTransform newCard)
+        {
+            if (_cardSnapshotBuffer.Remove(oldCard, out var snapshot))
+            {
+                _cardSnapshotBuffer[newCard] = snapshot;
+            }
+        }
+
+        private void ShiftCards(float delay, float? riseDelay)
+        {
+            LayoutRebuilder.ForceRebuildLayoutImmediate(_band);
+
+            foreach (var card in _cards)
+            {
+                ShiftCard(card.View.Card, delay);
+            }
+
+            foreach (var entry in _joinSlots)
+            {
+                var card = entry.Card;
+                if (_cardSnapshotBuffer.ContainsKey(card))
+                {
+                    ShiftCard(card, delay);
+                }
+                else if (riseDelay is { } rise)
+                {
+                    card.DOKill();
+                    card.anchoredPosition = new Vector2(0f, -SLIDE_DISTANCE);
+                    card.DOAnchorPosY(0f, SLIDE_SECONDS)
+                        .SetDelay(rise)
+                        .SetEase(Ease.OutCubic)
+                        .SetUpdate(true);
+                }
+            }
+        }
+
+        private void ShiftCard(RectTransform card, float delay)
+        {
+            if (_shifts.Remove(card, out var running))
+            {
+                running.Kill();
+            }
+
+            bool captured = _cardSnapshotBuffer.TryGetValue(card, out var snapshot);
+            if (captured)
+            {
+                ResizeCard(card, snapshot.Width, delay);
+            }
+
+            float offset = captured ? snapshot.Position - SlotPosition(card) : 0f;
+            bool settled = Mathf.Abs(offset) < 0.5f;
+            card.anchoredPosition = new Vector2(settled ? 0f : offset, card.anchoredPosition.y);
+            if (settled)
+            {
+                return;
+            }
+
+            _shifts[card] = card.DOAnchorPosX(0f, SLIDE_SECONDS)
+                .SetDelay(delay)
+                .SetEase(Ease.OutCubic)
+                .SetUpdate(true);
+        }
+
+        private void ResizeCard(RectTransform card, float from, float delay)
+        {
+            if (_resizes.Remove(card, out var running))
+            {
+                running.Kill();
+            }
+
+            float to = card.sizeDelta.x;
+            if (Mathf.Abs(to - from) < 0.5f)
+            {
+                return;
+            }
+
+            card.sizeDelta = new Vector2(from, card.sizeDelta.y);
+            _resizes[card] = DOTween.To(
+                    () => card.sizeDelta.x,
+                    x => card.sizeDelta = new Vector2(x, card.sizeDelta.y),
+                    to,
+                    SLIDE_SECONDS)
+                .SetDelay(delay)
+                .SetEase(Ease.OutCubic)
+                .SetUpdate(true)
+                .SetLink(card.gameObject);
+        }
+
+        private void KillCardTweens(RectTransform card)
+        {
+            if (_shifts.Remove(card, out var shift))
+            {
+                shift.Kill();
+            }
+
+            if (_resizes.Remove(card, out var resize))
+            {
+                resize.Kill();
+            }
+
+            card.DOKill();
+        }
+
+        private static float SlotPosition(RectTransform card)
+        {
+            return card.parent.localPosition.x;
+        }
+
+        private static float CardPosition(RectTransform card)
+        {
+            return SlotPosition(card) + card.anchoredPosition.x;
+        }
+
+        private void StartSong()
+        {
+            if (_session.IsStartingSong)
+            {
+                return;
+            }
+
+            _session.MarkStartingSong();
+            _startInputBlocker = Navigator.Instance.PushInputBlocker();
+            foreach (var card in _cards)
+            {
+                card.View.SlideOut();
+            }
+
+            foreach (var entry in _joinSlots)
+            {
+                entry.Card.DOAnchorPosY(-SLIDE_DISTANCE, SLIDE_SECONDS)
+                    .SetEase(Ease.InCubic)
+                    .SetUpdate(true)
+                    .SetLink(entry.Card.gameObject);
+            }
 
             _startDelay = DOVirtual.DelayedCall(SLIDE_SECONDS, () =>
                 {
