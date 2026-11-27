@@ -81,21 +81,7 @@ namespace YARG.Menu.DifficultySelect
 
             if (context.Action == MenuAction.Start)
             {
-                if (column.IsJoining)
-                {
-                    return true;
-                }
-
-                if (column.IsExpanded)
-                {
-                    column.Back();
-                }
-                else if (_canEngage())
-                {
-                    column.Expand();
-                }
-
-                return true;
+                return HandleOvershellStart(column);
             }
 
             if (!column.IsExpanded)
@@ -103,6 +89,31 @@ namespace YARG.Menu.DifficultySelect
                 return IsMenuExitAction(context.Action) && AnyColumnOpen();
             }
 
+            DispatchOvershellAction(column, context);
+            return true;
+        }
+
+        private bool HandleOvershellStart(BandColumn column)
+        {
+            if (column.IsJoining)
+            {
+                return true;
+            }
+
+            if (column.IsExpanded)
+            {
+                column.Back();
+            }
+            else if (_canEngage())
+            {
+                column.Expand();
+            }
+
+            return true;
+        }
+
+        private static void DispatchOvershellAction(BandColumn column, NavigationContext context)
+        {
             switch (context.Action)
             {
                 case MenuAction.Up:
@@ -124,8 +135,6 @@ namespace YARG.Menu.DifficultySelect
                     column.AdjustSelection(1);
                     break;
             }
-
-            return true;
         }
 
         private static bool IsMenuExitAction(MenuAction action)
@@ -135,9 +144,8 @@ namespace YARG.Menu.DifficultySelect
 
         private bool AnyColumnOpen()
         {
-            for (int i = 0; i < _columns.Count; i++)
+            foreach (var column in _columns)
             {
-                var column = _columns[i];
                 if (column.IsExpanded && !column.IsSittingOut && column.Player.DeviceInfo.HasControllerAssigned)
                 {
                     return true;
@@ -159,11 +167,11 @@ namespace YARG.Menu.DifficultySelect
                 return null;
             }
 
-            for (int i = 0; i < _columns.Count; i++)
+            foreach (var column in _columns)
             {
-                if (_columns[i].Player == player)
+                if (column.Player == player)
                 {
-                    return _columns[i];
+                    return column;
                 }
             }
 

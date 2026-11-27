@@ -1,20 +1,15 @@
-using System;
-using System.Linq;
 using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
-using YARG.Core.Extensions;
-using YARG.Helpers;
 using YARG.Input.Bindings;
-using YARG.Menu.ProfileList;
 using YARG.Player;
 
 namespace YARG.Menu.DifficultySelect
 {
     public sealed partial class BandSelectMenu
     {
-        private readonly struct JoinSlotEntry
+        internal readonly struct JoinSlotEntry
         {
             public readonly LayoutElement Slot;
             public readonly RectTransform Card;
@@ -28,25 +23,11 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        private readonly struct PendingJoin
-        {
-            public readonly InputDevice Device;
-            public readonly bool Owned;
-            public readonly YargProfile Created;
-
-            public PendingJoin(InputDevice device, bool owned, YargProfile created)
-            {
-                Device = device;
-                Owned = owned;
-                Created = created;
-            }
-        }
-
         private void SetJoinSlotCount(int count)
         {
             while (_joinSlots.Count > count)
             {
-                DestroyJoinSlot(LatestJoinSlot());
+                DestroyJoinSlot(FindJoinSlotBySiblingOrder(earliest: false));
             }
 
             while (_joinSlots.Count < count)
@@ -57,31 +38,18 @@ namespace YARG.Menu.DifficultySelect
 
         private LayoutElement EarliestJoinSlot()
         {
-            LayoutElement best = null;
-            int bestIndex = int.MaxValue;
-            for (int i = 0; i < _joinSlots.Count; i++)
-            {
-                var slot = _joinSlots[i].Slot;
-                int siblingIndex = slot.transform.GetSiblingIndex();
-                if (siblingIndex < bestIndex)
-                {
-                    bestIndex = siblingIndex;
-                    best = slot;
-                }
-            }
-
-            return best;
+            return FindJoinSlotBySiblingOrder(earliest: true);
         }
 
-        private LayoutElement LatestJoinSlot()
+        private LayoutElement FindJoinSlotBySiblingOrder(bool earliest)
         {
             LayoutElement best = null;
-            int bestIndex = -1;
-            for (int i = 0; i < _joinSlots.Count; i++)
+            int bestIndex = earliest ? int.MaxValue : -1;
+            foreach (var entry in _joinSlots)
             {
-                var slot = _joinSlots[i].Slot;
+                var slot = entry.Slot;
                 int siblingIndex = slot.transform.GetSiblingIndex();
-                if (siblingIndex > bestIndex)
+                if (earliest ? siblingIndex < bestIndex : siblingIndex > bestIndex)
                 {
                     bestIndex = siblingIndex;
                     best = slot;
@@ -99,10 +67,9 @@ namespace YARG.Menu.DifficultySelect
 
             var card = JoinCard(slot);
             card.anchoredPosition = Vector2.zero;
-            var graphics = card.GetComponentsInChildren<Graphic>();
-            for (int i = 0; i < graphics.Length; i++)
+            foreach (var graphic in card.GetComponentsInChildren<Graphic>())
             {
-                graphics[i].raycastTarget = true;
+                graphic.raycastTarget = true;
             }
 
             card.gameObject.AddComponent<JoinSlotClick>().Clicked = () => JoinWithoutDevice(slot);
@@ -110,7 +77,6 @@ namespace YARG.Menu.DifficultySelect
 
             var label = slot.GetComponentInChildren<TextMeshProUGUI>(true);
             _joinSlots.Add(new JoinSlotEntry(slot, card, label));
-            _joinCards.Add(card);
             return slot;
         }
 
@@ -122,19 +88,28 @@ namespace YARG.Menu.DifficultySelect
             }
 
             var card = JoinCard(slot);
+            int index = IndexOfJoinSlot(slot);
+            if (index >= 0)
+            {
+                _joinSlots.RemoveAt(index);
+            }
+
+            _animator.KillTweens(card);
+            slot.gameObject.SetActive(false);
+            Destroy(slot.gameObject);
+        }
+
+        private int IndexOfJoinSlot(LayoutElement slot)
+        {
             for (int i = 0; i < _joinSlots.Count; i++)
             {
                 if (_joinSlots[i].Slot == slot)
                 {
-                    _joinSlots.RemoveAt(i);
-                    break;
+                    return i;
                 }
             }
 
-            _joinCards.Remove(card);
-            _animator.KillTweens(card);
-            slot.gameObject.SetActive(false);
-            Destroy(slot.gameObject);
+            return -1;
         }
 
         private static RectTransform JoinCard(LayoutElement slot)
@@ -146,24 +121,13 @@ namespace YARG.Menu.DifficultySelect
         {
             if (column == _profilesInUse)
             {
-                var slot = _profilesInUseSlot;
-                CloseProfilesInUse();
-                var joined = JoinWithoutDevice(slot, profile);
-                if (joined != null)
-                {
-                    ChooseJoinProfile(joined, profile);
-                }
-
+                ChooseProfileForPendingSlot(profile);
                 return;
             }
 
             if (profile != column.Player.Profile)
             {
-                var device = _joins[column].Device;
-                ReleaseJoin(column);
-
-                var player = AttachPlayer(profile, device, out _);
-                if (player == null)
+                if (!_joiner.TryReattachProfile(column, profile, out var player))
                 {
                     RemoveColumn(column);
                     return;
@@ -173,14 +137,25 @@ namespace YARG.Menu.DifficultySelect
             }
 
             CaptureCardPositions();
-            _joins.Remove(column);
+            _joiner.CompleteJoin(column);
             column.CompleteJoin();
             OnColumnChanged();
-            _animator.ShiftCards(_band, _columns, _joinCards, _cardSnapshotBuffer, delay: 0f,
+            _animator.ShiftCards(_band, _columns, _joinSlots, _cardSnapshotBuffer, delay: 0f,
                 riseDelay: SLIDE_SECONDS);
             PlayerContainer.SaveProfiles();
             BindingsContainer.SaveBindings();
             RefreshProfilePickers(column);
+        }
+
+        private void ChooseProfileForPendingSlot(YargProfile profile)
+        {
+            var slot = _profilesInUseSlot;
+            CloseProfilesInUse();
+            var joined = JoinWithoutDevice(slot, profile);
+            if (joined != null)
+            {
+                ChooseJoinProfile(joined, profile);
+            }
         }
 
         private void RefreshProfilePickers(BandColumn changed)
@@ -190,9 +165,8 @@ namespace YARG.Menu.DifficultySelect
                 _profilesInUse.Rebuild();
             }
 
-            for (int i = 0; i < _columns.Count; i++)
+            foreach (var column in _columns)
             {
-                var column = _columns[i];
                 if (column != changed && column.State == BandColumnState.ChooseProfile)
                 {
                     column.Rebuild();
@@ -202,32 +176,8 @@ namespace YARG.Menu.DifficultySelect
 
         internal void CancelJoin(BandColumn column)
         {
-            ReleaseJoin(column);
+            _joiner.ReleaseJoin(column);
             RemoveColumn(column);
-        }
-
-        private void ReleaseJoin(BandColumn column)
-        {
-            var join = _joins[column];
-            var player = column.Player;
-
-            if (!join.Owned)
-            {
-                player.DisableInputs();
-                player.DeviceInfo.RemoveController(join.Device);
-            }
-
-            DisposePlayer(player);
-
-            if (join.Created != null)
-            {
-                PlayerContainer.RemoveProfile(join.Created);
-            }
-        }
-
-        private void DisposePlayer(YargPlayer player)
-        {
-            RunWithSuppressedPlayerEvents(() => PlayerContainer.DisposePlayer(player));
         }
 
         internal void Disconnect(BandColumn column)
@@ -238,7 +188,7 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            DisposePlayer(column.Player);
+            _joiner.DisposePlayer(column.Player);
             RemoveColumn(column);
         }
 
@@ -269,85 +219,47 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            var profile = PlayerContainer.GetProfileForDevice(device) ?? PlayerContainer.Profiles
-                .Where(p => !p.IsBot && !PlayerContainer.IsProfileTaken(p))
-                .OrderByDescending(p => p.LastUsed)
-                .FirstOrDefault();
-
-            YargProfile created = null;
-            if (profile == null)
+            if (_joiner.TryAttachWithDevice(device, out var player, out var join))
             {
-                created = CreateProfileFor(device);
-                profile = created;
+                FinishJoin(player, join, targetSlot: null);
             }
-
-            var player = AttachPlayer(profile, device, out bool owned);
-            if (player == null)
-            {
-                if (created != null)
-                {
-                    PlayerContainer.RemoveProfile(created);
-                }
-
-                return;
-            }
-
-            FinishJoin(player, new PendingJoin(device, owned, created), targetSlot: null);
         }
 
         private BandColumn JoinWithoutDevice(LayoutElement slot, YargProfile chosen = null)
         {
-            if (IsJoinBlocked || _profilesInUse != null || !ContainsJoinSlot(slot))
+            if (IsJoinBlocked || _profilesInUse != null || IndexOfJoinSlot(slot) < 0)
             {
                 return null;
             }
 
-            var profile = chosen ?? PlayerContainer.Profiles
-                .Where(p => !PlayerContainer.IsProfileTaken(p))
-                .OrderBy(p => p.IsBot)
-                .ThenByDescending(p => p.LastUsed)
-                .FirstOrDefault();
+            var profile = chosen ?? BandPlayerJoiner.FindAvailableProfile();
             if (profile == null)
             {
                 ShowProfilesInUse(slot);
                 return null;
             }
 
-            var player = AttachPlayer(profile, null, out _);
-            if (player == null)
+            if (!_joiner.TryAttachWithoutDevice(profile, out var player, out var join))
             {
                 return null;
             }
 
-            return FinishJoin(player, new PendingJoin(null, owned: true, created: null), slot);
+            return FinishJoin(player, join, slot);
         }
 
-        private BandColumn FinishJoin(YargPlayer player, PendingJoin join, LayoutElement targetSlot)
+        private BandColumn FinishJoin(YargPlayer player, BandPlayerJoiner.PendingJoin join, LayoutElement targetSlot)
         {
             CaptureCardPositions();
             var column = InsertColumn(player, _cardSnapshotBuffer, targetSlot);
-            _joins[column] = join;
+            _joiner.TrackJoin(column, join);
             column.BeginJoin();
             OnColumnChanged();
-            _animator.ShiftCards(_band, _columns, _joinCards, _cardSnapshotBuffer, delay: SLIDE_SECONDS,
+            _animator.ShiftCards(_band, _columns, _joinSlots, _cardSnapshotBuffer, delay: SLIDE_SECONDS,
                 riseDelay: SLIDE_SECONDS * 2f);
 
             LayoutRebuilder.ForceRebuildLayoutImmediate(column.Card);
             column.RiseFrom(_joinCard.rect.height - column.Card.rect.height);
             return column;
-        }
-
-        private bool ContainsJoinSlot(LayoutElement slot)
-        {
-            for (int i = 0; i < _joinSlots.Count; i++)
-            {
-                if (_joinSlots[i].Slot == slot)
-                {
-                    return true;
-                }
-            }
-
-            return false;
         }
 
         private void ShowProfilesInUse(LayoutElement slot)
@@ -381,75 +293,9 @@ namespace YARG.Menu.DifficultySelect
             _profilesInUseSlot = null;
         }
 
-        private YargPlayer AttachPlayer(YargProfile profile, InputDevice device, out bool owned)
-        {
-            if (device == null)
-            {
-                owned = true;
-                return CreatePlayerSuppressed(profile, resolveDevices: true);
-            }
-
-            var deviceInfo = BindingsContainer.GetDeviceInfoForProfile(profile);
-            owned = deviceInfo.MatchesController(device) || deviceInfo.ContainsController(device);
-
-            var player = CreatePlayerSuppressed(profile, resolveDevices: false);
-            if (player == null)
-            {
-                return null;
-            }
-
-            player.DisableInputs();
-            player.DeviceInfo.AddController(device);
-            player.DeviceInfo.ResolveMicrophones();
-            player.EnableInputs();
-            return player;
-        }
-
-        private YargPlayer CreatePlayerSuppressed(YargProfile profile, bool resolveDevices)
-        {
-            YargPlayer player = null;
-            RunWithSuppressedPlayerEvents(() =>
-                player = PlayerContainer.CreatePlayerFromProfile(profile, resolveDevices));
-            return player;
-        }
-
-        private void RunWithSuppressedPlayerEvents(Action action)
-        {
-            _suppressPlayerEvents = true;
-            try
-            {
-                action();
-            }
-            finally
-            {
-                _suppressPlayerEvents = false;
-            }
-        }
-
-        private static YargProfile CreateProfileFor(InputDevice device)
-        {
-            var family = LayoutHelper.InputDeviceToControllerFamily(device);
-            var mode = NEW_PROFILE_MODES.FirstOrDefault(m =>
-                BindingsContainer.GetBindingSetsForControllerInMode(family, m).Count > 0);
-
-            var instrument = mode.PossibleInstruments()[0];
-            var profile = new YargProfile
-            {
-                Name = ProfilesMenu.GetUniqueProfileName("New Profile"),
-                NoteSpeed = 5,
-                HighwayLength = 1,
-                GameMode = mode,
-                CurrentInstrument = instrument,
-                PreferredInstrument = instrument,
-            };
-
-            PlayerContainer.AddProfile(profile);
-            return profile;
-        }
-
         private void OnPlayerAdded(YargPlayer player)
         {
-            if (_suppressPlayerEvents || FindColumn(player) != null)
+            if (_joiner.IsSuppressingPlayerEvents || FindColumn(player) != null)
             {
                 return;
             }
@@ -459,14 +305,14 @@ namespace YARG.Menu.DifficultySelect
             column.RiseFrom(-SLIDE_DISTANCE);
             column.Open();
             OnColumnChanged();
-            _animator.ShiftCards(_band, _columns, _joinCards, _cardSnapshotBuffer, delay: 0f, riseDelay: null);
+            _animator.ShiftCards(_band, _columns, _joinSlots, _cardSnapshotBuffer, delay: 0f, riseDelay: null);
         }
 
         private void OnPlayerRemoved(YargPlayer player)
         {
             _seatTracker.Remove(player);
 
-            if (_suppressPlayerEvents)
+            if (_joiner.IsSuppressingPlayerEvents)
             {
                 return;
             }

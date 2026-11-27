@@ -76,15 +76,7 @@ namespace YARG.Menu.DifficultySelect
                 DestroyJoinSlot(target);
             }
 
-            int siblingIndex = column.transform.GetSiblingIndex();
-            int index = 0;
-            for (int i = 0; i < _columns.Count; i++)
-            {
-                if (_columns[i].transform.GetSiblingIndex() < siblingIndex)
-                {
-                    index++;
-                }
-            }
+            int index = CountPrecedingColumns(column.transform.GetSiblingIndex());
 
             _columns.Insert(index, column);
             if (_columns.Count > 1 && index <= _focusIndex)
@@ -94,6 +86,20 @@ namespace YARG.Menu.DifficultySelect
 
             RefreshProfilePickers(column);
             return column;
+        }
+
+        private int CountPrecedingColumns(int siblingIndex)
+        {
+            int index = 0;
+            foreach (var column in _columns)
+            {
+                if (column.transform.GetSiblingIndex() < siblingIndex)
+                {
+                    index++;
+                }
+            }
+
+            return index;
         }
 
         internal bool CanMoveColumn(BandColumn column, int direction)
@@ -129,11 +135,10 @@ namespace YARG.Menu.DifficultySelect
 
             OnColumnChanged();
             PlayerContainer.SaveProfiles();
-            _animator.ShiftCards(_band, _columns, _joinCards, _cardSnapshotBuffer, delay: 0f, riseDelay: null);
+            _animator.ShiftCards(_band, _columns, _joinSlots, _cardSnapshotBuffer, delay: 0f, riseDelay: null);
 
-            for (int i = 0; i < _columns.Count; i++)
+            foreach (var otherColumn in _columns)
             {
-                var otherColumn = _columns[i];
                 if (otherColumn != column && otherColumn.State == BandColumnState.Position)
                 {
                     otherColumn.Rebuild();
@@ -159,17 +164,17 @@ namespace YARG.Menu.DifficultySelect
 
         private bool IsManagedSlot(Transform child)
         {
-            for (int i = 0; i < _columns.Count; i++)
+            foreach (var column in _columns)
             {
-                if (_columns[i].transform == child)
+                if (column.transform == child)
                 {
                     return true;
                 }
             }
 
-            for (int i = 0; i < _joinSlots.Count; i++)
+            foreach (var entry in _joinSlots)
             {
-                if (_joinSlots[i].Slot.transform == child)
+                if (entry.Slot.transform == child)
                 {
                     return true;
                 }
@@ -184,7 +189,7 @@ namespace YARG.Menu.DifficultySelect
             int siblingIndex = column.transform.GetSiblingIndex();
 
             _columns.Remove(column);
-            _joins.Remove(column);
+            _joiner.UntrackJoin(column);
             _animator.KillTweens(column.Card);
             column.DismissAndDestroy();
 
@@ -195,13 +200,13 @@ namespace YARG.Menu.DifficultySelect
 
             RefreshProfilePickers(column);
             OnColumnChanged();
-            _animator.ShiftCards(_band, _columns, _joinCards, _cardSnapshotBuffer, delay: SLIDE_SECONDS,
+            _animator.ShiftCards(_band, _columns, _joinSlots, _cardSnapshotBuffer, delay: SLIDE_SECONDS,
                 riseDelay: SLIDE_SECONDS);
         }
 
         private void CaptureCardPositions()
         {
-            _animator.Capture(_columns, _joinCards, _cardSnapshotBuffer);
+            _animator.Capture(_columns, _joinSlots, _cardSnapshotBuffer);
         }
 
         private void ShowFooterBackground(bool show)

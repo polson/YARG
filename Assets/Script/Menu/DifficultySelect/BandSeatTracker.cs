@@ -21,20 +21,9 @@ namespace YARG.Menu.DifficultySelect
         public void Record(IReadOnlyList<BandColumn> columns, IReadOnlyList<Transform> orderedSlots)
         {
             _seats.Clear();
-            for (int i = 0; i < columns.Count; i++)
+            foreach (var column in columns)
             {
-                var column = columns[i];
-                int seat = -1;
-                for (int s = 0; s < orderedSlots.Count; s++)
-                {
-                    if (orderedSlots[s] == column.transform)
-                    {
-                        seat = s;
-                        break;
-                    }
-                }
-
-                _seats[column.Player] = seat;
+                _seats[column.Player] = FindSlotIndex(column.transform, orderedSlots);
             }
         }
 
@@ -45,12 +34,37 @@ namespace YARG.Menu.DifficultySelect
         {
             int count = columns.Count + joinSlotTransforms.Count;
             var seated = new Transform[count];
-            var unseated = new List<BandColumn>();
+            var unseated = AssignExistingSeats(seats, columns, seated);
 
-            for (int i = 0; i < columns.Count; i++)
+            AssignRemainingColumns(unseated, seated);
+            ApplySiblingOrder(seated, joinSlotTransforms);
+
+            columns.Sort((a, b) => a.transform.GetSiblingIndex().CompareTo(b.transform.GetSiblingIndex()));
+        }
+
+        private static int FindSlotIndex(Transform target, IReadOnlyList<Transform> orderedSlots)
+        {
+            for (int i = 0; i < orderedSlots.Count; i++)
             {
-                var column = columns[i];
-                if (seats.TryGetValue(column.Player, out int seat) && seat >= 0 && seat < count && seated[seat] == null)
+                if (orderedSlots[i] == target)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private static List<BandColumn> AssignExistingSeats(
+            Dictionary<YargPlayer, int> seats,
+            IReadOnlyList<BandColumn> columns,
+            Transform[] seated)
+        {
+            var unseated = new List<BandColumn>();
+            foreach (var column in columns)
+            {
+                if (seats.TryGetValue(column.Player, out int seat) && seat >= 0 && seat < seated.Length &&
+                    seated[seat] == null)
                 {
                     seated[seat] = column.transform;
                 }
@@ -60,19 +74,27 @@ namespace YARG.Menu.DifficultySelect
                 }
             }
 
+            return unseated;
+        }
+
+        private static void AssignRemainingColumns(IReadOnlyList<BandColumn> unseated, Transform[] seated)
+        {
             int next = 0;
-            for (int i = 0; i < unseated.Count; i++)
+            foreach (var column in unseated)
             {
                 while (seated[next] != null)
                 {
                     next++;
                 }
 
-                seated[next] = unseated[i].transform;
+                seated[next] = column.transform;
             }
+        }
 
+        private static void ApplySiblingOrder(Transform[] seated, IReadOnlyList<Transform> joinSlotTransforms)
+        {
             int joinIndex = 0;
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < seated.Length; i++)
             {
                 if (seated[i] == null)
                 {
@@ -81,8 +103,6 @@ namespace YARG.Menu.DifficultySelect
 
                 seated[i].SetAsLastSibling();
             }
-
-            columns.Sort((a, b) => a.transform.GetSiblingIndex().CompareTo(b.transform.GetSiblingIndex()));
         }
     }
 }

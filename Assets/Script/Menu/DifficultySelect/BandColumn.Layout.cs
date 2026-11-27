@@ -16,9 +16,8 @@ namespace YARG.Menu.DifficultySelect
 
             _appliedWidth = width;
             _layout.preferredWidth = width;
-            for (int i = 0; i < _profileRows.Count; i++)
+            foreach (var (row, rowLayout, rowHeight) in _profileRows)
             {
-                var (row, rowLayout, rowHeight) = _profileRows[i];
                 FitProfileRow(row, rowLayout, rowHeight);
             }
 
@@ -77,20 +76,7 @@ namespace YARG.Menu.DifficultySelect
 
         private void UpdateDividers()
         {
-            var selected = _nav.SelectedBehaviour;
-            int selectedIndex = -1;
-            if (selected != null)
-            {
-                for (int i = 0; i < _dividers.Count; i++)
-                {
-                    if (selected.transform.IsChildOf(_dividers[i].Row))
-                    {
-                        selectedIndex = i;
-                        break;
-                    }
-                }
-            }
-
+            int selectedIndex = FindSelectedRowIndex();
             for (int i = 0; i < _dividers.Count; i++)
             {
                 var divider = _dividers[i].Divider;
@@ -99,6 +85,25 @@ namespace YARG.Menu.DifficultySelect
                     divider.SetActive(i != selectedIndex && i != selectedIndex + 1);
                 }
             }
+        }
+
+        private int FindSelectedRowIndex()
+        {
+            var selected = _nav.SelectedBehaviour;
+            if (selected == null)
+            {
+                return -1;
+            }
+
+            for (int i = 0; i < _dividers.Count; i++)
+            {
+                if (selected.transform.IsChildOf(_dividers[i].Row))
+                {
+                    return i;
+                }
+            }
+
+            return -1;
         }
 
         private void SelectDefault(int? restoreIndex)
@@ -114,15 +119,15 @@ namespace YARG.Menu.DifficultySelect
             }
             else if (_defaultButton != null)
             {
-                _nav.SelectAt(IndexOf(_defaultButton));
+                _nav.SelectButton(_defaultButton);
             }
             else if (_readyButton != null && Ready)
             {
-                _nav.SelectAt(IndexOf(_readyButton));
+                _nav.SelectButton(_readyButton);
             }
             else if (_difficultyButton != null)
             {
-                _nav.SelectAt(IndexOf(_difficultyButton));
+                _nav.SelectButton(_difficultyButton);
             }
             else
             {
@@ -143,19 +148,22 @@ namespace YARG.Menu.DifficultySelect
 
             float contentHeight = LayoutUtility.GetPreferredHeight(rows);
             float maxHeight = Mathf.Max(ROW_HEIGHT, _menu.MaxCardHeight - _cardLayout.padding.vertical);
-            bool scrollable = contentHeight > maxHeight;
-
-            var scrollbar = (RectTransform) _scroll.verticalScrollbar.transform;
             _viewportLayout.preferredHeight = Mathf.Min(contentHeight, maxHeight);
+            UpdateScrollbarLayout(contentHeight > maxHeight);
+
+            LayoutRebuilder.ForceRebuildLayoutImmediate(_card);
+            ScrollToSelection();
+            UpdateScrollFade();
+        }
+
+        private void UpdateScrollbarLayout(bool scrollable)
+        {
+            var scrollbar = (RectTransform) _scroll.verticalScrollbar.transform;
             scrollbar.gameObject.SetActive(scrollable);
             float scrollbarWidth = Mathf.Min(SCROLLBAR_WIDTH, _layout.preferredWidth * SCROLLBAR_WIDTH_SHARE);
             scrollbar.sizeDelta = new Vector2(scrollbarWidth, scrollbar.sizeDelta.y);
             scrollbar.anchoredPosition = new Vector2(-scrollbarWidth / 2f, scrollbar.anchoredPosition.y);
             _rowLayout.padding.right = scrollable ? Mathf.CeilToInt(scrollbar.sizeDelta.x) : 0;
-
-            LayoutRebuilder.ForceRebuildLayoutImmediate(_card);
-            ScrollToSelection();
-            UpdateScrollFade();
         }
 
         private void UpdateScrollFade()
@@ -180,9 +188,8 @@ namespace YARG.Menu.DifficultySelect
             }
 
             LayoutRebuilder.ForceRebuildLayoutImmediate(_card);
-            for (int i = 0; i < _wrappableRows.Count; i++)
+            foreach (var (row, layout) in _wrappableRows)
             {
-                var (row, layout) = _wrappableRows[i];
                 if (row.WrapIfLong() && layout != null)
                 {
                     layout.preferredHeight = TWO_LINE_ROW_HEIGHT;

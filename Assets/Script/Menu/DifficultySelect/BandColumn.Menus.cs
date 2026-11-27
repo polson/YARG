@@ -20,19 +20,19 @@ namespace YARG.Menu.DifficultySelect
             SetHeading(Localize.Key("Menu.DifficultySelect.Band.ChooseProfile"));
 
             var profiles = PlayerContainer.Profiles;
-            for (int i = 0; i < profiles.Count; i++)
+            foreach (var profile in profiles)
             {
-                if (!profiles[i].IsBot)
+                if (!profile.IsBot)
                 {
-                    AddProfileRow(profiles[i]);
+                    AddProfileRow(profile);
                 }
             }
 
-            for (int i = 0; i < profiles.Count; i++)
+            foreach (var profile in profiles)
             {
-                if (profiles[i].IsBot)
+                if (profile.IsBot)
                 {
-                    AddProfileRow(profiles[i]);
+                    AddProfileRow(profile);
                 }
             }
 
@@ -109,9 +109,9 @@ namespace YARG.Menu.DifficultySelect
 
         private void ClearAvatars()
         {
-            for (int i = 0; i < _avatarTextures.Count; i++)
+            foreach (var texture in _avatarTextures)
             {
-                Destroy(_avatarTextures[i]);
+                Destroy(texture);
             }
 
             _avatarTextures.Clear();
@@ -211,7 +211,7 @@ namespace YARG.Menu.DifficultySelect
                 : (direction < 0 ? _moveRightButton : _moveLeftButton);
             if (_nav.Navigatables.Contains(button))
             {
-                _nav.SelectAt(IndexOf(button));
+                _nav.SelectButton(button);
             }
         }
 
@@ -220,7 +220,7 @@ namespace YARG.Menu.DifficultySelect
             var profile = Player.Profile;
             var song = GlobalVariables.State.CurrentSong;
             var instruments = profile.GameMode.PossibleInstrumentsForSong(song)
-                .Where(instrument => ContainsInstrument(_menu.Instruments, instrument))
+                .Where(instrument => _menu.Instruments.ContainsInstrument(instrument))
                 .ToList();
             bool showRings = _menu.RingTemplate != null && instruments.Count > 0;
 
@@ -270,10 +270,8 @@ namespace YARG.Menu.DifficultySelect
             var song = GlobalVariables.State.CurrentSong;
 
             bool anyPlayable = false;
-            var instruments = _menu.Instruments;
-            for (int i = 0; i < instruments.Count; i++)
+            foreach (var instrument in _menu.Instruments)
             {
-                var instrument = instruments[i];
                 if (_menu.GetInstrumentBlocker(this, instrument, out var mode) != null)
                 {
                     continue;
@@ -285,7 +283,7 @@ namespace YARG.Menu.DifficultySelect
 
                 if (instrument == profile.CurrentInstrument && _viewStack.Depth > 0)
                 {
-                    _nav.SelectAt(IndexOf(row.Button));
+                    _nav.SelectButton(row.Button);
                 }
             }
 
@@ -323,9 +321,8 @@ namespace YARG.Menu.DifficultySelect
 
             SetPlayerHeading();
 
-            for (int i = 0; i < _modifiers.Count; i++)
+            foreach (var modifier in _modifiers)
             {
-                var modifier = _modifiers[i];
                 if ((modifier & PlayerSelectionRules.ACCESSIBILITY_MODIFIERS) == 0)
                 {
                     AddModifierToggle(modifier);
@@ -360,9 +357,8 @@ namespace YARG.Menu.DifficultySelect
                     on => PlayerSelectionRules.SetNoRangeShifts(profile, _modifiers, on));
             }
 
-            for (int i = 0; i < _modifiers.Count; i++)
+            foreach (var modifier in _modifiers)
             {
-                var modifier = _modifiers[i];
                 if ((modifier & PlayerSelectionRules.ACCESSIBILITY_MODIFIERS) != 0 && modifier != Modifier.RangeCompress)
                 {
                     AddModifierToggle(modifier);
@@ -472,9 +468,8 @@ namespace YARG.Menu.DifficultySelect
                     profile.RemoveModifiers(modifier);
                 }
 
-                for (int i = 0; i < _modifierToggles.Count; i++)
+                foreach (var (item, itemModifier) in _modifierToggles)
                 {
-                    var (item, itemModifier) = _modifierToggles[i];
                     item.Active = profile.IsModifierActive(itemModifier);
                 }
             });

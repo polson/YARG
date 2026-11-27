@@ -27,19 +27,19 @@ namespace YARG.Menu.DifficultySelect
 
         public void Capture(
             IReadOnlyList<BandColumn> columns,
-            IReadOnlyList<RectTransform> joinCards,
+            IReadOnlyList<BandSelectMenu.JoinSlotEntry> joinSlots,
             Dictionary<RectTransform, (float Position, float Width)> target)
         {
             target.Clear();
-            for (int i = 0; i < columns.Count; i++)
+            foreach (var column in columns)
             {
-                var card = columns[i].Card;
+                var card = column.Card;
                 target[card] = (CardPosition(card), card.sizeDelta.x);
             }
 
-            for (int i = 0; i < joinCards.Count; i++)
+            foreach (var entry in joinSlots)
             {
-                var card = joinCards[i];
+                var card = entry.Card;
                 target[card] = (CardPosition(card), card.sizeDelta.x);
             }
         }
@@ -58,21 +58,21 @@ namespace YARG.Menu.DifficultySelect
         public void ShiftCards(
             RectTransform band,
             IReadOnlyList<BandColumn> columns,
-            IReadOnlyList<RectTransform> joinCards,
+            IReadOnlyList<BandSelectMenu.JoinSlotEntry> joinSlots,
             Dictionary<RectTransform, (float Position, float Width)> before,
             float delay,
             float? riseDelay)
         {
             LayoutRebuilder.ForceRebuildLayoutImmediate(band);
 
-            for (int i = 0; i < columns.Count; i++)
+            foreach (var column in columns)
             {
-                ShiftCard(columns[i].Card, before, delay);
+                ShiftCard(column.Card, before, delay);
             }
 
-            for (int i = 0; i < joinCards.Count; i++)
+            foreach (var entry in joinSlots)
             {
-                var card = joinCards[i];
+                var card = entry.Card;
                 if (before.ContainsKey(card))
                 {
                     ShiftCard(card, before, delay);
@@ -89,11 +89,11 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        public void SlideOutJoinCards(IReadOnlyList<RectTransform> joinCards)
+        public void SlideOutJoinCards(IReadOnlyList<BandSelectMenu.JoinSlotEntry> joinSlots)
         {
-            for (int i = 0; i < joinCards.Count; i++)
+            foreach (var entry in joinSlots)
             {
-                var card = joinCards[i];
+                var card = entry.Card;
                 card.DOAnchorPosY(-BandSelectMenu.SLIDE_DISTANCE, BandSelectMenu.SLIDE_SECONDS)
                     .SetEase(Ease.InCubic)
                     .SetUpdate(true)

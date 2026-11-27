@@ -253,10 +253,8 @@ namespace YARG.Menu.DifficultySelect
             SetPlayerHeading();
             AddWrappableRow(AddLabel(_viewStack.SettingTitle));
 
-            var options = _viewStack.SettingOptions;
-            for (int i = 0; i < options.Count; i++)
+            foreach (var (label, current, pick) in _viewStack.SettingOptions)
             {
-                var (label, current, pick) = options[i];
                 var row = AddRow(null, label, () =>
                 {
                     pick();

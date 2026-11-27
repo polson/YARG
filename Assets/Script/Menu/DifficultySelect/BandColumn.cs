@@ -126,26 +126,20 @@ namespace YARG.Menu.DifficultySelect
         public bool HasChosenInstrument => _viewStack.HasChosenInstrument();
         public bool IsDecided => IsSittingOut || (State == BandColumnState.Main && Ready);
 
-        private bool HasNoPlayableInstrument
+        private bool HasNoPlayableInstrument =>
+            State == BandColumnState.Instrument && !HasPlayableInstrument();
+
+        private bool HasPlayableInstrument()
         {
-            get
+            foreach (var instrument in _menu.Instruments)
             {
-                if (State != BandColumnState.Instrument)
+                if (_menu.GetInstrumentBlocker(this, instrument, out _) == null)
                 {
-                    return false;
+                    return true;
                 }
-
-                var instruments = _menu.Instruments;
-                for (int i = 0; i < instruments.Count; i++)
-                {
-                    if (_menu.GetInstrumentBlocker(this, instruments[i], out _) == null)
-                    {
-                        return false;
-                    }
-                }
-
-                return true;
             }
+
+            return false;
         }
 
         public NavigationGroup Nav => _nav;
@@ -283,10 +277,22 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            var profile = Player.Profile;
+            if (TryAutoSelectInstrument(Player.Profile))
+            {
+                CollectOptions();
+                _viewStack.SetRoot(BandColumnState.Main);
+                Rebuild();
+                return;
+            }
+
+            OpenPicker(canCancel: false);
+        }
+
+        private bool TryAutoSelectInstrument(YargProfile profile)
+        {
             foreach (var candidate in new[] { profile.PreferredInstrument, profile.CurrentInstrument })
             {
-                if (!ContainsInstrument(_menu.Instruments, candidate))
+                if (!_menu.Instruments.ContainsInstrument(candidate))
                 {
                     continue;
                 }
@@ -299,13 +305,10 @@ namespace YARG.Menu.DifficultySelect
                 SetGameMode(mode);
                 profile.CurrentInstrument = candidate;
                 profile.ResolveHarmonyIndex(_menu.MaxHarmonyIndex);
-                CollectOptions();
-                _viewStack.SetRoot(BandColumnState.Main);
-                Rebuild();
-                return;
+                return true;
             }
 
-            OpenPicker(canCancel: false);
+            return false;
         }
 
         private void ResetForOvershell()
@@ -534,7 +537,7 @@ namespace YARG.Menu.DifficultySelect
                 RebuildFromCurrentTop();
                 if (_readyButton != null)
                 {
-                    _nav.SelectAt(IndexOf(_readyButton));
+                    _nav.SelectButton(_readyButton);
                 }
             }
 
@@ -596,7 +599,7 @@ namespace YARG.Menu.DifficultySelect
         {
             Player.Profile.CurrentDifficulty = Player.Profile.DifficultyFallback = difficulty;
             SetRootState(BandColumnState.Main);
-            _nav.SelectAt(IndexOf(_readyButton));
+            _nav.SelectButton(_readyButton);
         }
 
         private void CycleHarmonyPart()
@@ -655,24 +658,29 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        private int IndexOf(NavigatableBehaviour navigatable)
+    }
+
+    internal static class BandColumnExtensions
+    {
+        public static void SelectButton(this NavigationGroup nav, NavigatableBehaviour button)
         {
-            for (int i = 0; i < _nav.Navigatables.Count; i++)
+            for (int i = 0; i < nav.Navigatables.Count; i++)
             {
-                if (_nav.Navigatables[i] == navigatable)
+                if (nav.Navigatables[i] == button)
                 {
-                    return i;
+                    nav.SelectAt(i);
+                    return;
                 }
             }
 
-            return 0;
+            nav.SelectAt(0);
         }
 
-        private static bool ContainsInstrument(IReadOnlyList<Instrument> instruments, Instrument target)
+        public static bool ContainsInstrument(this IReadOnlyList<Instrument> instruments, Instrument target)
         {
-            for (int i = 0; i < instruments.Count; i++)
+            foreach (var instrument in instruments)
             {
-                if (instruments[i] == target)
+                if (instrument == target)
                 {
                     return true;
                 }
