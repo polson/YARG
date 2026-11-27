@@ -1,12 +1,48 @@
-using UnityEngine;
+using System.Collections.Generic;
 using YARG.Core.Input;
 using YARG.Menu.Navigation;
 using YARG.Player;
 
 namespace YARG.Menu.DifficultySelect
 {
-    public sealed partial class BandSelectMenu
+    internal sealed class BandInputRouter
     {
+        private readonly BandSessionState _session;
+        private readonly IReadOnlyDictionary<BandColumnModel, BandColumn> _columnViews;
+
+        public BandInputRouter(BandSessionState session, IReadOnlyDictionary<BandColumnModel, BandColumn> columnViews)
+        {
+            _session = session;
+            _columnViews = columnViews;
+        }
+
+        public NavigationScheme CreateBandScheme()
+        {
+            return new NavigationScheme(new()
+            {
+                new NavigationScheme.Entry(MenuAction.Up, "Menu.Common.Up",
+                    ctx =>
+                    {
+                        var col = ColumnFor(ctx.Player);
+                        if (col != null)
+                        {
+                            col.NavigateVertical(-1, ctx.IsRepeat);
+                        }
+                    }),
+                new NavigationScheme.Entry(MenuAction.Down, "Menu.Common.Down",
+                    ctx =>
+                    {
+                        var col = ColumnFor(ctx.Player);
+                        if (col != null)
+                        {
+                            col.NavigateVertical(1, ctx.IsRepeat);
+                        }
+                    }),
+                new NavigationScheme.Entry(MenuAction.Green, "Menu.Common.Confirm", OnConfirm),
+                new NavigationScheme.Entry(MenuAction.Red, "Menu.Common.Back", OnBack),
+            }, allowsMusicPlayer: false);
+        }
+
         private void OnConfirm(NavigationContext context)
         {
             if (_session.Started)
@@ -39,7 +75,7 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        private void OnNavigationEvent(NavigationContext context)
+        public void OnNavigationEvent(NavigationContext context)
         {
             int direction = context.Action switch
             {
@@ -57,7 +93,7 @@ namespace YARG.Menu.DifficultySelect
                 }
             }
 
-            if (direction == 0 || context.Player != null || _columns.Count == 0)
+            if (direction == 0 || context.Player != null || _columnViews.Count == 0)
             {
                 return;
             }
@@ -65,9 +101,9 @@ namespace YARG.Menu.DifficultySelect
             _session.MoveFocus(direction);
         }
 
-        private bool InterceptOvershellInput(NavigationContext context)
+        public bool InterceptOvershellInput(NavigationContext context)
         {
-            if (_session.Hidden || !_canEngage())
+            if (_session.Hidden || !_session.CanEngage)
             {
                 return false;
             }
@@ -103,7 +139,7 @@ namespace YARG.Menu.DifficultySelect
             {
                 column.Back();
             }
-            else if (_canEngage())
+            else if (_session.CanEngage)
             {
                 column.Expand();
             }

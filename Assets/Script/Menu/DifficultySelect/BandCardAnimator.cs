@@ -27,7 +27,7 @@ namespace YARG.Menu.DifficultySelect
 
         public void Capture(
             IReadOnlyList<BandColumn> columns,
-            IReadOnlyList<BandSelectMenu.JoinSlotEntry> joinSlots,
+            IReadOnlyList<JoinSlotEntry> joinSlots,
             Dictionary<RectTransform, (float Position, float Width)> target)
         {
             target.Clear();
@@ -58,7 +58,7 @@ namespace YARG.Menu.DifficultySelect
         public void ShiftCards(
             RectTransform band,
             IReadOnlyList<BandColumn> columns,
-            IReadOnlyList<BandSelectMenu.JoinSlotEntry> joinSlots,
+            IReadOnlyList<JoinSlotEntry> joinSlots,
             Dictionary<RectTransform, (float Position, float Width)> before,
             float delay,
             float? riseDelay)
@@ -89,7 +89,7 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        public void SlideOutJoinCards(IReadOnlyList<BandSelectMenu.JoinSlotEntry> joinSlots)
+        public void SlideOutJoinCards(IReadOnlyList<JoinSlotEntry> joinSlots)
         {
             foreach (var entry in joinSlots)
             {

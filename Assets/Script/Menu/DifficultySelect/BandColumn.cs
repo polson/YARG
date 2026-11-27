@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using DG.Tweening;
 using TMPro;
@@ -6,41 +5,15 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using YARG.Core;
-using YARG.Core.Extensions;
-using YARG.Core.Game;
-using YARG.Gameplay.HUD;
 using YARG.Helpers.Extensions;
-using YARG.Localization;
 using YARG.Menu.Navigation;
 using YARG.Player;
 
 namespace YARG.Menu.DifficultySelect
 {
-    internal sealed partial class BandColumn : MonoBehaviour, IPointerClickHandler, IScrollHandler
+    internal sealed class BandColumn : MonoBehaviour, IPointerClickHandler, IScrollHandler
     {
-        private const float PROFILE_ROW_HEIGHT = 64f;
-        private const float AVATAR_MARGIN = 6f;
-        private const float AVATAR_EDGE = 6f;
-        private const float AVATAR_WIDTH_SHARE = 0.25f;
-        private const float HEADER_ICON_SIZE = 38f;
-        private const float HEADER_MARGIN = 40f;
-        private const float HEADER_SPACING = 10f;
-        private const float HEADER_FONT_SIZE_MIN = 6f;
-        private const float HEADER_ICON_MIN_CARD_WIDTH = 110f;
-        private const float SCROLLBAR_WIDTH = 15f;
-        private const int SCROLL_FADE = 28;
-        private const float SCROLLBAR_WIDTH_SHARE = 0.08f;
-        private const float ROW_HEIGHT = 52f;
-        private const float TWO_LINE_ROW_HEIGHT = 72f;
-        private const float SMALL_FONT_SIZE = 20f;
-        private const float LABEL_FONT_SIZE = 18f;
-        private const float VALUE_FONT_SIZE = 28f;
-        private const float MODIFIER_LINE_HEIGHT = 34f;
-
         private const float UNFOCUSED_BORDER_BRIGHTNESS = 0.5f;
-        private const int COLLAPSED_PADDING_TRIM = 19;
-        private static readonly Color WARNING_COLOR = new Color32(0xFB, 0x44, 0x3F, 0xFF);
-        private static readonly Color DIVIDER_COLOR = new Color(0f, 0.48f, 0.72f, 0.3f);
 
         [SerializeField]
         private RectTransform _card;
@@ -52,12 +25,8 @@ namespace YARG.Menu.DifficultySelect
         private TextMeshProUGUI _heading;
         [SerializeField]
         private Image _icon;
-        private LayoutElement _iconLayout;
-        private HorizontalLayoutGroup _headerContent;
-        private bool _wantsHeaderIcon;
         [SerializeField]
         private ScrollRect _scroll;
-        private RectMask2D _viewportMask;
         [SerializeField]
         private VerticalLayoutGroup _rowLayout;
         [SerializeField]
@@ -86,25 +55,17 @@ namespace YARG.Menu.DifficultySelect
         private BandSelectMenu _menu;
         private BandSessionState _session;
         private Color _borderColor;
-        private Color _headingColor;
 
-        private PlayerCardHeader _header;
+        private BandColumnRows _rows;
+        private BandColumnHeader _header;
+        private BandColumnViewport _viewport;
+        private BandColumnSettings _settings;
+        private BandColumnMenus _menus;
+
         private float _appliedWidth = -1f;
-        private readonly List<(DifficultyItem Row, VerticalLayoutGroup Layout, float Height)> _profileRows = new();
-        private readonly List<(DifficultyItem Row, LayoutElement Layout)> _wrappableRows = new();
         private Tween _rise;
         private Tween _collapse;
-        private readonly List<Texture2D> _avatarTextures = new();
-        private readonly List<(ModifierItem Item, Modifier Modifier)> _modifierToggles = new();
-        private readonly List<(Transform Row, GameObject Divider)> _dividers = new();
-
         private BandColumnState _builtState;
-        private int _expandedBottomPadding;
-        private NavigatableBehaviour _readyButton;
-        private NavigatableBehaviour _difficultyButton;
-        private NavigatableBehaviour _defaultButton;
-        private NavigatableBehaviour _moveLeftButton;
-        private NavigatableBehaviour _moveRightButton;
 
         public BandColumnModel Model { get; private set; }
         public YargPlayer Player => Model?.Player;
@@ -113,7 +74,6 @@ namespace YARG.Menu.DifficultySelect
         public bool Ready => Model.Ready;
 
         public bool IsJoining => Model.IsJoining;
-        private bool IsCollapsed => Model.IsCollapsed;
         public bool IsExpanded => Model.IsExpanded;
         public bool IsAtTopLevel => Model.IsAtTopLevel;
         public bool IsSittingOut => _session.IsSittingOut(Model);
@@ -123,20 +83,20 @@ namespace YARG.Menu.DifficultySelect
         public NavigationGroup Nav => _nav;
         public RectTransform Card => _card;
 
-        private RectTransform Rows => _scroll.content;
-
         private void Awake()
         {
-            _header = new PlayerCardHeader(_heading, _icon);
-            _iconLayout = _icon.GetComponent<LayoutElement>();
-            _headerContent = _icon.GetComponentInParent<HorizontalLayoutGroup>(true);
-            _heading.fontSizeMin = HEADER_FONT_SIZE_MIN;
-            _viewportMask = _scroll.viewport.GetComponent<RectMask2D>();
-            _viewportMask.softness = new Vector2Int(0, SCROLL_FADE);
-            _scroll.onValueChanged.AddListener(_ => UpdateScrollFade());
-            _expandedBottomPadding = _cardLayout.padding.bottom;
+            _header = new BandColumnHeader(_heading, _icon, _layout);
+            _rows = new BandColumnRows(_scroll.content, _nav, _layout,
+                itemPrefab: _itemPrefab,
+                readyPrefab: _readyPrefab,
+                smallPrefab: _smallPrefab,
+                profilePrefab: _profilePrefab,
+                modifierPrefab: _modifierPrefab,
+                genericAvatar: _profileGenericSprite,
+                botAvatar: _profileBotSprite);
+            _viewport = new BandColumnViewport(_card, _cardLayout, _scroll, _rowLayout, _viewportLayout, _layout, _nav,
+                _rows);
             _borderColor = _border.color;
-            _headingColor = _heading.color;
         }
 
         public void Initialize(BandSelectMenu menu, BandSessionState session, BandColumnModel model)
@@ -144,6 +104,8 @@ namespace YARG.Menu.DifficultySelect
             _menu = menu;
             _session = session;
             Model = model;
+            _settings = new BandColumnSettings(model, session, _rows, _nav);
+            _menus = new BandColumnMenus(this, menu, session, _rows, _header, _settings);
             _border.raycastTarget = true;
             _nav.SelectionChanged += OnSelectionChanged;
         }
@@ -162,7 +124,7 @@ namespace YARG.Menu.DifficultySelect
             _card.DOKill();
             _nav.SelectionChanged -= OnSelectionChanged;
             _header.ReleaseIcon();
-            ClearAvatars();
+            _rows.ReleaseAvatars();
         }
 
         public void DismissAndDestroy()
@@ -202,6 +164,25 @@ namespace YARG.Menu.DifficultySelect
                 : (_borderColor * UNFOCUSED_BORDER_BRIGHTNESS).WithAlpha(_borderColor.a);
         }
 
+        public void SetWidth(float width)
+        {
+            if (Mathf.Approximately(_appliedWidth, width))
+            {
+                return;
+            }
+
+            _appliedWidth = width;
+            _layout.preferredWidth = width;
+            _rows.FitProfileRows();
+            _card.sizeDelta = new Vector2(width, _card.sizeDelta.y);
+            _header.Fit();
+        }
+
+        public void FitRows()
+        {
+            _viewport.Fit(Model.IsCollapsed, _menu.MaxCardHeight);
+        }
+
         public void BeginJoin()
         {
             Rebuild();
@@ -230,9 +211,30 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
+        public void ShowProfilesInUse()
+        {
+            Model.ViewStack.SetRoot(BandColumnState.ChooseProfile);
+            Rebuild();
+        }
+
+        public void Confirm()
+        {
+            _settings.Confirm();
+        }
+
+        public void NavigateVertical(int direction, bool isRepeat)
+        {
+            _settings.NavigateVertical(direction, isRepeat);
+        }
+
+        public bool AdjustSelection(int direction)
+        {
+            return _settings.AdjustSelection(direction);
+        }
+
         public void Back()
         {
-            if (StopEditing())
+            if (_settings.StopEditing())
             {
                 return;
             }
@@ -248,7 +250,7 @@ namespace YARG.Menu.DifficultySelect
             {
                 if (Ready)
                 {
-                    ToggleReady();
+                    _session.ToggleReady(Model);
                 }
                 else if (_session.CollapseColumn(Model))
                 {
@@ -260,11 +262,11 @@ namespace YARG.Menu.DifficultySelect
 
             if (State == BandColumnState.SittingOut)
             {
-                OpenPicker(canCancel: true);
+                _session.OpenPicker(Model, canCancel: true);
                 return;
             }
 
-            PopView();
+            _session.PopView(Model);
         }
 
         public void Rebuild()
@@ -279,103 +281,22 @@ namespace YARG.Menu.DifficultySelect
                 _card.anchoredPosition = new Vector2(_card.anchoredPosition.x, 0f);
             }
 
-            _nav.ClearNavigatables();
-            ClearAvatars();
-            _profileRows.Clear();
-            _steppers.Clear();
-            _editingRow = null;
-            _wrappableRows.Clear();
-            _modifierToggles.Clear();
-            _readyButton = null;
-            _difficultyButton = null;
-            _defaultButton = null;
-            _moveLeftButton = null;
-            _moveRightButton = null;
-            for (int i = Rows.childCount - 1; i >= 0; i--)
-            {
-                var child = Rows.GetChild(i).gameObject;
-                child.SetActive(false);
-                Destroy(child);
-            }
-
-            switch (State)
-            {
-                case BandColumnState.ChooseProfile:
-                    BuildProfilePicker();
-                    break;
-                case BandColumnState.Main:
-                    BuildMain();
-                    break;
-                case BandColumnState.Difficulty:
-                    BuildDifficultyPicker();
-                    break;
-                case BandColumnState.Instrument:
-                    BuildInstrumentPicker();
-                    break;
-                case BandColumnState.Adjustments:
-                    BuildAdjustments();
-                    break;
-                case BandColumnState.Modifiers:
-                    BuildModifiers();
-                    break;
-                case BandColumnState.Accessibility:
-                    BuildAccessibility();
-                    break;
-                case BandColumnState.OpenLane:
-                    BuildOpenLane();
-                    break;
-                case BandColumnState.SittingOut:
-                    BuildSittingOut();
-                    break;
-                case BandColumnState.Position:
-                    BuildPosition();
-                    break;
-                case BandColumnState.Settings:
-                    BuildSettings();
-                    break;
-                case BandColumnState.SettingOptions:
-                    BuildSettingOptions();
-                    break;
-            }
+            _rows.Clear();
+            _settings.Clear();
+            _menus.Build(State);
 
             _builtState = State;
             Model.ViewStack.RestoreFocusKey = null;
 
-            StyleRows();
-            SelectDefault(sameState ? previousIndex : null);
-            UpdateDividers();
+            _viewport.StyleRows();
+            _menus.SelectDefault(sameState ? previousIndex : null);
+            _viewport.UpdateDividers();
             if (!sameState)
             {
-                Rows.anchoredPosition = Vector2.zero;
+                _viewport.ResetScroll();
             }
 
             FitRows();
-        }
-
-        private void PushView(BandColumnState state, string focusKey = null, string settingTitle = null,
-            List<(string Label, bool Current, Action Pick)> settingOptions = null)
-        {
-            _session.PushView(Model, state, focusKey, settingTitle, settingOptions);
-        }
-
-        private void PopView()
-        {
-            _session.PopView(Model);
-        }
-
-        private void OpenPicker(bool canCancel)
-        {
-            _session.OpenPicker(Model, canCancel);
-        }
-
-        private void PickInstrument(Instrument instrument)
-        {
-            _session.PickInstrument(Model, instrument);
-        }
-
-        private void ToggleReady()
-        {
-            _session.ToggleReady(Model);
         }
 
         public void ApplyReadyVisuals()
@@ -387,9 +308,9 @@ namespace YARG.Menu.DifficultySelect
             else
             {
                 RebuildFromCurrentTop();
-                if (_readyButton != null)
+                if (_menus.ReadyButton != null)
                 {
-                    _nav.SelectButton(_readyButton);
+                    _nav.SelectButton(_menus.ReadyButton);
                 }
             }
         }
@@ -409,7 +330,7 @@ namespace YARG.Menu.DifficultySelect
 
             if (Ready)
             {
-                ToggleReady();
+                _session.ToggleReady(Model);
                 return;
             }
 
@@ -418,12 +339,16 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            bool onHeader = !RectTransformUtility.RectangleContainsScreenPoint((RectTransform) _scroll.transform,
-                eventData.position, eventData.pressEventCamera);
+            bool onHeader = !_viewport.ContainsScreenPoint(eventData.position, eventData.pressEventCamera);
             if (_session.IsOvershell && onHeader)
             {
                 Back();
             }
+        }
+
+        public void OnScroll(PointerEventData eventData)
+        {
+            _viewport.OnScroll(eventData);
         }
 
         public bool Expand()
@@ -438,25 +363,10 @@ namespace YARG.Menu.DifficultySelect
             RiseFrom(top - _card.rect.height);
         }
 
-        private void ConfirmDifficulty(Difficulty difficulty)
-        {
-            _session.ConfirmDifficulty(Model, difficulty);
-            _nav.SelectButton(_readyButton);
-        }
-
-        private void CycleHarmonyPart()
-        {
-            _session.CycleHarmonyPart(Model);
-        }
-
         private void OnSelectionChanged(NavigatableBehaviour selected, SelectionOrigin origin)
         {
-            if (_editingRow != null && selected != _editingRow.Button)
-            {
-                StopEditing();
-            }
-
-            UpdateDividers();
+            _settings.OnSelectionChanged(selected);
+            _viewport.UpdateDividers();
 
             if (origin == SelectionOrigin.Mouse)
             {
@@ -464,21 +374,25 @@ namespace YARG.Menu.DifficultySelect
             }
             else
             {
-                ScrollToSelection();
+                _viewport.ScrollToSelection();
             }
         }
 
-        private void SetPlayerHeading()
+        private void SlideDownAndCollapse()
         {
-            string mode = Player.Profile.GameMode.ToResourceName();
-            _header.SetIcon(mode == null ? null : $"InstrumentIcons[{mode}]");
-            SetHeading(Player.Profile.Name, showIcon: true);
-            if (Ready)
-            {
-                _heading.color = BandSelectMenu.READY_COLOR;
-            }
-        }
+            _rise?.Kill();
+            _collapse?.Kill();
 
+            _collapse = _card.DOAnchorPosY(_viewport.CollapsedHeight - _card.rect.height, BandSelectMenu.SLIDE_SECONDS)
+                .SetEase(Ease.OutCubic)
+                .SetUpdate(true)
+                .OnComplete(() =>
+                {
+                    _collapse = null;
+                    _card.anchoredPosition = new Vector2(_card.anchoredPosition.x, 0f);
+                    Rebuild();
+                });
+        }
     }
 
     internal static class BandColumnExtensions

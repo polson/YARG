@@ -14,7 +14,7 @@ using YARG.Settings.Customization;
 
 namespace YARG.Menu.DifficultySelect
 {
-    internal sealed partial class BandColumn
+    internal sealed class BandColumnSettings
     {
         private const string SETTING_LABEL_PREFIX = "Menu.ProfileList.Tooltip.Profiles.Settings";
         private const string INPUT_MODE_KEY = "InputMode";
@@ -29,8 +29,27 @@ namespace YARG.Menu.DifficultySelect
             ProfileSettingStrings.CONFIGURE_FIVE_LANE_DRUMS_HIGHWAY,
         };
 
+        private readonly BandColumnModel _model;
+        private readonly BandSessionState _session;
+        private readonly BandColumnRows _rows;
+        private readonly NavigationGroup _nav;
         private readonly Dictionary<NavigatableBehaviour, (DifficultyItem Row, Action<int> Step)> _steppers = new();
         private DifficultyItem _editingRow;
+
+        public BandColumnSettings(BandColumnModel model, BandSessionState session, BandColumnRows rows,
+            NavigationGroup nav)
+        {
+            _model = model;
+            _session = session;
+            _rows = rows;
+            _nav = nav;
+        }
+
+        public void Clear()
+        {
+            _steppers.Clear();
+            _editingRow = null;
+        }
 
         public void Confirm()
         {
@@ -67,18 +86,6 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        private bool StopEditing()
-        {
-            if (_editingRow == null)
-            {
-                return false;
-            }
-
-            _editingRow.SetBodyColor(null);
-            _editingRow = null;
-            return true;
-        }
-
         public bool AdjustSelection(int direction)
         {
             if (_nav.SelectedIndex is not { } index ||
@@ -91,28 +98,47 @@ namespace YARG.Menu.DifficultySelect
             return true;
         }
 
-        private void AddSettingsRow()
+        public bool StopEditing()
         {
-            var row = AddRow(null, Localize.Key("Menu.DifficultySelect.Band.Settings"),
-                () => PushView(BandColumnState.Settings, nameof(BandColumnState.Settings)), !Ready);
-            if (Model.ViewStack.RestoreFocusKey == nameof(BandColumnState.Settings))
+            if (_editingRow == null)
             {
-                _defaultButton = row.Button;
+                return false;
+            }
+
+            _editingRow.SetBodyColor(null);
+            _editingRow = null;
+            return true;
+        }
+
+        public void OnSelectionChanged(NavigatableBehaviour selected)
+        {
+            if (_editingRow != null && selected != _editingRow.Button)
+            {
+                StopEditing();
             }
         }
 
-        private void BuildSettings()
+        public void AddEntryRow()
         {
-            var profile = Player.Profile;
+            var row = _rows.AddRow(null, Localize.Key("Menu.DifficultySelect.Band.Settings"),
+                () => _session.PushView(_model, BandColumnState.Settings, nameof(BandColumnState.Settings)),
+                !_model.Ready);
+            if (_model.ViewStack.RestoreFocusKey == nameof(BandColumnState.Settings))
+            {
+                _rows.DefaultButton = row.Button;
+            }
+        }
 
-            SetPlayerHeading();
+        public void Build()
+        {
+            var profile = _model.Player.Profile;
 
             if (_session.IsOvershell)
             {
                 AddChoiceRow(INPUT_MODE_KEY, profile.GameMode.ToLocalizedName(),
                     ProfileCenterPane.GAME_MODES.Select(mode =>
                         (mode.ToLocalizedName(), mode == profile.GameMode,
-                            (Action) (() => _session.ChangeInputMode(Model, mode)))));
+                            (Action) (() => _session.ChangeInputMode(_model, mode)))));
             }
 
             foreach (var setting in profile.GameMode.PossibleProfileSettings(new()).Select(s => s.setting).Distinct())
@@ -126,7 +152,33 @@ namespace YARG.Menu.DifficultySelect
                 AddSetting(profile, setting);
             }
 
-            AddRow(null, Localize.Key("Menu.DifficultySelect.Done"), PopView, true);
+            _rows.AddRow(null, Localize.Key("Menu.DifficultySelect.Done"), PopView, true);
+        }
+
+        public void BuildOptions()
+        {
+            _rows.AddWrappable(_rows.AddLabel(_model.ViewStack.SettingTitle));
+
+            foreach (var (label, current, pick) in _model.ViewStack.SettingOptions)
+            {
+                var row = _rows.AddRow(null, label, () =>
+                {
+                    pick();
+                    PopView();
+                }, true);
+                _rows.AddWrappable(row);
+
+                if (current)
+                {
+                    row.SetTextColor(BandSelectMenu.READY_COLOR);
+                    _rows.DefaultButton = row.Button;
+                }
+            }
+        }
+
+        private void PopView()
+        {
+            _session.PopView(_model);
         }
 
         private void AddSetting(YargProfile profile, string setting)
@@ -172,13 +224,14 @@ namespace YARG.Menu.DifficultySelect
                         direction => profile.InputCalibrationMilliseconds += direction);
                     break;
                 case ProfileSettingStrings.LEFTY_FLIP:
-                    AddToggle(SettingLabel("LeftyFlip"), profile.LeftyFlip, on => profile.LeftyFlip = on);
+                    _rows.AddToggle(SettingLabel("LeftyFlip"), profile.LeftyFlip, on => profile.LeftyFlip = on);
                     break;
                 case ProfileSettingStrings.RANGE_DISABLE:
-                    AddToggle(SettingLabel("RangeDisable"), profile.RangeEnabled, on => profile.RangeEnabled = on);
+                    _rows.AddToggle(SettingLabel("RangeDisable"), profile.RangeEnabled,
+                        on => profile.RangeEnabled = on);
                     break;
                 case ProfileSettingStrings.USE_CYMBAL_MODELS:
-                    AddToggle(SettingLabel("UseCymbalModels"), profile.UseCymbalModels,
+                    _rows.AddToggle(SettingLabel("UseCymbalModels"), profile.UseCymbalModels,
                         on => profile.UseCymbalModels = on);
                     break;
                 case ProfileSettingStrings.OPEN_LANE_DISPLAY_TYPE:
@@ -213,18 +266,19 @@ namespace YARG.Menu.DifficultySelect
         {
             string title = SettingLabel(key);
             var choices = options.ToList();
-            var row = AddRow(title, value, () => OpenSettingOptions(key, title, choices), true,
-                height: TWO_LINE_ROW_HEIGHT);
+            var row = _rows.AddRow(title, value,
+                () => _session.PushView(_model, BandColumnState.SettingOptions, key, title, choices), true,
+                height: BandColumnRows.TWO_LINE_ROW_HEIGHT);
             row.AllowTinyText();
-            MarkSettingDefault(key, row);
+            MarkDefault(key, row);
         }
 
         private void AddNumberRow(string key, Func<string> format, Action<int> step)
         {
-            var row = AddRow(SettingLabel(key), FormatStepper(format()), () => { }, true,
-                height: TWO_LINE_ROW_HEIGHT);
+            var row = _rows.AddRow(SettingLabel(key), FormatStepper(format()), () => { }, true,
+                height: BandColumnRows.TWO_LINE_ROW_HEIGHT);
             row.AllowTinyText();
-            MarkSettingDefault(key, row);
+            MarkDefault(key, row);
 
             Action<int> adjust = direction =>
             {
@@ -236,38 +290,11 @@ namespace YARG.Menu.DifficultySelect
             row.Button.gameObject.AddComponent<SettingStepClick>().Stepped = adjust;
         }
 
-        private void MarkSettingDefault(string key, DifficultyItem row)
+        private void MarkDefault(string key, DifficultyItem row)
         {
-            if (key == Model.ViewStack.RestoreFocusKey)
+            if (key == _model.ViewStack.RestoreFocusKey)
             {
-                _defaultButton = row.Button;
-            }
-        }
-
-        private void OpenSettingOptions(string key, string title, List<(string Label, bool Current, Action Pick)> options)
-        {
-            PushView(BandColumnState.SettingOptions, key, title, options);
-        }
-
-        private void BuildSettingOptions()
-        {
-            SetPlayerHeading();
-            AddWrappableRow(AddLabel(Model.ViewStack.SettingTitle));
-
-            foreach (var (label, current, pick) in Model.ViewStack.SettingOptions)
-            {
-                var row = AddRow(null, label, () =>
-                {
-                    pick();
-                    PopView();
-                }, true);
-                AddWrappableRow(row);
-
-                if (current)
-                {
-                    row.SetTextColor(BandSelectMenu.READY_COLOR);
-                    _defaultButton = row.Button;
-                }
+                _rows.DefaultButton = row.Button;
             }
         }
 

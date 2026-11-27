@@ -69,6 +69,7 @@ namespace YARG.Menu.DifficultySelect
 
         public bool IsFull => PlayerContainer.Players.Count >= MAX_PLAYERS;
         public bool IsSuppressingPlayerEvents => _joiner.IsSuppressingPlayerEvents;
+        public bool CanEngage => _canEngage != null && _canEngage();
 
         public bool CanClickCards => !Started && !DialogManager.Instance.IsDialogShowing &&
             (!IsOvershell || (!Hidden && _canEngage()));
