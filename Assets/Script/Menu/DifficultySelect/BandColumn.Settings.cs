@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using YARG.Assets.Script.Helpers;
 using YARG.Core;
 using YARG.Core.Game;
-using YARG.Assets.Script.Helpers;
 using YARG.Helpers.Extensions;
 using YARG.Localization;
 using YARG.Menu.Filters;
@@ -29,18 +29,18 @@ namespace YARG.Menu.DifficultySelect
             ProfileSettingStrings.CONFIGURE_FIVE_LANE_DRUMS_HIGHWAY,
         };
 
-        private readonly Dictionary<NavigatableBehaviour, Action<int>> _steppers = new();
+        private readonly Dictionary<NavigatableBehaviour, (DifficultyItem Row, Action<int> Step)> _steppers = new();
         private DifficultyItem _editingRow;
 
         public void Confirm()
         {
-            if (_nav.SelectedIndex is { } index && _steppers.ContainsKey(_nav.Navigatables[index]))
+            if (_nav.SelectedIndex is { } index &&
+                _steppers.TryGetValue(_nav.Navigatables[index], out var entry))
             {
-                var row = _nav.Navigatables[index].GetComponentInParent<DifficultyItem>();
                 if (!StopEditing())
                 {
-                    _editingRow = row;
-                    row.SetBodyColor(BandSelectMenu.READY_COLOR);
+                    _editingRow = entry.Row;
+                    entry.Row.SetBodyColor(BandSelectMenu.READY_COLOR);
                 }
 
                 return;
@@ -51,9 +51,9 @@ namespace YARG.Menu.DifficultySelect
 
         public void NavigateVertical(int direction, bool isRepeat)
         {
-            if (_editingRow != null && _steppers.TryGetValue(_editingRow.Button, out var step))
+            if (_editingRow != null && _steppers.TryGetValue(_editingRow.Button, out var entry))
             {
-                step(-direction);
+                entry.Step(-direction);
                 return;
             }
 
@@ -81,12 +81,13 @@ namespace YARG.Menu.DifficultySelect
 
         public bool AdjustSelection(int direction)
         {
-            if (_nav.SelectedIndex is not { } index || !_steppers.TryGetValue(_nav.Navigatables[index], out var step))
+            if (_nav.SelectedIndex is not { } index ||
+                !_steppers.TryGetValue(_nav.Navigatables[index], out var entry))
             {
                 return false;
             }
 
-            step(direction);
+            entry.Step(direction);
             return true;
         }
 
@@ -94,7 +95,7 @@ namespace YARG.Menu.DifficultySelect
         {
             var row = AddRow(null, Localize.Key("Menu.DifficultySelect.Band.Settings"),
                 () => PushView(BandColumnState.Settings, nameof(BandColumnState.Settings)), !Ready);
-            if (_restoreFocusKey == nameof(BandColumnState.Settings))
+            if (_viewStack.RestoreFocusKey == nameof(BandColumnState.Settings))
             {
                 _defaultButton = row.Button;
             }
@@ -199,7 +200,7 @@ namespace YARG.Menu.DifficultySelect
         {
             var presets = container.DefaultBasePresets
                 .Concat(container.CustomBasePresets)
-                .Where(preset => allowed is null || allowed(preset.Id))
+                .Where(preset => allowed == null || allowed(preset.Id))
                 .ToList();
 
             string currentName = presets.FirstOrDefault(preset => preset.Id == current)?.Name ?? string.Empty;
@@ -230,13 +231,13 @@ namespace YARG.Menu.DifficultySelect
                 row.SetBody(FormatStepper(format()));
             };
 
-            _steppers[row.Button] = adjust;
+            _steppers[row.Button] = (row, adjust);
             row.Button.gameObject.AddComponent<SettingStepClick>().Stepped = adjust;
         }
 
         private void MarkSettingDefault(string key, DifficultyItem row)
         {
-            if (key == _restoreFocusKey)
+            if (key == _viewStack.RestoreFocusKey)
             {
                 _defaultButton = row.Button;
             }
@@ -250,16 +251,18 @@ namespace YARG.Menu.DifficultySelect
         private void BuildSettingOptions()
         {
             SetPlayerHeading();
-            _wrappableRows.Add(AddLabel(_currentView.SettingTitle));
+            AddWrappableRow(AddLabel(_viewStack.SettingTitle));
 
-            foreach (var (label, current, pick) in _currentView.SettingOptions)
+            var options = _viewStack.SettingOptions;
+            for (int i = 0; i < options.Count; i++)
             {
+                var (label, current, pick) = options[i];
                 var row = AddRow(null, label, () =>
                 {
                     pick();
                     PopView();
                 }, true);
-                _wrappableRows.Add(row);
+                AddWrappableRow(row);
 
                 if (current)
                 {

@@ -1,30 +1,11 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using DG.Tweening;
-using TMPro;
 using UnityEngine;
-using UnityEngine.InputSystem;
-using UnityEngine.UI;
-using YARG.Core;
-using YARG.Core.Extensions;
-using YARG.Core.Game;
 using YARG.Core.Input;
-using YARG.Core.Song;
-using YARG.Gameplay.Visuals;
-using YARG.Helpers;
-using YARG.Input;
-using YARG.Input.Bindings;
-using YARG.Localization;
-using YARG.Menu.MusicLibrary;
 using YARG.Menu.Navigation;
-using YARG.Menu.Persistent;
-using YARG.Menu.ProfileList;
 using YARG.Player;
 
 namespace YARG.Menu.DifficultySelect
 {
-    public sealed partial class BandSelectMenu : MonoBehaviour
+    public sealed partial class BandSelectMenu
     {
         private void OnConfirm(NavigationContext context)
         {
@@ -34,7 +15,7 @@ namespace YARG.Menu.DifficultySelect
             }
 
             var column = ColumnFor(context.Player);
-            if (column is not null && !column.Expand())
+            if (column != null && !column.Expand())
             {
                 column.Confirm();
             }
@@ -48,7 +29,7 @@ namespace YARG.Menu.DifficultySelect
             }
 
             var column = ColumnFor(context.Player);
-            if (column is null || column.IsAtTopLevel)
+            if (column == null || column.IsAtTopLevel)
             {
                 MenuManager.Instance.PopMenu();
             }
@@ -67,14 +48,16 @@ namespace YARG.Menu.DifficultySelect
                 _                => 0,
             };
 
-            if (direction != 0 && !_started && ColumnFor(context.Player) is { } column &&
-                column.AdjustSelection(direction))
+            if (direction != 0 && !_started)
             {
-                return;
+                var column = ColumnFor(context.Player);
+                if (column != null && column.AdjustSelection(direction))
+                {
+                    return;
+                }
             }
 
-            bool movesFocus = direction != 0 && context.Player is null && _columns.Count > 0;
-            if (!movesFocus)
+            if (direction == 0 || context.Player != null || _columns.Count == 0)
             {
                 return;
             }
@@ -91,7 +74,7 @@ namespace YARG.Menu.DifficultySelect
             }
 
             var column = FindColumn(context.Player);
-            if (column is null)
+            if (column == null)
             {
                 return IsMenuExitAction(context.Action) && AnyColumnOpen();
             }
@@ -152,21 +135,42 @@ namespace YARG.Menu.DifficultySelect
 
         private bool AnyColumnOpen()
         {
-            return _columns.Any(c => c.IsExpanded && !c.IsSittingOut && c.Player.DeviceInfo.HasControllerAssigned);
+            for (int i = 0; i < _columns.Count; i++)
+            {
+                var column = _columns[i];
+                if (column.IsExpanded && !column.IsSittingOut && column.Player.DeviceInfo.HasControllerAssigned)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private BandColumn ColumnFor(YargPlayer player)
         {
-            return player is null ? FocusedColumn : FindColumn(player);
+            return player == null ? FocusedColumn : FindColumn(player);
         }
 
         private BandColumn FindColumn(YargPlayer player)
         {
-            return player is null ? null : _columns.FirstOrDefault(c => c.Player == player);
+            if (player == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < _columns.Count; i++)
+            {
+                if (_columns[i].Player == player)
+                {
+                    return _columns[i];
+                }
+            }
+
+            return null;
         }
 
         private BandColumn FocusedColumn =>
             _columns.Count > 0 ? _columns[Mathf.Clamp(_focusIndex, 0, _columns.Count - 1)] : null;
-
     }
 }

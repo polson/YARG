@@ -1,9 +1,8 @@
+using System;
 using System.Collections.Generic;
-using System.Linq;
 using DG.Tweening;
 using TMPro;
 using UnityEngine;
-using UnityEngine.Events;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using YARG.Core;
@@ -17,22 +16,6 @@ using YARG.Player;
 
 namespace YARG.Menu.DifficultySelect
 {
-    internal enum BandColumnState
-    {
-        ChooseProfile,
-        Main,
-        Difficulty,
-        Instrument,
-        Adjustments,
-        Modifiers,
-        Accessibility,
-        OpenLane,
-        SittingOut,
-        Position,
-        Settings,
-        SettingOptions,
-    }
-
     internal sealed partial class BandColumn : MonoBehaviour, IPointerClickHandler, IScrollHandler
     {
         private const float PROFILE_ROW_HEIGHT = 64f;
@@ -106,38 +89,20 @@ namespace YARG.Menu.DifficultySelect
 
         private PlayerCardHeader _header;
         private float _appliedWidth = -1f;
-        private readonly List<(DifficultyItem Row, float Height)> _profileRows = new();
-        private readonly List<DifficultyItem> _wrappableRows = new();
+        private readonly BandColumnViewStack _viewStack = new();
+        private readonly List<(DifficultyItem Row, VerticalLayoutGroup Layout, float Height)> _profileRows = new();
+        private readonly List<(DifficultyItem Row, LayoutElement Layout)> _wrappableRows = new();
         private Tween _rise;
         private Tween _collapse;
         private readonly List<Modifier> _modifiers = new();
-        [System.NonSerialized]
+        [NonSerialized]
         private Modifier _excusableModifiers;
         private readonly List<Texture2D> _avatarTextures = new();
         private readonly List<Difficulty> _difficulties = new();
         private readonly List<(ModifierItem Item, Modifier Modifier)> _modifierToggles = new();
+        private readonly List<(Transform Row, GameObject Divider)> _dividers = new();
 
-        private readonly struct ColumnView
-        {
-            public readonly BandColumnState State;
-            public readonly string FocusKey;
-            public readonly string SettingTitle;
-            public readonly List<(string Label, bool Current, System.Action Pick)> SettingOptions;
-
-            public ColumnView(BandColumnState state, string focusKey = null, string settingTitle = null,
-                List<(string Label, bool Current, System.Action Pick)> settingOptions = null)
-            {
-                State = state;
-                FocusKey = focusKey;
-                SettingTitle = settingTitle;
-                SettingOptions = settingOptions;
-            }
-        }
-
-        private readonly Stack<ColumnView> _history = new();
-        private ColumnView _currentView;
         private BandColumnState _builtState;
-        private string _restoreFocusKey;
         private bool _locked;
         private bool _collapsed;
         private int _expandedBottomPadding;
@@ -147,34 +112,41 @@ namespace YARG.Menu.DifficultySelect
         private NavigatableBehaviour _defaultButton;
         private NavigatableBehaviour _moveLeftButton;
         private NavigatableBehaviour _moveRightButton;
-        private readonly List<(Transform Row, GameObject Divider)> _dividers = new();
 
         public YargPlayer Player { get; set; }
 
-        public BandColumnState State => _currentView.State;
+        public BandColumnState State => _viewStack.State;
         public bool Ready { get; private set; }
 
         public bool IsJoining => State == BandColumnState.ChooseProfile;
         private bool IsCollapsed => State == BandColumnState.Main && (Ready || _collapsed);
         public bool IsExpanded => !IsCollapsed;
-        public bool IsAtTopLevel => State switch
-        {
-            BandColumnState.Main       => !Ready,
-            BandColumnState.SittingOut => true,
-            BandColumnState.Instrument => _history.Count == 0,
-            _                          => false,
-        };
+        public bool IsAtTopLevel => _viewStack.IsAtTopLevel(Ready);
         public bool IsSittingOut => State == BandColumnState.SittingOut || HasNoPlayableInstrument;
-        private bool HasNoPlayableInstrument => State == BandColumnState.Instrument &&
-            _menu.Instruments.All(instrument => _menu.GetInstrumentBlocker(this, instrument, out _) is not null);
-        public bool HasChosenInstrument => State switch
-        {
-            BandColumnState.ChooseProfile => false,
-            BandColumnState.SittingOut    => false,
-            BandColumnState.Instrument    => _history.Count > 0 && _history.Peek().State == BandColumnState.Main,
-            _                             => true,
-        };
+        public bool HasChosenInstrument => _viewStack.HasChosenInstrument();
         public bool IsDecided => IsSittingOut || (State == BandColumnState.Main && Ready);
+
+        private bool HasNoPlayableInstrument
+        {
+            get
+            {
+                if (State != BandColumnState.Instrument)
+                {
+                    return false;
+                }
+
+                var instruments = _menu.Instruments;
+                for (int i = 0; i < instruments.Count; i++)
+                {
+                    if (_menu.GetInstrumentBlocker(this, instruments[i], out _) == null)
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+        }
 
         public NavigationGroup Nav => _nav;
         public RectTransform Card => _card;
@@ -260,8 +232,7 @@ namespace YARG.Menu.DifficultySelect
         public void BeginJoin()
         {
             Ready = false;
-            _history.Clear();
-            _currentView = new ColumnView(BandColumnState.ChooseProfile);
+            _viewStack.SetRoot(BandColumnState.ChooseProfile);
             Rebuild();
         }
 
@@ -304,11 +275,10 @@ namespace YARG.Menu.DifficultySelect
             _locked = false;
             _collapsed = false;
 
-            if (GlobalVariables.State.CurrentCareer is not null && Player.Profile.IsBot)
+            if (GlobalVariables.State.CurrentCareer != null && Player.Profile.IsBot)
             {
                 _locked = true;
-                _history.Clear();
-                _currentView = new ColumnView(BandColumnState.SittingOut);
+                _viewStack.SetRoot(BandColumnState.SittingOut);
                 Rebuild();
                 return;
             }
@@ -316,12 +286,12 @@ namespace YARG.Menu.DifficultySelect
             var profile = Player.Profile;
             foreach (var candidate in new[] { profile.PreferredInstrument, profile.CurrentInstrument })
             {
-                if (!_menu.Instruments.Contains(candidate))
+                if (!ContainsInstrument(_menu.Instruments, candidate))
                 {
                     continue;
                 }
 
-                if (_menu.GetInstrumentBlocker(this, candidate, out var mode) is not null)
+                if (_menu.GetInstrumentBlocker(this, candidate, out var mode) != null)
                 {
                     continue;
                 }
@@ -330,8 +300,7 @@ namespace YARG.Menu.DifficultySelect
                 profile.CurrentInstrument = candidate;
                 profile.ResolveHarmonyIndex(_menu.MaxHarmonyIndex);
                 CollectOptions();
-                _history.Clear();
-                _currentView = new ColumnView(BandColumnState.Main);
+                _viewStack.SetRoot(BandColumnState.Main);
                 Rebuild();
                 return;
             }
@@ -345,8 +314,7 @@ namespace YARG.Menu.DifficultySelect
             _warning = null;
             _locked = false;
             _collapsed = true;
-            _history.Clear();
-            _currentView = new ColumnView(BandColumnState.Main);
+            _viewStack.SetRoot(BandColumnState.Main);
         }
 
         public void Back()
@@ -356,7 +324,7 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            if (State == BandColumnState.ChooseProfile || (State == BandColumnState.Instrument && _history.Count == 0))
+            if (State == BandColumnState.ChooseProfile || (State == BandColumnState.Instrument && _viewStack.Depth == 0))
             {
                 _menu.Disconnect(this);
                 return;
@@ -391,7 +359,7 @@ namespace YARG.Menu.DifficultySelect
             int? previousIndex = _nav.SelectedIndex;
             bool sameState = _builtState == State;
 
-            if (_collapse is not null)
+            if (_collapse != null)
             {
                 _collapse.Kill();
                 _collapse = null;
@@ -458,7 +426,7 @@ namespace YARG.Menu.DifficultySelect
             }
 
             _builtState = State;
-            _restoreFocusKey = null;
+            _viewStack.RestoreFocusKey = null;
 
             StyleRows();
             SelectDefault(sameState ? previousIndex : null);
@@ -472,10 +440,9 @@ namespace YARG.Menu.DifficultySelect
         }
 
         private void PushView(BandColumnState state, string focusKey = null, string settingTitle = null,
-            List<(string Label, bool Current, System.Action Pick)> settingOptions = null)
+            List<(string Label, bool Current, Action Pick)> settingOptions = null)
         {
-            _history.Push(new ColumnView(_currentView.State, focusKey, _currentView.SettingTitle, _currentView.SettingOptions));
-            _currentView = new ColumnView(state, null, settingTitle, settingOptions);
+            _viewStack.Push(state, focusKey, settingTitle, settingOptions);
             _collapsed = false;
             Rebuild();
             _menu.OnColumnChanged();
@@ -483,14 +450,11 @@ namespace YARG.Menu.DifficultySelect
 
         private void PopView()
         {
-            if (_history.Count == 0)
+            if (!_viewStack.Pop())
             {
                 return;
             }
 
-            var previous = _history.Pop();
-            _restoreFocusKey = previous.FocusKey;
-            _currentView = new ColumnView(previous.State, null, previous.SettingTitle, previous.SettingOptions);
             _collapsed = false;
             Rebuild();
             _menu.OnColumnChanged();
@@ -498,8 +462,7 @@ namespace YARG.Menu.DifficultySelect
 
         private void SetRootState(BandColumnState state)
         {
-            _history.Clear();
-            _currentView = new ColumnView(state);
+            _viewStack.SetRoot(state);
             _collapsed = false;
             Rebuild();
             _menu.OnColumnChanged();
@@ -525,7 +488,7 @@ namespace YARG.Menu.DifficultySelect
 
         private void PickInstrument(Instrument instrument)
         {
-            if (_menu.GetInstrumentBlocker(this, instrument, out var mode) is not null)
+            if (_menu.GetInstrumentBlocker(this, instrument, out var mode) != null)
             {
                 Rebuild();
                 return;
@@ -684,7 +647,7 @@ namespace YARG.Menu.DifficultySelect
         private void SetPlayerHeading()
         {
             string mode = Player.Profile.GameMode.ToResourceName();
-            _header.SetIcon(mode is null ? null : $"InstrumentIcons[{mode}]");
+            _header.SetIcon(mode == null ? null : $"InstrumentIcons[{mode}]");
             SetHeading(Player.Profile.Name, showIcon: true);
             if (Ready)
             {
@@ -703,6 +666,19 @@ namespace YARG.Menu.DifficultySelect
             }
 
             return 0;
+        }
+
+        private static bool ContainsInstrument(IReadOnlyList<Instrument> instruments, Instrument target)
+        {
+            for (int i = 0; i < instruments.Count; i++)
+            {
+                if (instruments[i] == target)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 }

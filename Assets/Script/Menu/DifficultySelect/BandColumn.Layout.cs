@@ -1,19 +1,7 @@
-using System.Collections.Generic;
-using System.Linq;
 using DG.Tweening;
-using TMPro;
 using UnityEngine;
-using UnityEngine.Events;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
-using YARG.Core;
-using YARG.Core.Extensions;
-using YARG.Core.Game;
-using YARG.Gameplay.HUD;
-using YARG.Helpers.Extensions;
-using YARG.Localization;
-using YARG.Menu.Navigation;
-using YARG.Player;
 
 namespace YARG.Menu.DifficultySelect
 {
@@ -28,9 +16,10 @@ namespace YARG.Menu.DifficultySelect
 
             _appliedWidth = width;
             _layout.preferredWidth = width;
-            foreach (var (row, rowHeight) in _profileRows)
+            for (int i = 0; i < _profileRows.Count; i++)
             {
-                FitProfileRow(row, rowHeight);
+                var (row, rowLayout, rowHeight) = _profileRows[i];
+                FitProfileRow(row, rowLayout, rowHeight);
             }
 
             _card.sizeDelta = new Vector2(width, _card.sizeDelta.y);
@@ -89,9 +78,18 @@ namespace YARG.Menu.DifficultySelect
         private void UpdateDividers()
         {
             var selected = _nav.SelectedBehaviour;
-            int selectedIndex = selected == null
-                ? -1
-                : _dividers.FindIndex(entry => selected.transform.IsChildOf(entry.Row));
+            int selectedIndex = -1;
+            if (selected != null)
+            {
+                for (int i = 0; i < _dividers.Count; i++)
+                {
+                    if (selected.transform.IsChildOf(_dividers[i].Row))
+                    {
+                        selectedIndex = i;
+                        break;
+                    }
+                }
+            }
 
             for (int i = 0; i < _dividers.Count; i++)
             {
@@ -182,11 +180,12 @@ namespace YARG.Menu.DifficultySelect
             }
 
             LayoutRebuilder.ForceRebuildLayoutImmediate(_card);
-            foreach (var row in _wrappableRows)
+            for (int i = 0; i < _wrappableRows.Count; i++)
             {
-                if (row.WrapIfLong())
+                var (row, layout) = _wrappableRows[i];
+                if (row.WrapIfLong() && layout != null)
                 {
-                    row.GetComponent<LayoutElement>().preferredHeight = TWO_LINE_ROW_HEIGHT;
+                    layout.preferredHeight = TWO_LINE_ROW_HEIGHT;
                 }
             }
         }
@@ -258,6 +257,5 @@ namespace YARG.Menu.DifficultySelect
             _wantsHeaderIcon = showIcon && _icon.sprite != null;
             FitHeader();
         }
-
     }
 }

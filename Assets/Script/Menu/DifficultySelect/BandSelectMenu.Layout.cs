@@ -1,31 +1,15 @@
-using System;
 using System.Collections.Generic;
-using System.Linq;
-using DG.Tweening;
-using TMPro;
 using UnityEngine;
-using UnityEngine.InputSystem;
 using UnityEngine.UI;
-using YARG.Core;
-using YARG.Core.Extensions;
-using YARG.Core.Game;
-using YARG.Core.Input;
-using YARG.Core.Song;
-using YARG.Gameplay.Visuals;
-using YARG.Helpers;
-using YARG.Input;
-using YARG.Input.Bindings;
-using YARG.Localization;
-using YARG.Menu.MusicLibrary;
-using YARG.Menu.Navigation;
 using YARG.Menu.Persistent;
-using YARG.Menu.ProfileList;
 using YARG.Player;
 
 namespace YARG.Menu.DifficultySelect
 {
-    public sealed partial class BandSelectMenu : MonoBehaviour
+    public sealed partial class BandSelectMenu
     {
+        internal float MaxCardHeight => _band.rect.height;
+
         private void RefitOnBandResize()
         {
             float height = MaxCardHeight;
@@ -35,9 +19,9 @@ namespace YARG.Menu.DifficultySelect
             }
 
             _fittedBandHeight = height;
-            foreach (var column in _columns)
+            for (int i = 0; i < _columns.Count; i++)
             {
-                column.FitRows();
+                _columns[i].FitRows();
             }
 
             if (_profilesInUse != null)
@@ -58,30 +42,50 @@ namespace YARG.Menu.DifficultySelect
                 _bandSortingOrder = _bandCanvas.sortingOrder;
             }
 
-            bool raise = IsOvershell && (_profilesInUse != null || _columns.Any(c => c.IsExpanded));
+            bool raise = false;
+            if (IsOvershell)
+            {
+                raise = _profilesInUse != null;
+                for (int i = 0; !raise && i < _columns.Count; i++)
+                {
+                    if (_columns[i].IsExpanded)
+                    {
+                        raise = true;
+                    }
+                }
+            }
+
             _bandCanvas.sortingOrder = raise ? OPEN_CARD_SORTING_ORDER : _bandSortingOrder;
         }
 
-        private BandColumn InsertColumn(YargPlayer player, Dictionary<RectTransform, CardSnapshot> before,
+        private BandColumn InsertColumn(YargPlayer player, Dictionary<RectTransform, (float Position, float Width)> before,
             LayoutElement target = null)
         {
             var column = Instantiate(_columnPrefab, _band);
             column.Initialize(this, player);
 
-            target ??= _joinSlots.OrderBy(slot => slot.transform.GetSiblingIndex()).FirstOrDefault();
-            if (target is not null)
+            if (target == null)
+            {
+                target = EarliestJoinSlot();
+            }
+
+            if (target != null)
             {
                 column.transform.SetSiblingIndex(target.transform.GetSiblingIndex());
-                if (before is not null && before.Remove(JoinCard(target), out var snapshot))
-                {
-                    before[column.Card] = snapshot;
-                }
-
+                _animator.RemapCard(before, JoinCard(target), column.Card);
                 DestroyJoinSlot(target);
             }
 
             int siblingIndex = column.transform.GetSiblingIndex();
-            int index = _columns.Count(c => c.transform.GetSiblingIndex() < siblingIndex);
+            int index = 0;
+            for (int i = 0; i < _columns.Count; i++)
+            {
+                if (_columns[i].transform.GetSiblingIndex() < siblingIndex)
+                {
+                    index++;
+                }
+            }
+
             _columns.Insert(index, column);
             if (_columns.Count > 1 && index <= _focusIndex)
             {
@@ -102,8 +106,7 @@ namespace YARG.Menu.DifficultySelect
             var slots = OrderedSlots();
             int index = slots.IndexOf(column.transform);
             int target = index + direction;
-            bool inRange = index >= 0 && target >= 0 && target < slots.Count;
-            return inRange ? slots[target] : null;
+            return index >= 0 && target >= 0 && target < slots.Count ? slots[target] : null;
         }
 
         internal bool MoveColumn(BandColumn column, int direction)
@@ -115,7 +118,7 @@ namespace YARG.Menu.DifficultySelect
             }
 
             var focused = FocusedColumn;
-            var before = CaptureCardPositions();
+            CaptureCardPositions();
 
             int siblingIndex = column.transform.GetSiblingIndex();
             column.transform.SetSiblingIndex(other.GetSiblingIndex());
@@ -126,13 +129,14 @@ namespace YARG.Menu.DifficultySelect
 
             OnColumnChanged();
             PlayerContainer.SaveProfiles();
-            ShiftCards(before, delay: 0f, riseDelay: null);
+            _animator.ShiftCards(_band, _columns, _joinCards, _cardSnapshotBuffer, delay: 0f, riseDelay: null);
 
-            foreach (var c in _columns)
+            for (int i = 0; i < _columns.Count; i++)
             {
-                if (c != column && c.State == BandColumnState.Position)
+                var otherColumn = _columns[i];
+                if (otherColumn != column && otherColumn.State == BandColumnState.Position)
                 {
-                    c.Rebuild();
+                    otherColumn.Rebuild();
                 }
             }
 
@@ -141,27 +145,47 @@ namespace YARG.Menu.DifficultySelect
 
         private List<Transform> OrderedSlots()
         {
-            var slots = new List<Transform>();
+            _slotOrderBuffer.Clear();
             foreach (Transform child in _band)
             {
-                if (_columns.Any(c => c.transform == child) || _joinSlots.Any(s => s.transform == child))
+                if (IsManagedSlot(child))
                 {
-                    slots.Add(child);
+                    _slotOrderBuffer.Add(child);
                 }
             }
 
-            return slots;
+            return _slotOrderBuffer;
+        }
+
+        private bool IsManagedSlot(Transform child)
+        {
+            for (int i = 0; i < _columns.Count; i++)
+            {
+                if (_columns[i].transform == child)
+                {
+                    return true;
+                }
+            }
+
+            for (int i = 0; i < _joinSlots.Count; i++)
+            {
+                if (_joinSlots[i].Slot.transform == child)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void RemoveColumn(BandColumn column)
         {
-            var before = CaptureCardPositions();
+            CaptureCardPositions();
             int siblingIndex = column.transform.GetSiblingIndex();
 
             _columns.Remove(column);
             _joins.Remove(column);
-            _shifts.Remove(column.Card);
-            _resizes.Remove(column.Card);
+            _animator.KillTweens(column.Card);
             column.DismissAndDestroy();
 
             if (_columns.Count + 1 < MIN_SLOTS)
@@ -171,127 +195,14 @@ namespace YARG.Menu.DifficultySelect
 
             RefreshProfilePickers(column);
             OnColumnChanged();
-            ShiftCards(before, delay: SLIDE_SECONDS, riseDelay: SLIDE_SECONDS);
+            _animator.ShiftCards(_band, _columns, _joinCards, _cardSnapshotBuffer, delay: SLIDE_SECONDS,
+                riseDelay: SLIDE_SECONDS);
         }
 
-        private Dictionary<RectTransform, CardSnapshot> CaptureCardPositions()
+        private void CaptureCardPositions()
         {
-            var positions = new Dictionary<RectTransform, CardSnapshot>();
-            foreach (var column in _columns)
-            {
-                positions[column.Card] = new CardSnapshot(CardPosition(column.Card), column.Card.sizeDelta.x);
-            }
-
-            foreach (var slot in _joinSlots)
-            {
-                var card = JoinCard(slot);
-                positions[card] = new CardSnapshot(CardPosition(card), card.sizeDelta.x);
-            }
-
-            return positions;
+            _animator.Capture(_columns, _joinCards, _cardSnapshotBuffer);
         }
-
-        private void ShiftCards(Dictionary<RectTransform, CardSnapshot> before, float delay, float? riseDelay)
-        {
-            LayoutRebuilder.ForceRebuildLayoutImmediate(_band);
-
-            foreach (var column in _columns)
-            {
-                ShiftCard(column.Card, before, delay);
-            }
-
-            foreach (var slot in _joinSlots)
-            {
-                var card = JoinCard(slot);
-                if (before.ContainsKey(card))
-                {
-                    ShiftCard(card, before, delay);
-                }
-                else if (riseDelay is { } rise)
-                {
-                    card.DOKill();
-                    card.anchoredPosition = new Vector2(0f, -SLIDE_DISTANCE);
-                    card.DOAnchorPosY(0f, SLIDE_SECONDS)
-                        .SetDelay(rise)
-                        .SetEase(Ease.OutCubic)
-                        .SetUpdate(true);
-                }
-            }
-        }
-
-        private void ShiftCard(RectTransform card, Dictionary<RectTransform, CardSnapshot> before, float delay)
-        {
-            if (_shifts.Remove(card, out var running))
-            {
-                running.Kill();
-            }
-
-            bool captured = before.TryGetValue(card, out var snapshot);
-            if (captured)
-            {
-                ResizeCard(card, snapshot.Width, delay);
-            }
-
-            float offset = captured ? snapshot.Position - SlotPosition(card) : 0f;
-
-            bool settled = Mathf.Abs(offset) < 0.5f;
-            card.anchoredPosition = new Vector2(settled ? 0f : offset, card.anchoredPosition.y);
-            if (settled)
-            {
-                return;
-            }
-
-            _shifts[card] = card.DOAnchorPosX(0f, SLIDE_SECONDS)
-                .SetDelay(delay)
-                .SetEase(Ease.OutCubic)
-                .SetUpdate(true);
-        }
-
-        private void ResizeCard(RectTransform card, float from, float delay)
-        {
-            if (_resizes.Remove(card, out var running))
-            {
-                running.Kill();
-            }
-
-            float to = card.sizeDelta.x;
-            if (Mathf.Abs(to - from) < 0.5f)
-            {
-                return;
-            }
-
-            card.sizeDelta = new Vector2(from, card.sizeDelta.y);
-            _resizes[card] = DOTween.To(() => card.sizeDelta.x, x => card.sizeDelta = new Vector2(x, card.sizeDelta.y),
-                    to, SLIDE_SECONDS)
-                .SetDelay(delay)
-                .SetEase(Ease.OutCubic)
-                .SetUpdate(true)
-                .SetLink(card.gameObject);
-        }
-
-        private static float SlotPosition(RectTransform card)
-        {
-            return card.parent.localPosition.x;
-        }
-
-        private static float CardPosition(RectTransform card)
-        {
-            return SlotPosition(card) + card.anchoredPosition.x;
-        }
-
-        private readonly struct CardSnapshot
-        {
-            public readonly float Position;
-            public readonly float Width;
-
-            public CardSnapshot(float position, float width)
-            {
-                Position = position;
-                Width = width;
-            }
-        }
-
-        internal float MaxCardHeight => _band.rect.height;
 
         private void ShowFooterBackground(bool show)
         {
@@ -313,7 +224,7 @@ namespace YARG.Menu.DifficultySelect
 
         private float GetColumnWidth(int slots)
         {
-            float spacing = _band.GetComponent<HorizontalLayoutGroup>().spacing;
+            float spacing = _bandLayout != null ? _bandLayout.spacing : 0f;
             float available = _band.rect.width - spacing * (slots - 1);
             return Mathf.Min(MAX_COLUMN_WIDTH, available / slots);
         }

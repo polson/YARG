@@ -1,18 +1,13 @@
-using System.Collections.Generic;
+using System;
 using System.Linq;
-using DG.Tweening;
-using TMPro;
 using UnityEngine;
 using UnityEngine.Events;
-using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using YARG.Core;
 using YARG.Core.Extensions;
 using YARG.Core.Game;
-using YARG.Gameplay.HUD;
 using YARG.Helpers.Extensions;
 using YARG.Localization;
-using YARG.Menu.Navigation;
 using YARG.Menu.ProfileList;
 using YARG.Player;
 
@@ -24,14 +19,21 @@ namespace YARG.Menu.DifficultySelect
         {
             SetHeading(Localize.Key("Menu.DifficultySelect.Band.ChooseProfile"));
 
-            foreach (var profile in PlayerContainer.Profiles.Where(p => !p.IsBot))
+            var profiles = PlayerContainer.Profiles;
+            for (int i = 0; i < profiles.Count; i++)
             {
-                AddProfileRow(profile);
+                if (!profiles[i].IsBot)
+                {
+                    AddProfileRow(profiles[i]);
+                }
             }
 
-            foreach (var profile in PlayerContainer.Profiles.Where(p => p.IsBot))
+            for (int i = 0; i < profiles.Count; i++)
             {
-                AddProfileRow(profile);
+                if (profiles[i].IsBot)
+                {
+                    AddProfileRow(profiles[i]);
+                }
             }
 
             AddRow(null, Localize.Key("Menu.Common.Cancel"), CancelProfilePicker, true, _smallPrefab);
@@ -39,7 +41,7 @@ namespace YARG.Menu.DifficultySelect
 
         private void CancelProfilePicker()
         {
-            if (Player is null)
+            if (Player == null)
             {
                 _menu.CloseProfilesInUse();
             }
@@ -51,8 +53,7 @@ namespace YARG.Menu.DifficultySelect
 
         public void ShowProfilesInUse()
         {
-            _history.Clear();
-            _currentView = new ColumnView(BandColumnState.ChooseProfile);
+            _viewStack.SetRoot(BandColumnState.ChooseProfile);
             Rebuild();
         }
 
@@ -85,11 +86,12 @@ namespace YARG.Menu.DifficultySelect
                 row.SetAvatar(profile.IsBot ? _profileBotSprite : _profileGenericSprite, flipped: false);
             }
 
-            _profileRows.Add((row, rowHeight));
-            FitProfileRow(row, rowHeight);
+            var rowLayout = row.GetComponent<VerticalLayoutGroup>();
+            _profileRows.Add((row, rowLayout, rowHeight));
+            FitProfileRow(row, rowLayout, rowHeight);
         }
 
-        private void FitProfileRow(DifficultyItem row, float rowHeight)
+        private void FitProfileRow(DifficultyItem row, VerticalLayoutGroup rowLayout, float rowHeight)
         {
             float fullSize = rowHeight - AVATAR_EDGE * 2f;
             float size = Mathf.Min(fullSize, _layout.preferredWidth * AVATAR_WIDTH_SHARE);
@@ -99,14 +101,17 @@ namespace YARG.Menu.DifficultySelect
             row.FitAvatar(rowHeight, size, edge);
 
             int inset = Mathf.CeilToInt(edge + size + gap);
-            row.GetComponent<VerticalLayoutGroup>().padding = new RectOffset(inset, Mathf.CeilToInt(edge), 0, 0);
+            if (rowLayout != null)
+            {
+                rowLayout.padding = new RectOffset(inset, Mathf.CeilToInt(edge), 0, 0);
+            }
         }
 
         private void ClearAvatars()
         {
-            foreach (var texture in _avatarTextures)
+            for (int i = 0; i < _avatarTextures.Count; i++)
             {
-                Destroy(texture);
+                Destroy(_avatarTextures[i]);
             }
 
             _avatarTextures.Clear();
@@ -132,7 +137,7 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            if (_warning is not null)
+            if (_warning != null)
             {
                 var warning = AddLabel(_warning);
                 warning.SetTextColor(WARNING_COLOR);
@@ -175,7 +180,7 @@ namespace YARG.Menu.DifficultySelect
         {
             var row = AddRow(null, Localize.Key("Menu.DifficultySelect.Band.Position"),
                 () => PushView(BandColumnState.Position, nameof(BandColumnState.Position)), true);
-            if (_restoreFocusKey == nameof(BandColumnState.Position))
+            if (_viewStack.RestoreFocusKey == nameof(BandColumnState.Position))
             {
                 _defaultButton = row.Button;
             }
@@ -215,7 +220,7 @@ namespace YARG.Menu.DifficultySelect
             var profile = Player.Profile;
             var song = GlobalVariables.State.CurrentSong;
             var instruments = profile.GameMode.PossibleInstrumentsForSong(song)
-                .Where(instrument => _menu.Instruments.Contains(instrument))
+                .Where(instrument => ContainsInstrument(_menu.Instruments, instrument))
                 .ToList();
             bool showRings = _menu.RingTemplate != null && instruments.Count > 0;
 
@@ -265,9 +270,11 @@ namespace YARG.Menu.DifficultySelect
             var song = GlobalVariables.State.CurrentSong;
 
             bool anyPlayable = false;
-            foreach (var instrument in _menu.Instruments)
+            var instruments = _menu.Instruments;
+            for (int i = 0; i < instruments.Count; i++)
             {
-                if (_menu.GetInstrumentBlocker(this, instrument, out var mode) is not null)
+                var instrument = instruments[i];
+                if (_menu.GetInstrumentBlocker(this, instrument, out var mode) != null)
                 {
                     continue;
                 }
@@ -276,7 +283,7 @@ namespace YARG.Menu.DifficultySelect
                 var row = AddRow(null, PlayerSelectionRules.GetInstrumentLabelWithTier(song, instrument, mode),
                     () => PickInstrument(instrument), true, height: TWO_LINE_ROW_HEIGHT);
 
-                if (instrument == profile.CurrentInstrument && _history.Count > 0)
+                if (instrument == profile.CurrentInstrument && _viewStack.Depth > 0)
                 {
                     _nav.SelectAt(IndexOf(row.Button));
                 }
@@ -316,8 +323,9 @@ namespace YARG.Menu.DifficultySelect
 
             SetPlayerHeading();
 
-            foreach (var modifier in _modifiers)
+            for (int i = 0; i < _modifiers.Count; i++)
             {
+                var modifier = _modifiers[i];
                 if ((modifier & PlayerSelectionRules.ACCESSIBILITY_MODIFIERS) == 0)
                 {
                     AddModifierToggle(modifier);
@@ -352,8 +360,9 @@ namespace YARG.Menu.DifficultySelect
                     on => PlayerSelectionRules.SetNoRangeShifts(profile, _modifiers, on));
             }
 
-            foreach (var modifier in _modifiers)
+            for (int i = 0; i < _modifiers.Count; i++)
             {
+                var modifier = _modifiers[i];
                 if ((modifier & PlayerSelectionRules.ACCESSIBILITY_MODIFIERS) != 0 && modifier != Modifier.RangeCompress)
                 {
                     AddModifierToggle(modifier);
@@ -376,7 +385,7 @@ namespace YARG.Menu.DifficultySelect
                     profile.OpenLaneDisplayType = displayType;
                     PopView();
                 }, true);
-                _wrappableRows.Add(row);
+                AddWrappableRow(row);
 
                 if (displayType == profile.OpenLaneDisplayType)
                 {
@@ -400,12 +409,17 @@ namespace YARG.Menu.DifficultySelect
             return label;
         }
 
+        private void AddWrappableRow(DifficultyItem row)
+        {
+            _wrappableRows.Add((row, row.GetComponent<LayoutElement>()));
+        }
+
         private DifficultyItem AddRow(string header, string body, UnityAction action, bool interactable,
             DifficultyItem prefab = null, float height = ROW_HEIGHT)
         {
             var row = Instantiate(prefab != null ? prefab : _itemPrefab, Rows);
 
-            if (header is null)
+            if (header == null)
             {
                 row.Initialize(body, action);
             }
@@ -431,7 +445,7 @@ namespace YARG.Menu.DifficultySelect
         {
             string key = state.ToString();
             var row = AddRow(header, body, () => PushView(state, key), interactable, height: height);
-            if (interactable && _restoreFocusKey == key)
+            if (interactable && _viewStack.RestoreFocusKey == key)
             {
                 _defaultButton = row.Button;
             }
@@ -458,8 +472,9 @@ namespace YARG.Menu.DifficultySelect
                     profile.RemoveModifiers(modifier);
                 }
 
-                foreach (var (item, itemModifier) in _modifierToggles)
+                for (int i = 0; i < _modifierToggles.Count; i++)
                 {
+                    var (item, itemModifier) = _modifierToggles[i];
                     item.Active = profile.IsModifierActive(itemModifier);
                 }
             });
@@ -467,7 +482,7 @@ namespace YARG.Menu.DifficultySelect
             _modifierToggles.Add((toggle, modifier));
         }
 
-        private ModifierItem AddToggle(string label, bool active, System.Action<bool> onChanged)
+        private ModifierItem AddToggle(string label, bool active, Action<bool> onChanged)
         {
             var toggle = Instantiate(_modifierPrefab, Rows);
             toggle.Initialize(label, active, onChanged);
@@ -475,6 +490,5 @@ namespace YARG.Menu.DifficultySelect
             _nav.AddNavigatable(toggle);
             return toggle;
         }
-
     }
 }
