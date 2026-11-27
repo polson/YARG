@@ -123,11 +123,19 @@ namespace YARG.Input
             InputSystem.onDeviceChange -= OnDeviceChange;
         }
 
-        public static void RegisterPlayer(YargPlayer player)
+        public static void RegisterMenuInput(YargPlayer player)
         {
             player.MenuInput += OnMenuInput;
+        }
 
-            foreach (var device in player.DeviceInfo.Controllers)
+        public static void UnregisterMenuInput(YargPlayer player)
+        {
+            player.MenuInput -= OnMenuInput;
+        }
+
+        internal static void RegisterDevices(IEnumerable<InputDevice> devices)
+        {
+            foreach (var device in devices)
             {
                 if (!_registeredDevices.Add(device))
                 {
@@ -136,11 +144,9 @@ namespace YARG.Input
             }
         }
 
-        public static void UnregisterPlayer(YargPlayer player)
+        internal static void UnregisterDevices(IEnumerable<InputDevice> devices)
         {
-            player.MenuInput -= OnMenuInput;
-
-            foreach (var device in player.DeviceInfo.Controllers)
+            foreach (var device in devices)
             {
                 if (!_registeredDevices.Remove(device))
                 {

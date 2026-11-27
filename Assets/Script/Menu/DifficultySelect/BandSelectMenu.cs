@@ -378,11 +378,6 @@ namespace YARG.Menu.DifficultySelect
 
         private bool OnUnclaimedDevicePressed(InputDevice device)
         {
-            if (PlayerContainer.IsControllerTaken(device))
-            {
-                return false;
-            }
-
             if (_session.IsJoinBlocked)
             {
                 return true;
