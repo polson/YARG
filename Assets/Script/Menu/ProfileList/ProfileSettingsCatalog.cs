@@ -18,6 +18,17 @@ namespace YARG.Menu.ProfileList
         public const float HIGHWAY_LENGTH_MAX = 10f;
         public const float HIGHWAY_LENGTH_STEP = 0.1f;
 
+        public static readonly GameMode[] GAME_MODES =
+        {
+            GameMode.FiveFretGuitar,
+            GameMode.SixFretGuitar,
+            GameMode.EliteDrums,
+            GameMode.FourLaneDrums,
+            GameMode.FiveLaneDrums,
+            GameMode.Vocals,
+            GameMode.ProKeys,
+        };
+
         public static readonly StarPowerActivationType[] STAR_POWER_ACTIVATION_TYPES =
         {
             StarPowerActivationType.RightmostNote,

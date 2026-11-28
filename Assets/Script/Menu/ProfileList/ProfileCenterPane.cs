@@ -23,17 +23,6 @@ namespace YARG.Menu.ProfileList
 {
     public class ProfileCenterPane : MonoBehaviour
     {
-        internal static readonly GameMode[] GAME_MODES =
-        {
-            GameMode.FiveFretGuitar,
-            GameMode.SixFretGuitar,
-            GameMode.EliteDrums,
-            GameMode.FourLaneDrums,
-            GameMode.FiveLaneDrums,
-            GameMode.Vocals,
-            GameMode.ProKeys
-        };
-
         [SerializeField]
         private GameObject _contents;
         [SerializeField]
@@ -142,7 +131,7 @@ namespace YARG.Menu.ProfileList
         {
             // Setup dropdown items
             _gameModeDropdown.options.Clear();
-            foreach (var gameMode in GAME_MODES)
+            foreach (var gameMode in ProfileSettingsCatalog.GAME_MODES)
             {
                 _gameModesByIndex.Add(gameMode);
 

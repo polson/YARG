@@ -9,6 +9,7 @@ using YARG.Core.Extensions;
 using YARG.Core.Game;
 using YARG.Helpers.Extensions;
 using YARG.Localization;
+using YARG.Menu.MusicLibrary;
 using YARG.Menu.ProfileList;
 using YARG.Player;
 using YARG.Settings.Customization;
@@ -36,8 +37,9 @@ namespace YARG.Menu.DifficultySelect
             ProfileSettingStrings.CONFIGURE_FIVE_LANE_DRUMS_HIGHWAY,
         };
 
-        private readonly BandSelectMenu _menu;
         private readonly BandSessionState _session;
+        private readonly Func<float> _getMaxCardHeight;
+        private readonly DifficultyRing _ringTemplate;
         private readonly BandCardContent _content = new();
 
         private BandColumnState _builtState;
@@ -47,11 +49,17 @@ namespace YARG.Menu.DifficultySelect
         private BandMenuItem _moveLeftItem;
         private BandMenuItem _moveRightItem;
 
-        public BandCardController(BandSelectMenu menu, BandSessionState session, BandColumnModel model,
-            BandColumn view)
+        public event Action<BandCardController> DisconnectRequested;
+        public event Action<BandCardController> CloseProfilesInUseRequested;
+        public event Action<BandCardController, YargProfile> ProfileChosen;
+        public event Func<BandCardController, int, bool> MoveRequested;
+
+        public BandCardController(BandSessionState session, BandColumnModel model, BandColumn view,
+            Func<float> getMaxCardHeight, DifficultyRing ringTemplate = null)
         {
-            _menu = menu;
             _session = session;
+            _getMaxCardHeight = getMaxCardHeight;
+            _ringTemplate = ringTemplate;
             Model = model;
             View = view;
 
@@ -102,7 +110,7 @@ namespace YARG.Menu.DifficultySelect
         /// </summary>
         public void FitRows()
         {
-            View.Fit(Model.IsCollapsed, _menu.MaxCardHeight);
+            View.Fit(Model.IsCollapsed, _getMaxCardHeight());
         }
 
         /// <summary>
@@ -225,7 +233,7 @@ namespace YARG.Menu.DifficultySelect
                 (State == BandColumnState.Instrument && Model.ViewStack.Depth == 0);
             if (isFirstScreen)
             {
-                _menu.Disconnect(this);
+                DisconnectRequested?.Invoke(this);
                 return;
             }
 
@@ -407,11 +415,11 @@ namespace YARG.Menu.DifficultySelect
         {
             if (Player == null)
             {
-                _menu.CloseProfilesInUse();
+                CloseProfilesInUseRequested?.Invoke(this);
             }
             else
             {
-                _menu.Disconnect(this);
+                DisconnectRequested?.Invoke(this);
             }
         }
 
@@ -420,7 +428,7 @@ namespace YARG.Menu.DifficultySelect
             bool isCurrent = Player != null && profile == Player.Profile;
             bool isTaken = !isCurrent && PlayerContainer.IsProfileTaken(profile);
 
-            var row = _content.Add(BandMenuItem.Button(profile.Name, () => _menu.ChooseJoinProfile(this, profile),
+            var row = _content.Add(BandMenuItem.Button(profile.Name, () => ProfileChosen?.Invoke(this, profile),
                 !isTaken));
             row.Style = BandRowStyle.Profile;
             row.Height = BandColumn.PROFILE_ROW_HEIGHT;
@@ -491,7 +499,7 @@ namespace YARG.Menu.DifficultySelect
         private void AddDropOutRow()
         {
             var dropOut = _content.Add(BandMenuItem.Button(Localize.Key("Menu.DifficultySelect.Band.DropOut"),
-                () => _menu.Disconnect(this)));
+                () => DisconnectRequested?.Invoke(this)));
             dropOut.Style = BandRowStyle.Small;
         }
 
@@ -529,7 +537,7 @@ namespace YARG.Menu.DifficultySelect
 
         private void Move(int direction)
         {
-            if (!_menu.MoveColumn(this, direction))
+            if (MoveRequested?.Invoke(this, direction) != true)
             {
                 return;
             }
@@ -548,7 +556,7 @@ namespace YARG.Menu.DifficultySelect
             var instruments = profile.GameMode.PossibleInstrumentsForSong(song)
                 .Where(instrument => _session.Instruments.ContainsInstrument(instrument))
                 .ToList();
-            bool showRings = _menu.RingTemplate != null && instruments.Count > 0;
+            bool showRings = _ringTemplate != null && instruments.Count > 0;
 
             float height = BandColumn.TWO_LINE_ROW_HEIGHT;
             if (showRings)
@@ -563,7 +571,7 @@ namespace YARG.Menu.DifficultySelect
 
             if (showRings)
             {
-                row.RingTemplate = _menu.RingTemplate;
+                row.RingTemplate = _ringTemplate;
                 row.RingInstruments = instruments;
                 row.RingCurrent = profile.CurrentInstrument;
                 row.RingSong = song;
@@ -762,9 +770,10 @@ namespace YARG.Menu.DifficultySelect
             if (_session.IsOvershell)
             {
                 AddChoiceRow(INPUT_MODE_KEY, profile.GameMode.ToLocalizedName(),
-                    ProfileCenterPane.GAME_MODES.Select(mode =>
-                        (mode.ToLocalizedName(), mode == profile.GameMode,
-                            (Action) (() => _session.ChangeInputMode(Model, mode)))));
+                    ProfileSettingsCatalog.GAME_MODES.Select(mode => new BandSettingOption(
+                        mode.ToLocalizedName(),
+                        mode == profile.GameMode,
+                        () => _session.ChangeInputMode(Model, mode))));
             }
 
             foreach (var setting in profile.GameMode.PossibleProfileSettings(new()).Select(s => s.setting).Distinct())
