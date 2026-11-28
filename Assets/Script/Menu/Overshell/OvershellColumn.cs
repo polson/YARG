@@ -9,16 +9,17 @@ using YARG.Core;
 using YARG.Core.Game;
 using YARG.Gameplay.HUD;
 using YARG.Helpers.Extensions;
+using YARG.Menu.DifficultySelect;
 using YARG.Menu.Navigation;
 using Object = UnityEngine.Object;
 
-namespace YARG.Menu.DifficultySelect
+namespace YARG.Menu.Overshell
 {
     /// <summary>
-    /// The view for one band card. It draws whatever <see cref="BandCardContent"/> it is given, moves the
+    /// The view for one band card. It draws whatever <see cref="CardContent"/> it is given, moves the
     /// selection, scrolls, and plays animations when told. It makes no decisions about what the card shows.
     /// </summary>
-    internal sealed class BandColumn : MonoBehaviour, IPointerClickHandler, IScrollHandler
+    internal sealed class OvershellColumn : MonoBehaviour, IPointerClickHandler, IScrollHandler
     {
         public const float ROW_HEIGHT = 52f;
         public const float TWO_LINE_ROW_HEIGHT = 72f;
@@ -85,7 +86,7 @@ namespace YARG.Menu.DifficultySelect
 
         private sealed class ShownRow
         {
-            public BandMenuItem Item;
+            public CardMenuItem Item;
             public DifficultyItem Row;
             public ModifierItem Toggle;
             public NavigatableBehaviour Navigatable;
@@ -130,12 +131,12 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// Raised when the selected row changes. The second argument is true if the mouse caused it.
         /// </summary>
-        public event Action<BandMenuItem, bool> SelectionChanged;
+        public event Action<CardMenuItem, bool> SelectionChanged;
 
         public RectTransform Card => _card;
         public float TopEdge => _card.anchoredPosition.y + _card.rect.height;
         public int? SelectedIndex => _nav.SelectedIndex;
-        public BandMenuItem SelectedItem => FindShownRow(_nav.SelectedBehaviour)?.Item;
+        public CardMenuItem SelectedItem => FindShownRow(_nav.SelectedBehaviour)?.Item;
 
         private RectTransform Rows => _scroll.content;
         private float CollapsedHeight => _cardLayout.padding.top + _expandedBottomPadding - COLLAPSED_PADDING_TRIM;
@@ -169,7 +170,7 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// Replaces every row with <paramref name="content"/> and picks the selection.
         /// </summary>
-        public void Show(BandCardContent content, int? restoreIndex, bool resetScroll)
+        public void Show(CardContent content, int? restoreIndex, bool resetScroll)
         {
             if (_collapse != null)
             {
@@ -197,7 +198,7 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// Selects <paramref name="item"/>, or the first row if it cannot be selected.
         /// </summary>
-        public void Select(BandMenuItem item)
+        public void Select(CardMenuItem item)
         {
             if (!TrySelect(item))
             {
@@ -208,7 +209,7 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// Selects <paramref name="item"/> if it is on the card and can be selected.
         /// </summary>
-        public bool TrySelect(BandMenuItem item)
+        public bool TrySelect(CardMenuItem item)
         {
             var navigatable = FindNavigatable(item);
             if (navigatable == null)
@@ -246,7 +247,7 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// Highlights a number row while it is being changed with up and down.
         /// </summary>
-        public void SetEditing(BandMenuItem item, bool editing)
+        public void SetEditing(CardMenuItem item, bool editing)
         {
             var shown = FindShownRow(item);
             if (shown?.Row != null)
@@ -258,7 +259,7 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// Changes a number row by one step and shows its new value.
         /// </summary>
-        public void Step(BandMenuItem item, int direction)
+        public void Step(CardMenuItem item, int direction)
         {
             item.Stepped(direction);
 
@@ -325,7 +326,7 @@ namespace YARG.Menu.DifficultySelect
         {
             _rise?.Kill();
             _card.anchoredPosition = new Vector2(_card.anchoredPosition.x, offset);
-            _rise = _card.DOAnchorPosY(0f, BandStripAnimator.SLIDE_SECONDS)
+            _rise = _card.DOAnchorPosY(0f, StripAnimator.SLIDE_SECONDS)
                 .SetEase(Ease.OutCubic)
                 .SetUpdate(true);
         }
@@ -340,7 +341,7 @@ namespace YARG.Menu.DifficultySelect
             }
 
             group.blocksRaycasts = false;
-            _card.DOAnchorPosY(-BandStripAnimator.SLIDE_DISTANCE, BandStripAnimator.SLIDE_SECONDS)
+            _card.DOAnchorPosY(-StripAnimator.SLIDE_DISTANCE, StripAnimator.SLIDE_SECONDS)
                 .SetEase(Ease.InCubic)
                 .SetUpdate(true)
                 .SetLink(gameObject);
@@ -354,7 +355,7 @@ namespace YARG.Menu.DifficultySelect
             _rise?.Kill();
             _collapse?.Kill();
 
-            _collapse = _card.DOAnchorPosY(CollapsedHeight - _card.rect.height, BandStripAnimator.SLIDE_SECONDS)
+            _collapse = _card.DOAnchorPosY(CollapsedHeight - _card.rect.height, StripAnimator.SLIDE_SECONDS)
                 .SetEase(Ease.OutCubic)
                 .SetUpdate(true)
                 .OnComplete(() =>
@@ -372,7 +373,7 @@ namespace YARG.Menu.DifficultySelect
             gameObject.AddComponent<CanvasGroup>().blocksRaycasts = false;
 
             _card.DOKill();
-            _card.DOAnchorPosY(-BandStripAnimator.SLIDE_DISTANCE, BandStripAnimator.SLIDE_SECONDS)
+            _card.DOAnchorPosY(-StripAnimator.SLIDE_DISTANCE, StripAnimator.SLIDE_SECONDS)
                 .SetEase(Ease.InCubic)
                 .SetUpdate(true)
                 .SetLink(gameObject)
@@ -413,7 +414,7 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        private void ShowHeader(BandCardContent content)
+        private void ShowHeader(CardContent content)
         {
             var profile = content.HeaderProfile;
             if (profile == null)
@@ -479,14 +480,14 @@ namespace YARG.Menu.DifficultySelect
             _avatarTextures.Clear();
         }
 
-        private void AddRow(BandMenuItem item)
+        private void AddRow(CardMenuItem item)
         {
             switch (item.Kind)
             {
-                case BandMenuItemKind.Label:
+                case CardMenuItemKind.Label:
                     AddLabel(item);
                     break;
-                case BandMenuItemKind.Toggle:
+                case CardMenuItemKind.Toggle:
                     AddToggle(item);
                     break;
                 default:
@@ -495,7 +496,7 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        private void AddLabel(BandMenuItem item)
+        private void AddLabel(CardMenuItem item)
         {
             var label = Object.Instantiate(_itemPrefab, Rows);
             label.InitializeAsTitle(item.Body);
@@ -519,7 +520,7 @@ namespace YARG.Menu.DifficultySelect
             _shownRows.Add(new ShownRow { Item = item, Row = label });
         }
 
-        private void AddToggle(BandMenuItem item)
+        private void AddToggle(CardMenuItem item)
         {
             var toggle = Object.Instantiate(_modifierPrefab, Rows);
             toggle.Initialize(item.Body, item.IsOn(), on =>
@@ -532,12 +533,12 @@ namespace YARG.Menu.DifficultySelect
             _shownRows.Add(new ShownRow { Item = item, Toggle = toggle, Navigatable = toggle });
         }
 
-        private void AddButton(BandMenuItem item)
+        private void AddButton(CardMenuItem item)
         {
             var prefab = PrefabFor(item.Style);
             var row = Object.Instantiate(prefab != null ? prefab : _itemPrefab, Rows);
 
-            bool isStepper = item.Kind == BandMenuItemKind.Stepper;
+            bool isStepper = item.Kind == CardMenuItemKind.Stepper;
             string body = isStepper ? FormatStepper(item.Value()) : item.Body;
             if (item.Header == null)
             {
@@ -634,18 +635,18 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        private DifficultyItem PrefabFor(BandRowStyle style)
+        private DifficultyItem PrefabFor(CardRowStyle style)
         {
             return style switch
             {
-                BandRowStyle.Small   => _smallPrefab,
-                BandRowStyle.Ready   => _readyPrefab,
-                BandRowStyle.Profile => _profilePrefab,
+                CardRowStyle.Small   => _smallPrefab,
+                CardRowStyle.Ready   => _readyPrefab,
+                CardRowStyle.Profile => _profilePrefab,
                 _                    => _itemPrefab,
             };
         }
 
-        private void SelectInitial(BandCardContent content, int? restoreIndex)
+        private void SelectInitial(CardContent content, int? restoreIndex)
         {
             if (content.FocusItem != null)
             {
@@ -851,7 +852,7 @@ namespace YARG.Menu.DifficultySelect
             return null;
         }
 
-        private ShownRow FindShownRow(BandMenuItem item)
+        private ShownRow FindShownRow(CardMenuItem item)
         {
             if (item == null)
             {
@@ -869,7 +870,7 @@ namespace YARG.Menu.DifficultySelect
             return null;
         }
 
-        private NavigatableBehaviour FindNavigatable(BandMenuItem item)
+        private NavigatableBehaviour FindNavigatable(CardMenuItem item)
         {
             return FindShownRow(item)?.Navigatable;
         }
@@ -880,7 +881,7 @@ namespace YARG.Menu.DifficultySelect
         }
     }
 
-    internal static class BandColumnExtensions
+    internal static class OvershellColumnExtensions
     {
         public static bool ContainsInstrument(this IReadOnlyList<Instrument> instruments, Instrument target)
         {

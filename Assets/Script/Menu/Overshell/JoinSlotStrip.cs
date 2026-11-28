@@ -5,11 +5,11 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
-namespace YARG.Menu.DifficultySelect
+namespace YARG.Menu.Overshell
 {
     /// <summary>
     /// Owns the empty "press to join" slots in the band strip: creates and destroys them, sizes and labels them,
-    /// and animates them through the shared <see cref="BandStripAnimator"/>.
+    /// and animates them through the shared <see cref="StripAnimator"/>.
     /// </summary>
     internal sealed class JoinSlotStrip
     {
@@ -29,11 +29,11 @@ namespace YARG.Menu.DifficultySelect
 
         private readonly RectTransform _band;
         private readonly LayoutElement _template;
-        private readonly BandStripAnimator _animator;
+        private readonly StripAnimator _animator;
         private readonly Action<LayoutElement> _clicked;
         private readonly List<JoinSlotEntry> _entries = new();
 
-        public JoinSlotStrip(RectTransform band, LayoutElement template, BandStripAnimator animator,
+        public JoinSlotStrip(RectTransform band, LayoutElement template, StripAnimator animator,
             Action<LayoutElement> clicked)
         {
             _band = band;
@@ -165,7 +165,7 @@ namespace YARG.Menu.DifficultySelect
         {
             foreach (var entry in _entries)
             {
-                entry.Card.DOAnchorPosY(-BandStripAnimator.SLIDE_DISTANCE, BandStripAnimator.SLIDE_SECONDS)
+                entry.Card.DOAnchorPosY(-StripAnimator.SLIDE_DISTANCE, StripAnimator.SLIDE_SECONDS)
                     .SetEase(Ease.InCubic)
                     .SetUpdate(true)
                     .SetLink(entry.Card.gameObject);

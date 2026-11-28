@@ -17,14 +17,14 @@ using YARG.Menu.Navigation;
 using YARG.Menu.Persistent;
 using YARG.Player;
 
-namespace YARG.Menu.DifficultySelect
+namespace YARG.Menu.Overshell
 {
     /// <summary>
     /// Coordinates the band strip: takes controller input, tells each card what to do, manages the join slots,
     /// and slides cards when players join, leave, or move. Who is in the band lives in
-    /// <see cref="BandSessionState"/>; what each card shows is decided by its <see cref="BandCardController"/>.
+    /// <see cref="OvershellSession"/>; what each card shows is decided by its <see cref="CardController"/>.
     /// </summary>
-    public sealed class BandSelectMenu : MonoBehaviour
+    public sealed class OvershellMenu : MonoBehaviour
     {
         private const float MAX_COLUMN_WIDTH = 460f;
         internal const float JOIN_STRIP_HEIGHT = 72f;
@@ -41,16 +41,16 @@ namespace YARG.Menu.DifficultySelect
         [SerializeField]
         private RectTransform _footerBackground;
         [SerializeField]
-        private BandColumn _columnPrefab;
+        private OvershellColumn _columnPrefab;
 
-        private readonly BandSessionState _session = new();
-        private readonly Dictionary<BandColumnModel, BandCardController> _cardsByModel = new();
-        private readonly BandStripAnimator _animator = new();
+        private readonly OvershellSession _session = new();
+        private readonly Dictionary<OvershellColumnModel, CardController> _cardsByModel = new();
+        private readonly StripAnimator _animator = new();
         private readonly List<JoinedColumn> _joinedBuffer = new();
-        private readonly List<BandColumnModel> _cancelJoinBuffer = new();
+        private readonly List<OvershellColumnModel> _cancelJoinBuffer = new();
 
         private JoinSlotStrip _joinSlots;
-        private BandCardController _profilesInUse;
+        private CardController _profilesInUse;
         private LayoutElement _profilesInUseSlot;
         private HorizontalLayoutGroup _bandLayout;
         private Action _startSong;
@@ -65,7 +65,7 @@ namespace YARG.Menu.DifficultySelect
         private float MaxCardHeight => _band.rect.height;
 
         public bool IsOpen => _session.IsOpen;
-        public bool IsOvershell => _session.IsOvershell;
+        public bool IsEverywhere => _session.IsEverywhere;
 
         private void Awake()
         {
@@ -80,7 +80,7 @@ namespace YARG.Menu.DifficultySelect
             RingTemplate = ringTemplate;
             _startSong = startSong;
 
-            OpenBand(songs, currentSong, isCareer, isOvershell: false, canEngage: null);
+            OpenSession(songs, currentSong, isCareer, isEverywhere: false, canEngage: null);
 
             _scheme = CreateBandScheme();
             _ = Navigator.Instance.PushScheme(_scheme);
@@ -89,22 +89,22 @@ namespace YARG.Menu.DifficultySelect
             ListenForPlayers();
         }
 
-        public void OpenOvershell(Func<bool> canEngage)
+        public void OpenEverywhere(Func<bool> canEngage)
         {
-            OpenBand(songs: null, currentSong: null, isCareer: false, isOvershell: true, canEngage: canEngage);
-            Navigator.Instance.InputInterceptor = InterceptOvershellInput;
+            OpenSession(songs: null, currentSong: null, isCareer: false, isEverywhere: true, canEngage: canEngage);
+            Navigator.Instance.InputInterceptor = InterceptEverywhereInput;
             ListenForPlayers();
         }
 
-        private void OpenBand(List<SongEntry> songs, SongEntry currentSong, bool isCareer, bool isOvershell,
+        private void OpenSession(List<SongEntry> songs, SongEntry currentSong, bool isCareer, bool isEverywhere,
             Func<bool> canEngage)
         {
             _joinSlot.gameObject.SetActive(false);
             _band.gameObject.SetActive(true);
-            _footer.gameObject.SetActive(!isOvershell);
-            ShowFooterBackground(!isOvershell);
+            _footer.gameObject.SetActive(!isEverywhere);
+            ShowFooterBackground(!isEverywhere);
 
-            _session.Open(songs, currentSong, isCareer, isOvershell, canEngage,
+            _session.Open(songs, currentSong, isCareer, isEverywhere, canEngage,
                 isDialogShowing: () => DialogManager.Instance.IsDialogShowing,
                 onGameModeChanged: FiltersMenu.ResetIntensityFiltersForProfile);
         }
@@ -116,10 +116,10 @@ namespace YARG.Menu.DifficultySelect
             PlayerContainer.PlayerRemoved += OnPlayerRemoved;
         }
 
-        public void SetOvershellHidden(bool hidden)
+        public void SetHidden(bool hidden)
         {
             _cancelJoinBuffer.Clear();
-            if (!_session.SetOvershellHidden(hidden, _cancelJoinBuffer))
+            if (!_session.SetHidden(hidden, _cancelJoinBuffer))
             {
                 return;
             }
@@ -147,7 +147,7 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            bool wasOvershell = _session.IsOvershell;
+            bool wasEverywhere = _session.IsEverywhere;
             CancelStartDelay();
             Unsubscribe();
 
@@ -174,7 +174,7 @@ namespace YARG.Menu.DifficultySelect
             _footer.gameObject.SetActive(false);
             ShowFooterBackground(false);
 
-            if (!wasOvershell)
+            if (!wasEverywhere)
             {
                 Navigator.Instance.PopScheme();
             }
@@ -213,9 +213,9 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            if (_session.IsOvershell)
+            if (_session.IsEverywhere)
             {
-                navigator.InputInterceptor = InterceptOvershellInput;
+                navigator.InputInterceptor = InterceptEverywhereInput;
             }
             else
             {
@@ -241,7 +241,7 @@ namespace YARG.Menu.DifficultySelect
             }
 
             navigator.NavigationEvent -= OnNavigationEvent;
-            if (navigator.InputInterceptor == InterceptOvershellInput)
+            if (navigator.InputInterceptor == InterceptEverywhereInput)
             {
                 navigator.InputInterceptor = null;
             }
@@ -286,7 +286,7 @@ namespace YARG.Menu.DifficultySelect
 
             float width = GetColumnWidth(_session.Slots.Count);
             string joinText = _session.IsFull
-                ? Localize.KeyFormat("Menu.DifficultySelect.Band.Full", BandSessionState.MAX_PLAYERS)
+                ? Localize.KeyFormat("Menu.DifficultySelect.Band.Full", OvershellSession.MAX_PLAYERS)
                 : Localize.Key("Menu.DifficultySelect.Band.JoinPrompt");
             _joinSlots.UpdateCards(width, joinText);
             ApplyColumnWidthsAndFocus(width);
@@ -307,9 +307,9 @@ namespace YARG.Menu.DifficultySelect
                 if (!_cardsByModel.ContainsKey(model))
                 {
                     var card = CreateCard(model);
-                    if (!_session.IsOvershell)
+                    if (!_session.IsEverywhere)
                     {
-                        card.View.RiseFrom(-BandStripAnimator.SLIDE_DISTANCE);
+                        card.View.RiseFrom(-StripAnimator.SLIDE_DISTANCE);
                     }
 
                     card.Rebuild();
@@ -350,7 +350,7 @@ namespace YARG.Menu.DifficultySelect
                     continue;
                 }
 
-                bool isFocused = _session.IsOvershell || (columnIndex == _session.FocusIndex && !hasKeyboard);
+                bool isFocused = _session.IsEverywhere || (columnIndex == _session.FocusIndex && !hasKeyboard);
                 card.View.SetWidth(width);
                 card.View.SetFocused(isFocused);
                 columnIndex++;
@@ -440,7 +440,7 @@ namespace YARG.Menu.DifficultySelect
             _session.MoveFocus(direction);
         }
 
-        private bool InterceptOvershellInput(NavigationContext context)
+        private bool InterceptEverywhereInput(NavigationContext context)
         {
             if (_session.Hidden || !_session.CanEngage)
             {
@@ -450,24 +450,24 @@ namespace YARG.Menu.DifficultySelect
             var card = FindCard(context.Player);
             if (card == null)
             {
-                return IsMenuExitAction(context.Action) && _session.AnyOvershellColumnOpen();
+                return IsMenuExitAction(context.Action) && _session.AnyEverywhereColumnOpen();
             }
 
             if (context.Action == MenuAction.Start)
             {
-                return HandleOvershellStart(card);
+                return HandleEverywhereStart(card);
             }
 
             if (!card.IsExpanded)
             {
-                return IsMenuExitAction(context.Action) && _session.AnyOvershellColumnOpen();
+                return IsMenuExitAction(context.Action) && _session.AnyEverywhereColumnOpen();
             }
 
-            DispatchOvershellAction(card, context);
+            DispatchEverywhereAction(card, context);
             return true;
         }
 
-        private bool HandleOvershellStart(BandCardController card)
+        private bool HandleEverywhereStart(CardController card)
         {
             if (card.IsJoining)
             {
@@ -486,7 +486,7 @@ namespace YARG.Menu.DifficultySelect
             return true;
         }
 
-        private static void DispatchOvershellAction(BandCardController card, NavigationContext context)
+        private static void DispatchEverywhereAction(CardController card, NavigationContext context)
         {
             switch (context.Action)
             {
@@ -516,13 +516,13 @@ namespace YARG.Menu.DifficultySelect
             return action is MenuAction.Green or MenuAction.Red;
         }
 
-        private BandCardController CardFor(YargPlayer player)
+        private CardController CardFor(YargPlayer player)
         {
             var model = _session.ColumnFor(player);
             return model != null && _cardsByModel.TryGetValue(model, out var card) ? card : null;
         }
 
-        private BandCardController FindCard(YargPlayer player)
+        private CardController FindCard(YargPlayer player)
         {
             var model = _session.FindColumn(player);
             return model != null && _cardsByModel.TryGetValue(model, out var card) ? card : null;
@@ -533,7 +533,7 @@ namespace YARG.Menu.DifficultySelect
             return _session.QueuePendingJoin(device);
         }
 
-        private BandCardController JoinWithoutDevice(LayoutElement slot, YargProfile chosen = null)
+        private CardController JoinWithoutDevice(LayoutElement slot, YargProfile chosen = null)
         {
             if (!_joinSlots.Contains(slot))
             {
@@ -556,17 +556,17 @@ namespace YARG.Menu.DifficultySelect
             return FinishJoin(model, replacedSlotIndex);
         }
 
-        private BandCardController FinishJoin(BandColumnModel model, int replacedSlotIndex)
+        private CardController FinishJoin(OvershellColumnModel model, int replacedSlotIndex)
         {
             var card = SeatCard(model, replacedSlotIndex);
-            ShiftCards(delay: BandStripAnimator.SLIDE_SECONDS, riseDelay: BandStripAnimator.SLIDE_SECONDS * 2f);
+            ShiftCards(delay: StripAnimator.SLIDE_SECONDS, riseDelay: StripAnimator.SLIDE_SECONDS * 2f);
 
             LayoutRebuilder.ForceRebuildLayoutImmediate(card.View.Card);
             card.View.RiseFrom(_joinCard.rect.height - card.View.Card.rect.height);
             return card;
         }
 
-        private void ChooseJoinProfile(BandCardController card, YargProfile profile)
+        private void ChooseJoinProfile(CardController card, YargProfile profile)
         {
             if (card == _profilesInUse)
             {
@@ -582,7 +582,7 @@ namespace YARG.Menu.DifficultySelect
             }
 
             card.CompleteJoin();
-            ShiftCards(delay: 0f, riseDelay: BandStripAnimator.SLIDE_SECONDS);
+            ShiftCards(delay: 0f, riseDelay: StripAnimator.SLIDE_SECONDS);
             RefreshProfilePickers(card);
         }
 
@@ -597,7 +597,7 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        private void RefreshProfilePickers(BandCardController changed)
+        private void RefreshProfilePickers(CardController changed)
         {
             if (_profilesInUse != null)
             {
@@ -606,28 +606,28 @@ namespace YARG.Menu.DifficultySelect
 
             foreach (var card in _cardsByModel.Values)
             {
-                if (card != changed && card.State == BandColumnState.ChooseProfile)
+                if (card != changed && card.State == ColumnState.ChooseProfile)
                 {
                     card.Rebuild();
                 }
             }
         }
 
-        private void CancelJoin(BandCardController card)
+        private void CancelJoin(CardController card)
         {
             CaptureCardPositions();
             _session.CancelJoin(card.Model);
             RemoveCard(card);
         }
 
-        private void Disconnect(BandCardController card)
+        private void Disconnect(CardController card)
         {
             CaptureCardPositions();
             _session.Disconnect(card.Model);
             RemoveCard(card);
         }
 
-        private bool MoveColumn(BandCardController card, int direction)
+        private bool MoveColumn(CardController card, int direction)
         {
             CaptureCardPositions();
             if (!_session.MoveColumn(card.Model, direction))
@@ -648,7 +648,7 @@ namespace YARG.Menu.DifficultySelect
             rect.offsetMin = Vector2.zero;
             rect.offsetMax = Vector2.zero;
 
-            var card = CreateCardController(new BandColumnModel(), view);
+            var card = CreateCardController(new OvershellColumnModel(), view);
             view.SetWidth(slot.preferredWidth);
             card.ShowProfilesInUse();
 
@@ -681,7 +681,7 @@ namespace YARG.Menu.DifficultySelect
             CaptureCardPositions();
             var model = _session.HandleExternalPlayerAdded(player, out int replacedSlotIndex);
             var card = SeatCard(model, replacedSlotIndex);
-            card.View.RiseFrom(-BandStripAnimator.SLIDE_DISTANCE);
+            card.View.RiseFrom(-StripAnimator.SLIDE_DISTANCE);
             ShiftCards(delay: 0f, riseDelay: null);
         }
 
@@ -695,7 +695,7 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        private BandCardController CreateCard(BandColumnModel model)
+        private CardController CreateCard(OvershellColumnModel model)
         {
             var view = Instantiate(_columnPrefab, _band);
             var card = CreateCardController(model, view);
@@ -704,9 +704,9 @@ namespace YARG.Menu.DifficultySelect
             return card;
         }
 
-        private BandCardController CreateCardController(BandColumnModel model, BandColumn view)
+        private CardController CreateCardController(OvershellColumnModel model, OvershellColumn view)
         {
-            var card = new BandCardController(_session, model, view, () => MaxCardHeight, RingTemplate);
+            var card = new CardController(_session, model, view, () => MaxCardHeight, RingTemplate);
             card.DisconnectRequested += Disconnect;
             card.CloseProfilesInUseRequested += _ => CloseProfilesInUse();
             card.ProfileChosen += ChooseJoinProfile;
@@ -718,7 +718,7 @@ namespace YARG.Menu.DifficultySelect
         /// Creates the card for a column the session just seated, puts it where the join slot it replaced was,
         /// shows it, and lets the session settle the slots around it.
         /// </summary>
-        private BandCardController SeatCard(BandColumnModel model, int replacedSlotIndex)
+        private CardController SeatCard(OvershellColumnModel model, int replacedSlotIndex)
         {
             var card = CreateCard(model);
             var replacedSlot = replacedSlotIndex >= 0 ? _joinSlots.FindAtSiblingIndex(replacedSlotIndex) : null;
@@ -734,14 +734,14 @@ namespace YARG.Menu.DifficultySelect
             return card;
         }
 
-        private void RemoveCard(BandCardController card)
+        private void RemoveCard(CardController card)
         {
             _cardsByModel.Remove(card.Model);
             _animator.Kill(card.View.Card);
             card.View.DismissAndDestroy();
 
             RefreshProfilePickers(card);
-            ShiftCards(delay: BandStripAnimator.SLIDE_SECONDS, riseDelay: BandStripAnimator.SLIDE_SECONDS);
+            ShiftCards(delay: StripAnimator.SLIDE_SECONDS, riseDelay: StripAnimator.SLIDE_SECONDS);
         }
 
         private void RefitOnBandResize()
@@ -776,7 +776,7 @@ namespace YARG.Menu.DifficultySelect
                 _bandSortingOrder = _bandCanvas.sortingOrder;
             }
 
-            bool raise = _session.IsOvershell && (_session.HasPendingProfilePicker || AnyCardExpanded());
+            bool raise = _session.IsEverywhere && (_session.HasPendingProfilePicker || AnyCardExpanded());
             _bandCanvas.sortingOrder = raise ? OPEN_CARD_SORTING_ORDER : _bandSortingOrder;
         }
 
@@ -852,7 +852,7 @@ namespace YARG.Menu.DifficultySelect
 
             _joinSlots.SlideOut();
 
-            _startDelay = DOVirtual.DelayedCall(BandStripAnimator.SLIDE_SECONDS, () =>
+            _startDelay = DOVirtual.DelayedCall(StripAnimator.SLIDE_SECONDS, () =>
                 {
                     _startDelay = null;
                     ReleaseStartInputBlocker();

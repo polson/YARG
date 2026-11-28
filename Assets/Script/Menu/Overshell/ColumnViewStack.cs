@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
 
-namespace YARG.Menu.DifficultySelect
+namespace YARG.Menu.Overshell
 {
-    internal enum BandColumnState
+    internal enum ColumnState
     {
         ChooseProfile,
         Main,
@@ -22,13 +22,13 @@ namespace YARG.Menu.DifficultySelect
     /// <summary>
     /// Represents a selectable choice in a band column's generic setting-options submenu.
     /// </summary>
-    internal readonly struct BandSettingOption
+    internal readonly struct SettingOption
     {
         public readonly string Label;
         public readonly bool Current;
         public readonly Action Pick;
 
-        public BandSettingOption(string label, bool current, Action pick)
+        public SettingOption(string label, bool current, Action pick)
         {
             Label = label;
             Current = current;
@@ -41,17 +41,17 @@ namespace YARG.Menu.DifficultySelect
     /// Remembers which row was highlighted before entering a submenu so pressing Back re-highlights it,
     /// and holds the title and choice list while a generic setting-options submenu is open.
     /// </summary>
-    internal sealed class BandColumnViewStack
+    internal sealed class ColumnViewStack
     {
         private readonly struct ColumnView
         {
-            public readonly BandColumnState State;
+            public readonly ColumnState State;
             public readonly string FocusKey;
             public readonly string SettingTitle;
-            public readonly List<BandSettingOption> SettingOptions;
+            public readonly List<SettingOption> SettingOptions;
 
-            public ColumnView(BandColumnState state, string focusKey = null, string settingTitle = null,
-                List<BandSettingOption> settingOptions = null)
+            public ColumnView(ColumnState state, string focusKey = null, string settingTitle = null,
+                List<SettingOption> settingOptions = null)
             {
                 State = state;
                 FocusKey = focusKey;
@@ -63,9 +63,9 @@ namespace YARG.Menu.DifficultySelect
         private readonly Stack<ColumnView> _history = new();
         private ColumnView _currentView;
 
-        public BandColumnState State => _currentView.State;
+        public ColumnState State => _currentView.State;
         public string SettingTitle => _currentView.SettingTitle;
-        public List<BandSettingOption> SettingOptions => _currentView.SettingOptions;
+        public List<SettingOption> SettingOptions => _currentView.SettingOptions;
         public string RestoreFocusKey { get; set; }
         public int Depth => _history.Count;
 
@@ -73,9 +73,9 @@ namespace YARG.Menu.DifficultySelect
         {
             return State switch
             {
-                BandColumnState.Main       => !ready,
-                BandColumnState.SittingOut => true,
-                BandColumnState.Instrument => _history.Count == 0,
+                ColumnState.Main       => !ready,
+                ColumnState.SittingOut => true,
+                ColumnState.Instrument => _history.Count == 0,
                 _                          => false,
             };
         }
@@ -84,21 +84,21 @@ namespace YARG.Menu.DifficultySelect
         {
             return State switch
             {
-                BandColumnState.ChooseProfile => false,
-                BandColumnState.SittingOut    => false,
-                BandColumnState.Instrument    => _history.Count > 0 && _history.Peek().State == BandColumnState.Main,
+                ColumnState.ChooseProfile => false,
+                ColumnState.SittingOut    => false,
+                ColumnState.Instrument    => _history.Count > 0 && _history.Peek().State == ColumnState.Main,
                 _                             => true,
             };
         }
 
-        public void SetRoot(BandColumnState state)
+        public void SetRoot(ColumnState state)
         {
             _history.Clear();
             _currentView = new ColumnView(state);
         }
 
-        public void Push(BandColumnState state, string focusKey = null, string settingTitle = null,
-            List<BandSettingOption> settingOptions = null)
+        public void Push(ColumnState state, string focusKey = null, string settingTitle = null,
+            List<SettingOption> settingOptions = null)
         {
             _history.Push(new ColumnView(_currentView.State, focusKey, _currentView.SettingTitle,
                 _currentView.SettingOptions));

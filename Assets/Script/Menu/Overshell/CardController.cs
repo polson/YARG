@@ -7,40 +7,41 @@ using YARG.Core.Extensions;
 using YARG.Core.Game;
 using YARG.Helpers.Extensions;
 using YARG.Localization;
+using YARG.Menu.DifficultySelect;
 using YARG.Menu.MusicLibrary;
 using YARG.Menu.ProfileList;
 using YARG.Player;
 
-namespace YARG.Menu.DifficultySelect
+namespace YARG.Menu.Overshell
 {
     /// <summary>
     /// Runs one band card: decides what each submenu shows, hands that to the card view, and reacts when the
-    /// player uses it. Rules that involve other players go through <see cref="BandSessionState"/>.
+    /// player uses it. Rules that involve other players go through <see cref="OvershellSession"/>.
     /// </summary>
-    internal sealed class BandCardController
+    internal sealed class CardController
     {
         private const float MODIFIER_LINE_HEIGHT = 34f;
         private static readonly Color WARNING_COLOR = new Color32(0xFB, 0x44, 0x3F, 0xFF);
 
-        private readonly BandSessionState _session;
+        private readonly OvershellSession _session;
         private readonly Func<float> _getMaxCardHeight;
         private readonly DifficultyRing _ringTemplate;
-        private readonly BandCardContent _content = new();
-        private readonly BandSettingsRows _settingsRows;
+        private readonly CardContent _content = new();
+        private readonly SettingsRows _settingsRows;
 
-        private BandColumnState _builtState;
-        private BandMenuItem _editing;
-        private BandMenuItem _readyItem;
-        private BandMenuItem _difficultyItem;
-        private BandMenuItem _moveLeftItem;
-        private BandMenuItem _moveRightItem;
+        private ColumnState _builtState;
+        private CardMenuItem _editing;
+        private CardMenuItem _readyItem;
+        private CardMenuItem _difficultyItem;
+        private CardMenuItem _moveLeftItem;
+        private CardMenuItem _moveRightItem;
 
-        public event Action<BandCardController> DisconnectRequested;
-        public event Action<BandCardController> CloseProfilesInUseRequested;
-        public event Action<BandCardController, YargProfile> ProfileChosen;
-        public event Func<BandCardController, int, bool> MoveRequested;
+        public event Action<CardController> DisconnectRequested;
+        public event Action<CardController> CloseProfilesInUseRequested;
+        public event Action<CardController, YargProfile> ProfileChosen;
+        public event Func<CardController, int, bool> MoveRequested;
 
-        public BandCardController(BandSessionState session, BandColumnModel model, BandColumn view,
+        public CardController(OvershellSession session, OvershellColumnModel model, OvershellColumn view,
             Func<float> getMaxCardHeight, DifficultyRing ringTemplate = null)
         {
             _session = session;
@@ -53,16 +54,16 @@ namespace YARG.Menu.DifficultySelect
             view.SelectionChanged += OnSelectionChanged;
             model.RebuildRequested += Rebuild;
 
-            _settingsRows = new BandSettingsRows(_content,
-                (key, title, choices) => _session.PushView(Model, BandColumnState.SettingOptions, key, title, choices),
+            _settingsRows = new SettingsRows(_content,
+                (key, title, choices) => _session.PushView(Model, ColumnState.SettingOptions, key, title, choices),
                 mode => _session.ChangeInputMode(Model, mode));
         }
 
-        public BandColumnModel Model { get; }
-        public BandColumn View { get; }
+        public OvershellColumnModel Model { get; }
+        public OvershellColumn View { get; }
 
         public YargPlayer Player => Model.Player;
-        public BandColumnState State => Model.State;
+        public ColumnState State => Model.State;
         public bool Ready => Model.IsReady;
         public bool IsJoining => Model.IsJoining;
         public bool IsExpanded => Model.IsExpanded;
@@ -82,7 +83,9 @@ namespace YARG.Menu.DifficultySelect
             _builtState = State;
             Model.ViewStack.RestoreFocusKey = null;
 
-            View.Show(_content, sameState ? previousIndex : null, resetScroll: !sameState);
+            int? indexToRestore = sameState ? previousIndex : null;
+            bool resetScroll = !sameState;
+            View.Show(_content, indexToRestore, resetScroll);
             FitRows();
         }
 
@@ -127,7 +130,7 @@ namespace YARG.Menu.DifficultySelect
         /// </summary>
         public void CompleteJoin()
         {
-            if (_session.IsOvershell)
+            if (_session.IsEverywhere)
             {
                 RebuildFromCurrentTop();
             }
@@ -142,7 +145,7 @@ namespace YARG.Menu.DifficultySelect
         /// </summary>
         public void ShowProfilesInUse()
         {
-            Model.ViewStack.SetRoot(BandColumnState.ChooseProfile);
+            Model.ViewStack.SetRoot(ColumnState.ChooseProfile);
             Rebuild();
         }
 
@@ -166,7 +169,7 @@ namespace YARG.Menu.DifficultySelect
         public void Confirm()
         {
             var selected = View.SelectedItem;
-            if (selected is { Kind: BandMenuItemKind.Stepper })
+            if (selected is { Kind: CardMenuItemKind.Stepper })
             {
                 if (!StopEditing())
                 {
@@ -207,7 +210,7 @@ namespace YARG.Menu.DifficultySelect
         public bool AdjustSelection(int direction)
         {
             var selected = View.SelectedItem;
-            if (selected is not { Kind: BandMenuItemKind.Stepper })
+            if (selected is not { Kind: CardMenuItemKind.Stepper })
             {
                 return false;
             }
@@ -226,15 +229,15 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            bool isFirstScreen = State == BandColumnState.ChooseProfile ||
-                (State == BandColumnState.Instrument && Model.ViewStack.Depth == 0);
+            bool isFirstScreen = State == ColumnState.ChooseProfile ||
+                (State == ColumnState.Instrument && Model.ViewStack.Depth == 0);
             if (isFirstScreen)
             {
                 DisconnectRequested?.Invoke(this);
                 return;
             }
 
-            if (State == BandColumnState.Main)
+            if (State == ColumnState.Main)
             {
                 if (Ready)
                 {
@@ -248,7 +251,7 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            if (State == BandColumnState.SittingOut)
+            if (State == ColumnState.SittingOut)
             {
                 _session.OpenPicker(Model, canCancel: true);
                 return;
@@ -279,7 +282,7 @@ namespace YARG.Menu.DifficultySelect
 
         private void OnClicked(bool onHeader)
         {
-            if (!_session.CanClickCards || State != BandColumnState.Main)
+            if (!_session.CanClickCards || State != ColumnState.Main)
             {
                 return;
             }
@@ -295,13 +298,13 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            if (_session.IsOvershell && onHeader)
+            if (_session.IsEverywhere && onHeader)
             {
                 Back();
             }
         }
 
-        private void OnSelectionChanged(BandMenuItem selected, bool fromMouse)
+        private void OnSelectionChanged(CardMenuItem selected, bool fromMouse)
         {
             if (_editing != null && selected != _editing)
             {
@@ -324,40 +327,40 @@ namespace YARG.Menu.DifficultySelect
 
             switch (State)
             {
-                case BandColumnState.ChooseProfile:
+                case ColumnState.ChooseProfile:
                     BuildProfilePicker();
                     break;
-                case BandColumnState.Main:
+                case ColumnState.Main:
                     BuildMain();
                     break;
-                case BandColumnState.Difficulty:
+                case ColumnState.Difficulty:
                     BuildDifficultyPicker();
                     break;
-                case BandColumnState.Instrument:
+                case ColumnState.Instrument:
                     BuildInstrumentPicker();
                     break;
-                case BandColumnState.Adjustments:
+                case ColumnState.Adjustments:
                     BuildAdjustments();
                     break;
-                case BandColumnState.Modifiers:
+                case ColumnState.Modifiers:
                     BuildModifiers();
                     break;
-                case BandColumnState.Accessibility:
+                case ColumnState.Accessibility:
                     BuildAccessibility();
                     break;
-                case BandColumnState.OpenLane:
+                case ColumnState.OpenLane:
                     BuildOpenLane();
                     break;
-                case BandColumnState.SittingOut:
+                case ColumnState.SittingOut:
                     BuildSittingOut();
                     break;
-                case BandColumnState.Position:
+                case ColumnState.Position:
                     BuildPosition();
                     break;
-                case BandColumnState.Settings:
+                case ColumnState.Settings:
                     BuildSettings();
                     break;
-                case BandColumnState.SettingOptions:
+                case ColumnState.SettingOptions:
                     BuildSettingOptions();
                     break;
             }
@@ -376,7 +379,7 @@ namespace YARG.Menu.DifficultySelect
             _content.HeaderReady = Model.IsReady;
         }
 
-        private void PushView(BandColumnState state, string focusKey)
+        private void PushView(ColumnState state, string focusKey)
         {
             _session.PushView(Model, state, focusKey);
         }
@@ -412,8 +415,8 @@ namespace YARG.Menu.DifficultySelect
                 }
             }
 
-            var cancel = _content.Add(BandMenuItem.Button(Localize.Key("Menu.Common.Cancel"), CancelProfilePicker));
-            cancel.Style = BandRowStyle.Small;
+            var cancel = _content.Add(CardMenuItem.Button(Localize.Key("Menu.Common.Cancel"), CancelProfilePicker));
+            cancel.Style = CardRowStyle.Small;
         }
 
         private void CancelProfilePicker()
@@ -433,10 +436,10 @@ namespace YARG.Menu.DifficultySelect
             bool isCurrent = Player != null && profile == Player.Profile;
             bool isTaken = !isCurrent && PlayerContainer.IsProfileTaken(profile);
 
-            var row = _content.Add(BandMenuItem.Button(profile.Name, () => ProfileChosen?.Invoke(this, profile),
+            var row = _content.Add(CardMenuItem.Button(profile.Name, () => ProfileChosen?.Invoke(this, profile),
                 !isTaken));
-            row.Style = BandRowStyle.Profile;
-            row.Height = BandColumn.PROFILE_ROW_HEIGHT;
+            row.Style = CardRowStyle.Profile;
+            row.Height = OvershellColumn.PROFILE_ROW_HEIGHT;
             row.Avatar = profile;
 
             if (isCurrent)
@@ -456,7 +459,7 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            if (_session.IsOvershell)
+            if (_session.IsEverywhere)
             {
                 AddSettingsEntryRow();
                 AddPositionRow();
@@ -466,19 +469,19 @@ namespace YARG.Menu.DifficultySelect
 
             if (Model.WarningMessage != null)
             {
-                _content.Add(BandMenuItem.Label(Model.WarningMessage)).TextColor = WARNING_COLOR;
+                _content.Add(CardMenuItem.Label(Model.WarningMessage)).TextColor = WARNING_COLOR;
             }
 
-            _readyItem = _content.Add(BandMenuItem.Button(
+            _readyItem = _content.Add(CardMenuItem.Button(
                 Localize.Key("Menu.DifficultySelect.Band", Model.IsReady ? "Unready" : "Ready"),
                 ToggleReady));
-            _readyItem.Style = BandRowStyle.Ready;
+            _readyItem.Style = CardRowStyle.Ready;
 
             AddInstrumentRow();
 
             bool canPickDifficulty = !Model.IsReady && Model.Difficulties.Count > 0;
             var difficulty = AddStateRow(Localize.Key("Menu.DifficultySelect.Difficulty"),
-                profile.CurrentDifficulty.ToLocalizedName(), BandColumnState.Difficulty, canPickDifficulty);
+                profile.CurrentDifficulty.ToLocalizedName(), ColumnState.Difficulty, canPickDifficulty);
             if (canPickDifficulty)
             {
                 _difficultyItem = difficulty;
@@ -486,7 +489,7 @@ namespace YARG.Menu.DifficultySelect
 
             if (profile.CurrentInstrument == Instrument.Harmony && _session.MaxHarmonyIndex > 1)
             {
-                _content.Add(BandMenuItem.Button(
+                _content.Add(CardMenuItem.Button(
                     Localize.KeyFormat("Menu.DifficultySelect.Band.Part", profile.HarmonyIndex + 1),
                     () => _session.CycleHarmonyPart(Model), !Model.IsReady));
             }
@@ -494,7 +497,7 @@ namespace YARG.Menu.DifficultySelect
             string adjustments = PlayerSelectionRules.BuildAdjustmentsSummary(profile, Model.Modifiers,
                 Model.ExcusableModifiers, out int optionCount);
             AddStateRow(Localize.Key("Menu.DifficultySelect.Adjustments"), adjustments,
-                BandColumnState.Adjustments, !Model.IsReady, MultiLineHeight(optionCount));
+                ColumnState.Adjustments, !Model.IsReady, MultiLineHeight(optionCount));
 
             AddSettingsEntryRow();
             AddPositionRow();
@@ -503,16 +506,16 @@ namespace YARG.Menu.DifficultySelect
 
         private void AddDropOutRow()
         {
-            var dropOut = _content.Add(BandMenuItem.Button(Localize.Key("Menu.DifficultySelect.Band.DropOut"),
+            var dropOut = _content.Add(CardMenuItem.Button(Localize.Key("Menu.DifficultySelect.Band.DropOut"),
                 () => DisconnectRequested?.Invoke(this)));
-            dropOut.Style = BandRowStyle.Small;
+            dropOut.Style = CardRowStyle.Small;
         }
 
         private void AddPositionRow()
         {
-            var row = _content.Add(BandMenuItem.Button(Localize.Key("Menu.DifficultySelect.Band.Position"),
-                () => PushView(BandColumnState.Position, nameof(BandColumnState.Position))));
-            if (Model.ViewStack.RestoreFocusKey == nameof(BandColumnState.Position))
+            var row = _content.Add(CardMenuItem.Button(Localize.Key("Menu.DifficultySelect.Band.Position"),
+                () => PushView(ColumnState.Position, nameof(ColumnState.Position))));
+            if (Model.ViewStack.RestoreFocusKey == nameof(ColumnState.Position))
             {
                 _content.DefaultItem = row;
             }
@@ -520,9 +523,9 @@ namespace YARG.Menu.DifficultySelect
 
         private void AddSettingsEntryRow()
         {
-            var row = _content.Add(BandMenuItem.Button(Localize.Key("Menu.DifficultySelect.Band.Settings"),
-                () => PushView(BandColumnState.Settings, nameof(BandColumnState.Settings)), !Model.IsReady));
-            if (Model.ViewStack.RestoreFocusKey == nameof(BandColumnState.Settings))
+            var row = _content.Add(CardMenuItem.Button(Localize.Key("Menu.DifficultySelect.Band.Settings"),
+                () => PushView(ColumnState.Settings, nameof(ColumnState.Settings)), !Model.IsReady));
+            if (Model.ViewStack.RestoreFocusKey == nameof(ColumnState.Settings))
             {
                 _content.DefaultItem = row;
             }
@@ -532,12 +535,12 @@ namespace YARG.Menu.DifficultySelect
         {
             SetPlayerHeading();
 
-            _moveLeftItem = _content.Add(BandMenuItem.Button(Localize.Key("Menu.DifficultySelect.Band.MoveLeft"),
+            _moveLeftItem = _content.Add(CardMenuItem.Button(Localize.Key("Menu.DifficultySelect.Band.MoveLeft"),
                 () => Move(-1), _session.CanMoveColumn(Model, -1)));
-            _moveRightItem = _content.Add(BandMenuItem.Button(Localize.Key("Menu.DifficultySelect.Band.MoveRight"),
+            _moveRightItem = _content.Add(CardMenuItem.Button(Localize.Key("Menu.DifficultySelect.Band.MoveRight"),
                 () => Move(1), _session.CanMoveColumn(Model, 1)));
 
-            _content.Add(BandMenuItem.Button(Localize.Key("Menu.DifficultySelect.Done"), PopView));
+            _content.Add(CardMenuItem.Button(Localize.Key("Menu.DifficultySelect.Done"), PopView));
         }
 
         private void Move(int direction)
@@ -563,13 +566,13 @@ namespace YARG.Menu.DifficultySelect
                 .ToList();
             bool showRings = _ringTemplate != null && instruments.Count > 0;
 
-            float height = BandColumn.TWO_LINE_ROW_HEIGHT;
+            float height = OvershellColumn.TWO_LINE_ROW_HEIGHT;
             if (showRings)
             {
                 height += DifficultyItemRings.RingRowHeight(DifficultyItemRings.INSTRUMENT_RING_SIZE);
             }
 
-            var row = _content.Add(BandMenuItem.Button(Localize.Key("Menu.DifficultySelect.Instrument"),
+            var row = _content.Add(CardMenuItem.Button(Localize.Key("Menu.DifficultySelect.Instrument"),
                 PlayerSelectionRules.GetInstrumentDisplayName(profile.CurrentInstrument, profile.GameMode),
                 OpenPicker, !Model.IsReady));
             row.Height = height;
@@ -595,11 +598,11 @@ namespace YARG.Menu.DifficultySelect
                     continue;
                 }
 
-                var row = _content.Add(BandMenuItem.Button(difficulty.ToLocalizedName(),
+                var row = _content.Add(CardMenuItem.Button(difficulty.ToLocalizedName(),
                     () => ConfirmDifficulty(difficulty)));
                 if (difficulty == current)
                 {
-                    row.TextColor = BandColumn.READY_COLOR;
+                    row.TextColor = OvershellColumn.READY_COLOR;
                     _content.DefaultItem = row;
                 }
             }
@@ -627,10 +630,10 @@ namespace YARG.Menu.DifficultySelect
                 }
 
                 anyPlayable = true;
-                var row = _content.Add(BandMenuItem.Button(
+                var row = _content.Add(CardMenuItem.Button(
                     PlayerSelectionRules.GetInstrumentLabelWithTier(song, instrument, mode),
                     () => _session.PickInstrument(Model, instrument)));
-                row.Height = BandColumn.TWO_LINE_ROW_HEIGHT;
+                row.Height = OvershellColumn.TWO_LINE_ROW_HEIGHT;
 
                 if (instrument == profile.CurrentInstrument && Model.ViewStack.Depth > 0)
                 {
@@ -640,10 +643,10 @@ namespace YARG.Menu.DifficultySelect
 
             if (!anyPlayable)
             {
-                var label = _content.Add(BandMenuItem.Label(
+                var label = _content.Add(CardMenuItem.Label(
                     Localize.Key("Menu.DifficultySelect.Band.NoPlayableInstruments")));
                 label.WrapText = true;
-                label.Height = BandColumn.TWO_LINE_ROW_HEIGHT;
+                label.Height = OvershellColumn.TWO_LINE_ROW_HEIGHT;
             }
         }
 
@@ -655,16 +658,16 @@ namespace YARG.Menu.DifficultySelect
 
             AddStateRow(Localize.Key("Menu.DifficultySelect.Modifiers"),
                 PlayerSelectionRules.BuildModifierSummary(profile, Model.Modifiers, Model.ExcusableModifiers),
-                BandColumnState.Modifiers);
+                ColumnState.Modifiers);
 
             if (PlayerSelectionRules.HasAccessibilityOptions(profile, Model.Modifiers))
             {
                 AddStateRow(Localize.Key("Menu.DifficultySelect.Accessibility"),
                     PlayerSelectionRules.BuildAccessibilitySummary(profile, Model.Modifiers),
-                    BandColumnState.Accessibility);
+                    ColumnState.Accessibility);
             }
 
-            _content.Add(BandMenuItem.Button(Localize.Key("Menu.DifficultySelect.Done"), PopView));
+            _content.Add(CardMenuItem.Button(Localize.Key("Menu.DifficultySelect.Done"), PopView));
         }
 
         private void BuildModifiers()
@@ -684,10 +687,10 @@ namespace YARG.Menu.DifficultySelect
             if (profile.GameMode == GameMode.ProKeys)
             {
                 AddStateRow(Localize.Key("Menu.DifficultySelect.DedicatedOpenLane"),
-                    profile.OpenLaneDisplayType.ToLocalizedName(), BandColumnState.OpenLane);
+                    profile.OpenLaneDisplayType.ToLocalizedName(), ColumnState.OpenLane);
             }
 
-            _content.Add(BandMenuItem.Button(Localize.Key("Menu.DifficultySelect.Done"), PopView));
+            _content.Add(CardMenuItem.Button(Localize.Key("Menu.DifficultySelect.Done"), PopView));
         }
 
         private void BuildAccessibility()
@@ -698,13 +701,13 @@ namespace YARG.Menu.DifficultySelect
 
             if (PlayerSelectionRules.SupportsLeftyFlip(profile.GameMode))
             {
-                _content.Add(BandMenuItem.Toggle(Localize.Key("Menu.DifficultySelect.LeftyFlip"),
+                _content.Add(CardMenuItem.Toggle(Localize.Key("Menu.DifficultySelect.LeftyFlip"),
                     () => profile.LeftyFlip, on => profile.LeftyFlip = on));
             }
 
             if (PlayerSelectionRules.SupportsRangeShifts(profile.GameMode))
             {
-                _content.Add(BandMenuItem.Toggle(Localize.Key("Menu.DifficultySelect.NoRangeShifts"),
+                _content.Add(CardMenuItem.Toggle(Localize.Key("Menu.DifficultySelect.NoRangeShifts"),
                     () => PlayerSelectionRules.HasNoRangeShifts(profile, Model.Modifiers),
                     on => PlayerSelectionRules.SetNoRangeShifts(profile, Model.Modifiers, on)));
             }
@@ -718,12 +721,12 @@ namespace YARG.Menu.DifficultySelect
                 }
             }
 
-            _content.Add(BandMenuItem.Button(Localize.Key("Menu.DifficultySelect.Done"), PopView));
+            _content.Add(CardMenuItem.Button(Localize.Key("Menu.DifficultySelect.Done"), PopView));
         }
 
         private void AddModifierToggle(YargProfile profile, Modifier modifier)
         {
-            _content.Add(BandMenuItem.Toggle(modifier.ToLocalizedName(), () => profile.IsModifierActive(modifier),
+            _content.Add(CardMenuItem.Toggle(modifier.ToLocalizedName(), () => profile.IsModifierActive(modifier),
                 on =>
                 {
                     if (on)
@@ -745,7 +748,7 @@ namespace YARG.Menu.DifficultySelect
 
             foreach (var displayType in ProfileSettingsCatalog.OPEN_LANE_DISPLAY_TYPES)
             {
-                var row = _content.Add(BandMenuItem.Button(displayType.ToLocalizedName(), () =>
+                var row = _content.Add(CardMenuItem.Button(displayType.ToLocalizedName(), () =>
                 {
                     profile.OpenLaneDisplayType = displayType;
                     PopView();
@@ -754,7 +757,7 @@ namespace YARG.Menu.DifficultySelect
 
                 if (displayType == profile.OpenLaneDisplayType)
                 {
-                    row.TextColor = BandColumn.READY_COLOR;
+                    row.TextColor = OvershellColumn.READY_COLOR;
                     _content.DefaultItem = row;
                 }
             }
@@ -763,7 +766,7 @@ namespace YARG.Menu.DifficultySelect
         private void BuildSittingOut()
         {
             SetPlayerHeading();
-            _content.Add(BandMenuItem.Button(Localize.Key("Menu.DifficultySelect.Band.SittingOut"), OpenPicker,
+            _content.Add(CardMenuItem.Button(Localize.Key("Menu.DifficultySelect.Band.SittingOut"), OpenPicker,
                 !Model.IsLocked));
         }
 
@@ -771,20 +774,20 @@ namespace YARG.Menu.DifficultySelect
         {
             SetPlayerHeading();
             _settingsRows.Add(Player.Profile, Model.ViewStack.RestoreFocusKey,
-                includeInputMode: _session.IsOvershell);
+                includeInputMode: _session.IsEverywhere);
 
-            _content.Add(BandMenuItem.Button(Localize.Key("Menu.DifficultySelect.Done"), PopView));
+            _content.Add(CardMenuItem.Button(Localize.Key("Menu.DifficultySelect.Done"), PopView));
         }
 
         private void BuildSettingOptions()
         {
             SetPlayerHeading();
 
-            _content.Add(BandMenuItem.Label(Model.ViewStack.SettingTitle)).WrapIfLong = true;
+            _content.Add(CardMenuItem.Label(Model.ViewStack.SettingTitle)).WrapIfLong = true;
 
             foreach (var option in Model.ViewStack.SettingOptions)
             {
-                var row = _content.Add(BandMenuItem.Button(option.Label, () =>
+                var row = _content.Add(CardMenuItem.Button(option.Label, () =>
                 {
                     option.Pick();
                     PopView();
@@ -793,17 +796,17 @@ namespace YARG.Menu.DifficultySelect
 
                 if (option.Current)
                 {
-                    row.TextColor = BandColumn.READY_COLOR;
+                    row.TextColor = OvershellColumn.READY_COLOR;
                     _content.DefaultItem = row;
                 }
             }
         }
 
-        private BandMenuItem AddStateRow(string header, string body, BandColumnState state, bool enabled = true,
-            float height = BandColumn.TWO_LINE_ROW_HEIGHT)
+        private CardMenuItem AddStateRow(string header, string body, ColumnState state, bool enabled = true,
+            float height = OvershellColumn.TWO_LINE_ROW_HEIGHT)
         {
             string key = state.ToString();
-            var row = _content.Add(BandMenuItem.Button(header, body, () => PushView(state, key), enabled));
+            var row = _content.Add(CardMenuItem.Button(header, body, () => PushView(state, key), enabled));
             row.Height = height;
             if (enabled && Model.ViewStack.RestoreFocusKey == key)
             {
@@ -815,7 +818,7 @@ namespace YARG.Menu.DifficultySelect
 
         private static float MultiLineHeight(int lineCount)
         {
-            return BandColumn.TWO_LINE_ROW_HEIGHT + Mathf.Max(0, lineCount - 1) * MODIFIER_LINE_HEIGHT;
+            return OvershellColumn.TWO_LINE_ROW_HEIGHT + Mathf.Max(0, lineCount - 1) * MODIFIER_LINE_HEIGHT;
         }
 
     }

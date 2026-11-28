@@ -10,13 +10,13 @@ using YARG.Localization;
 using YARG.Menu.ProfileList;
 using YARG.Settings.Customization;
 
-namespace YARG.Menu.DifficultySelect
+namespace YARG.Menu.Overshell
 {
     /// <summary>
     /// Builds the profile Settings submenu rows for a band card: decides which profile settings the card can edit,
     /// and turns each into a preset, choice, number, or toggle row bound to the profile.
     /// </summary>
-    internal sealed class BandSettingsRows
+    internal sealed class SettingsRows
     {
         private const string SETTING_LABEL_PREFIX = "Menu.ProfileList.Tooltip.Profiles.Settings";
         private const string INPUT_MODE_KEY = "InputMode";
@@ -31,12 +31,12 @@ namespace YARG.Menu.DifficultySelect
             ProfileSettingStrings.CONFIGURE_FIVE_LANE_DRUMS_HIGHWAY,
         };
 
-        private readonly BandCardContent _content;
-        private readonly Action<string, string, List<BandSettingOption>> _openOptions;
+        private readonly CardContent _content;
+        private readonly Action<string, string, List<SettingOption>> _openOptions;
         private readonly Action<GameMode> _changeInputMode;
         private string _restoreFocusKey;
 
-        public BandSettingsRows(BandCardContent content, Action<string, string, List<BandSettingOption>> openOptions,
+        public SettingsRows(CardContent content, Action<string, string, List<SettingOption>> openOptions,
             Action<GameMode> changeInputMode)
         {
             _content = content;
@@ -55,7 +55,7 @@ namespace YARG.Menu.DifficultySelect
             if (includeInputMode)
             {
                 AddChoiceRow(INPUT_MODE_KEY, profile.GameMode.ToLocalizedName(),
-                    ProfileSettingsCatalog.GAME_MODES.Select(mode => new BandSettingOption(
+                    ProfileSettingsCatalog.GAME_MODES.Select(mode => new SettingOption(
                         mode.ToLocalizedName(),
                         mode == profile.GameMode,
                         () => _changeInputMode(mode))));
@@ -117,27 +117,27 @@ namespace YARG.Menu.DifficultySelect
                         direction => profile.InputCalibrationMilliseconds += direction);
                     break;
                 case ProfileSettingStrings.LEFTY_FLIP:
-                    _content.Add(BandMenuItem.Toggle(SettingLabel("LeftyFlip"), () => profile.LeftyFlip,
+                    _content.Add(CardMenuItem.Toggle(SettingLabel("LeftyFlip"), () => profile.LeftyFlip,
                         on => profile.LeftyFlip = on));
                     break;
                 case ProfileSettingStrings.RANGE_DISABLE:
-                    _content.Add(BandMenuItem.Toggle(SettingLabel("RangeDisable"), () => profile.RangeEnabled,
+                    _content.Add(CardMenuItem.Toggle(SettingLabel("RangeDisable"), () => profile.RangeEnabled,
                         on => profile.RangeEnabled = on));
                     break;
                 case ProfileSettingStrings.USE_CYMBAL_MODELS:
-                    _content.Add(BandMenuItem.Toggle(SettingLabel("UseCymbalModels"), () => profile.UseCymbalModels,
+                    _content.Add(CardMenuItem.Toggle(SettingLabel("UseCymbalModels"), () => profile.UseCymbalModels,
                         on => profile.UseCymbalModels = on));
                     break;
                 case ProfileSettingStrings.OPEN_LANE_DISPLAY_TYPE:
                     AddChoiceRow("DedicatedOpenNoteLane", profile.OpenLaneDisplayType.ToLocalizedName(),
-                        ProfileSettingsCatalog.OPEN_LANE_DISPLAY_TYPES.Select(type => new BandSettingOption(
+                        ProfileSettingsCatalog.OPEN_LANE_DISPLAY_TYPES.Select(type => new SettingOption(
                             type.ToLocalizedName(),
                             type == profile.OpenLaneDisplayType,
                             () => profile.OpenLaneDisplayType = type)));
                     break;
                 case ProfileSettingStrings.DRUM_STAR_POWER_ACTIVATION_TYPE:
                     AddChoiceRow("StarPowerActivationType", profile.StarPowerActivationType.ToLocalizedName(),
-                        ProfileSettingsCatalog.STAR_POWER_ACTIVATION_TYPES.Select(type => new BandSettingOption(
+                        ProfileSettingsCatalog.STAR_POWER_ACTIVATION_TYPES.Select(type => new SettingOption(
                             type.ToLocalizedName(),
                             type == profile.StarPowerActivationType,
                             () => profile.StarPowerActivationType = type)));
@@ -155,29 +155,29 @@ namespace YARG.Menu.DifficultySelect
 
             string currentName = presets.FirstOrDefault(preset => preset.Id == current)?.Name ?? string.Empty;
             AddChoiceRow(key, currentName, presets.Select(preset =>
-                new BandSettingOption(preset.Name, preset.Id == current, () => pick(preset.Id))));
+                new SettingOption(preset.Name, preset.Id == current, () => pick(preset.Id))));
         }
 
-        private void AddChoiceRow(string key, string value, IEnumerable<BandSettingOption> options)
+        private void AddChoiceRow(string key, string value, IEnumerable<SettingOption> options)
         {
             string title = SettingLabel(key);
             var choices = options.ToList();
-            var row = _content.Add(BandMenuItem.Button(title, value,
+            var row = _content.Add(CardMenuItem.Button(title, value,
                 () => _openOptions(key, title, choices)));
-            row.Height = BandColumn.TWO_LINE_ROW_HEIGHT;
+            row.Height = OvershellColumn.TWO_LINE_ROW_HEIGHT;
             row.AllowTinyText = true;
             MarkDefault(key, row);
         }
 
         private void AddNumberRow(string key, Func<string> format, Action<int> step)
         {
-            var row = _content.Add(BandMenuItem.Stepper(SettingLabel(key), format, step));
-            row.Height = BandColumn.TWO_LINE_ROW_HEIGHT;
+            var row = _content.Add(CardMenuItem.Stepper(SettingLabel(key), format, step));
+            row.Height = OvershellColumn.TWO_LINE_ROW_HEIGHT;
             row.AllowTinyText = true;
             MarkDefault(key, row);
         }
 
-        private void MarkDefault(string key, BandMenuItem row)
+        private void MarkDefault(string key, CardMenuItem row)
         {
             if (key == _restoreFocusKey)
             {

@@ -2,14 +2,14 @@ using System.Collections.Generic;
 using DG.Tweening;
 using UnityEngine;
 
-namespace YARG.Menu.DifficultySelect
+namespace YARG.Menu.Overshell
 {
     /// <summary>
     /// Slides and resizes band cards from where they were to where the layout puts them after players join,
     /// leave, or move. Call <see cref="ClearSnapshots"/> and <see cref="Capture"/> before the layout changes,
     /// then <see cref="Shift"/> or <see cref="ShiftOrRise"/> after it.
     /// </summary>
-    internal sealed class BandStripAnimator
+    internal sealed class StripAnimator
     {
         internal const float SLIDE_DISTANCE = 900f;
         internal const float SLIDE_SECONDS = 0.3f;

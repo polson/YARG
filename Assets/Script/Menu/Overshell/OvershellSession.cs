@@ -8,15 +8,16 @@ using YARG.Core.Song;
 using YARG.Gameplay.Visuals;
 using YARG.Input.Bindings;
 using YARG.Localization;
+using YARG.Menu.DifficultySelect;
 using YARG.Menu.ProfileList;
 using YARG.Player;
 
-namespace YARG.Menu.DifficultySelect
+namespace YARG.Menu.Overshell
 {
-    internal sealed class BandColumnModel
+    internal sealed class OvershellColumnModel
     {
         public YargPlayer Player { get; set; }
-        public BandColumnViewStack ViewStack { get; } = new();
+        public ColumnViewStack ViewStack { get; } = new();
 
         public bool IsReady { get; set; }
         public bool IsManuallyCollapsed { get; set; }
@@ -27,9 +28,9 @@ namespace YARG.Menu.DifficultySelect
         public Modifier ExcusableModifiers { get; set; }
         public List<Difficulty> Difficulties { get; } = new();
 
-        public BandColumnState State => ViewStack.State;
-        public bool IsJoining => State == BandColumnState.ChooseProfile;
-        public bool IsCollapsed => State == BandColumnState.Main && (IsReady || IsManuallyCollapsed);
+        public ColumnState State => ViewStack.State;
+        public bool IsJoining => State == ColumnState.ChooseProfile;
+        public bool IsCollapsed => State == ColumnState.Main && (IsReady || IsManuallyCollapsed);
         public bool IsExpanded => !IsCollapsed;
         public bool IsAtTopLevel => ViewStack.IsAtTopLevel(IsReady);
         public bool HasChosenInstrument => ViewStack.HasChosenInstrument();
@@ -44,22 +45,22 @@ namespace YARG.Menu.DifficultySelect
 
     internal readonly struct JoinedColumn
     {
-        public readonly BandColumnModel Column;
+        public readonly OvershellColumnModel Column;
         public readonly int ReplacedSlotIndex;
 
-        public JoinedColumn(BandColumnModel column, int replacedSlotIndex)
+        public JoinedColumn(OvershellColumnModel column, int replacedSlotIndex)
         {
             Column = column;
             ReplacedSlotIndex = replacedSlotIndex;
         }
     }
 
-    internal sealed class BandSessionState
+    internal sealed class OvershellSession
     {
         public const int MAX_PLAYERS = HighwayCameraRendering.MAX_MATRICES;
 
-        private readonly BandPlayerJoiner _joiner = new();
-        private readonly BandSeating _seating = new();
+        private readonly PlayerJoiner _joiner = new();
+        private readonly Seating _seating = new();
         private readonly List<InputDevice> _pendingJoins = new();
         private readonly List<Instrument> _instruments = new();
         private readonly List<GameMode> _modeBuffer = new();
@@ -69,7 +70,7 @@ namespace YARG.Menu.DifficultySelect
         private Func<bool> _isDialogShowing;
         private Action<YargProfile> _onGameModeChanged;
 
-        public IReadOnlyList<BandColumnModel> Slots => _seating.Slots;
+        public IReadOnlyList<OvershellColumnModel> Slots => _seating.Slots;
         public IReadOnlyList<Instrument> Instruments => _instruments;
         public IReadOnlyList<SongEntry> Songs { get; private set; }
         public SongEntry CurrentSong { get; private set; }
@@ -77,7 +78,7 @@ namespace YARG.Menu.DifficultySelect
         public int MaxHarmonyIndex { get; private set; }
 
         public bool IsOpen { get; private set; }
-        public bool IsOvershell { get; private set; }
+        public bool IsEverywhere { get; private set; }
         public bool Hidden { get; private set; }
         public bool IsStartingSong { get; private set; }
         public bool StartPending { get; private set; }
@@ -93,21 +94,21 @@ namespace YARG.Menu.DifficultySelect
         public bool CanClickCards =>
             !IsStartingSong
             && (_isDialogShowing == null || !_isDialogShowing())
-            && (!IsOvershell || (!Hidden && CanEngage));
+            && (!IsEverywhere || (!Hidden && CanEngage));
 
         public bool IsJoinBlocked => !CanClickCards || IsFull || HasPendingProfilePicker;
 
-        public BandColumnModel FocusedColumn => _seating.FocusedColumn;
+        public OvershellColumnModel FocusedColumn => _seating.FocusedColumn;
 
         public event Action ColumnsChanged;
 
-        public void Open(List<SongEntry> songs, SongEntry currentSong, bool isCareer, bool isOvershell,
+        public void Open(List<SongEntry> songs, SongEntry currentSong, bool isCareer, bool isEverywhere,
             Func<bool> canEngage, Func<bool> isDialogShowing = null, Action<YargProfile> onGameModeChanged = null)
         {
             Songs = songs;
             CurrentSong = currentSong;
             IsCareer = isCareer;
-            IsOvershell = isOvershell;
+            IsEverywhere = isEverywhere;
             _canEngage = canEngage;
             _isDialogShowing = isDialogShowing;
             _onGameModeChanged = onGameModeChanged;
@@ -118,15 +119,15 @@ namespace YARG.Menu.DifficultySelect
             IsStartingSong = false;
             _pendingJoins.Clear();
 
-            if (!isOvershell)
+            if (!isEverywhere)
             {
                 UpdateInstruments();
             }
 
-            var columns = new List<BandColumnModel>(PlayerContainer.Players.Count);
+            var columns = new List<OvershellColumnModel>(PlayerContainer.Players.Count);
             foreach (var player in PlayerContainer.Players)
             {
-                var model = new BandColumnModel { Player = player };
+                var model = new OvershellColumnModel { Player = player };
                 InitializeColumnForMode(model);
                 columns.Add(model);
             }
@@ -156,9 +157,9 @@ namespace YARG.Menu.DifficultySelect
             return cancelledPlayers;
         }
 
-        public bool SetOvershellHidden(bool hidden, List<BandColumnModel> cancelledJoins)
+        public bool SetHidden(bool hidden, List<OvershellColumnModel> cancelledJoins)
         {
-            bool shouldUpdateVisibility = IsOpen && IsOvershell && hidden != Hidden;
+            bool shouldUpdateVisibility = IsOpen && IsEverywhere && hidden != Hidden;
             if (!shouldUpdateVisibility)
             {
                 return false;
@@ -188,7 +189,7 @@ namespace YARG.Menu.DifficultySelect
                 }
                 else if (column.IsExpanded)
                 {
-                    ResetForOvershell(column);
+                    ResetForEverywhere(column);
                     column.RequestRebuild();
                 }
             }
@@ -196,19 +197,19 @@ namespace YARG.Menu.DifficultySelect
             return true;
         }
 
-        public bool IsSittingOut(BandColumnModel column)
+        public bool IsSittingOut(OvershellColumnModel column)
         {
-            bool isInstrumentMissingPlayable = column.State == BandColumnState.Instrument && !HasPlayableInstrument(column);
-            return column.State == BandColumnState.SittingOut || isInstrumentMissingPlayable;
+            bool isInstrumentMissingPlayable = column.State == ColumnState.Instrument && !HasPlayableInstrument(column);
+            return column.State == ColumnState.SittingOut || isInstrumentMissingPlayable;
         }
 
-        public bool IsDecided(BandColumnModel column)
+        public bool IsDecided(OvershellColumnModel column)
         {
-            bool isReadyOnMain = column.State == BandColumnState.Main && column.IsReady;
+            bool isReadyOnMain = column.State == ColumnState.Main && column.IsReady;
             return IsSittingOut(column) || isReadyOnMain;
         }
 
-        public bool HasPlayableInstrument(BandColumnModel column)
+        public bool HasPlayableInstrument(OvershellColumnModel column)
         {
             foreach (var instrument in _instruments)
             {
@@ -221,7 +222,7 @@ namespace YARG.Menu.DifficultySelect
             return false;
         }
 
-        public string GetInstrumentBlocker(BandColumnModel column, Instrument instrument, out GameMode mode)
+        public string GetInstrumentBlocker(OvershellColumnModel column, Instrument instrument, out GameMode mode)
         {
             _otherInstrumentBuffer.Clear();
             foreach (var otherColumn in _seating.Slots)
@@ -236,16 +237,16 @@ namespace YARG.Menu.DifficultySelect
                 instrument, _otherInstrumentBuffer, out mode, _modeBuffer);
         }
 
-        public void ResetForOvershell(BandColumnModel column)
+        public void ResetForEverywhere(OvershellColumnModel column)
         {
             column.IsReady = false;
             column.WarningMessage = null;
             column.IsLocked = false;
             column.IsManuallyCollapsed = true;
-            column.ViewStack.SetRoot(BandColumnState.Main);
+            column.ViewStack.SetRoot(ColumnState.Main);
         }
 
-        public void InitializeForSong(BandColumnModel column)
+        public void InitializeForSong(OvershellColumnModel column)
         {
             column.Player.Profile.RestoreSavedModifiers();
             column.IsReady = false;
@@ -256,23 +257,23 @@ namespace YARG.Menu.DifficultySelect
             if (IsCareer && column.Player.Profile.IsBot)
             {
                 column.IsLocked = true;
-                column.ViewStack.SetRoot(BandColumnState.SittingOut);
+                column.ViewStack.SetRoot(ColumnState.SittingOut);
                 return;
             }
 
             if (TryAutoSelectInstrument(column))
             {
                 CollectOptions(column);
-                column.ViewStack.SetRoot(BandColumnState.Main);
+                column.ViewStack.SetRoot(ColumnState.Main);
                 return;
             }
 
-            column.ViewStack.SetRoot(BandColumnState.Instrument);
+            column.ViewStack.SetRoot(ColumnState.Instrument);
         }
 
-        public bool ExpandColumn(BandColumnModel column)
+        public bool ExpandColumn(OvershellColumnModel column)
         {
-            bool canExpand = column.State == BandColumnState.Main && !column.IsReady && column.IsManuallyCollapsed;
+            bool canExpand = column.State == ColumnState.Main && !column.IsReady && column.IsManuallyCollapsed;
             if (!canExpand)
             {
                 return false;
@@ -282,9 +283,9 @@ namespace YARG.Menu.DifficultySelect
             return true;
         }
 
-        public bool CollapseColumn(BandColumnModel column)
+        public bool CollapseColumn(OvershellColumnModel column)
         {
-            bool canCollapse = column.State == BandColumnState.Main && !column.IsReady && !column.IsManuallyCollapsed;
+            bool canCollapse = column.State == ColumnState.Main && !column.IsReady && !column.IsManuallyCollapsed;
             if (!canCollapse)
             {
                 return false;
@@ -294,8 +295,8 @@ namespace YARG.Menu.DifficultySelect
             return true;
         }
 
-        public void PushView(BandColumnModel column, BandColumnState state, string focusKey = null,
-            string settingTitle = null, List<BandSettingOption> settingOptions = null)
+        public void PushView(OvershellColumnModel column, ColumnState state, string focusKey = null,
+            string settingTitle = null, List<SettingOption> settingOptions = null)
         {
             column.ViewStack.Push(state, focusKey, settingTitle, settingOptions);
             column.IsManuallyCollapsed = false;
@@ -303,7 +304,7 @@ namespace YARG.Menu.DifficultySelect
             SyncColumnsAndSlots();
         }
 
-        public bool PopView(BandColumnModel column)
+        public bool PopView(OvershellColumnModel column)
         {
             if (!column.ViewStack.Pop())
             {
@@ -316,7 +317,7 @@ namespace YARG.Menu.DifficultySelect
             return true;
         }
 
-        public void SetRootState(BandColumnModel column, BandColumnState state)
+        public void SetRootState(OvershellColumnModel column, ColumnState state)
         {
             column.ViewStack.SetRoot(state);
             column.IsManuallyCollapsed = false;
@@ -324,7 +325,7 @@ namespace YARG.Menu.DifficultySelect
             SyncColumnsAndSlots();
         }
 
-        public void OpenPicker(BandColumnModel column, bool canCancel)
+        public void OpenPicker(OvershellColumnModel column, bool canCancel)
         {
             if (column.IsLocked)
             {
@@ -334,15 +335,15 @@ namespace YARG.Menu.DifficultySelect
             column.IsReady = false;
             if (canCancel)
             {
-                PushView(column, BandColumnState.Instrument, nameof(BandColumnState.Instrument));
+                PushView(column, ColumnState.Instrument, nameof(ColumnState.Instrument));
             }
             else
             {
-                SetRootState(column, BandColumnState.Instrument);
+                SetRootState(column, ColumnState.Instrument);
             }
         }
 
-        public bool PickInstrument(BandColumnModel column, Instrument instrument)
+        public bool PickInstrument(OvershellColumnModel column, Instrument instrument)
         {
             if (GetInstrumentBlocker(column, instrument, out var mode) != null)
             {
@@ -355,24 +356,24 @@ namespace YARG.Menu.DifficultySelect
             CollectOptions(column);
             column.IsReady = false;
             column.WarningMessage = null;
-            SetRootState(column, BandColumnState.Main);
+            SetRootState(column, ColumnState.Main);
             return true;
         }
 
-        public void ConfirmDifficulty(BandColumnModel column, Difficulty difficulty)
+        public void ConfirmDifficulty(OvershellColumnModel column, Difficulty difficulty)
         {
             column.Player.Profile.CurrentDifficulty = column.Player.Profile.DifficultyFallback = difficulty;
-            SetRootState(column, BandColumnState.Main);
+            SetRootState(column, ColumnState.Main);
         }
 
-        public void CycleHarmonyPart(BandColumnModel column)
+        public void CycleHarmonyPart(OvershellColumnModel column)
         {
             var profile = column.Player.Profile;
             profile.HarmonyIndex = (byte) ((profile.HarmonyIndex + 1) % MaxHarmonyIndex);
             column.RequestRebuild();
         }
 
-        public void ChangeInputMode(BandColumnModel column, GameMode mode)
+        public void ChangeInputMode(OvershellColumnModel column, GameMode mode)
         {
             var profile = column.Player.Profile;
             if (profile.GameMode == mode)
@@ -385,7 +386,7 @@ namespace YARG.Menu.DifficultySelect
             _onGameModeChanged?.Invoke(profile);
         }
 
-        public bool ToggleReady(BandColumnModel column)
+        public bool ToggleReady(OvershellColumnModel column)
         {
             if (!column.IsReady && !HasRequiredInputDevice(column))
             {
@@ -434,7 +435,7 @@ namespace YARG.Menu.DifficultySelect
             _pendingJoins.Clear();
         }
 
-        public bool FocusColumn(BandColumnModel column)
+        public bool FocusColumn(OvershellColumnModel column)
         {
             if (!_seating.Focus(column))
             {
@@ -456,12 +457,12 @@ namespace YARG.Menu.DifficultySelect
             return true;
         }
 
-        public bool CanMoveColumn(BandColumnModel column, int direction)
+        public bool CanMoveColumn(OvershellColumnModel column, int direction)
         {
             return _seating.CanMove(column, direction);
         }
 
-        public bool MoveColumn(BandColumnModel column, int direction)
+        public bool MoveColumn(OvershellColumnModel column, int direction)
         {
             if (!_seating.Move(column, direction))
             {
@@ -473,7 +474,7 @@ namespace YARG.Menu.DifficultySelect
 
             foreach (var otherColumn in _seating.Slots)
             {
-                if (otherColumn != null && otherColumn != column && otherColumn.State == BandColumnState.Position)
+                if (otherColumn != null && otherColumn != column && otherColumn.State == ColumnState.Position)
                 {
                     otherColumn.RequestRebuild();
                 }
@@ -482,7 +483,7 @@ namespace YARG.Menu.DifficultySelect
             return true;
         }
 
-        private bool TryStartJoinWithDevice(InputDevice device, out BandColumnModel column, out int replacedSlotIndex)
+        private bool TryStartJoinWithDevice(InputDevice device, out OvershellColumnModel column, out int replacedSlotIndex)
         {
             column = null;
             replacedSlotIndex = -1;
@@ -500,7 +501,7 @@ namespace YARG.Menu.DifficultySelect
             return true;
         }
 
-        public bool TryStartJoinWithoutDevice(int slotIndex, YargProfile chosen, out BandColumnModel column,
+        public bool TryStartJoinWithoutDevice(int slotIndex, YargProfile chosen, out OvershellColumnModel column,
             out bool needsProfilePicker, out int replacedSlotIndex)
         {
             column = null;
@@ -512,7 +513,7 @@ namespace YARG.Menu.DifficultySelect
                 return false;
             }
 
-            var profile = chosen ?? BandPlayerJoiner.FindAvailableProfile();
+            var profile = chosen ?? PlayerJoiner.FindAvailableProfile();
             if (profile == null)
             {
                 needsProfilePicker = true;
@@ -534,7 +535,7 @@ namespace YARG.Menu.DifficultySelect
             HasPendingProfilePicker = false;
         }
 
-        public bool ChooseJoinProfile(BandColumnModel column, YargProfile profile)
+        public bool ChooseJoinProfile(OvershellColumnModel column, YargProfile profile)
         {
             if (profile != column.Player.Profile)
             {
@@ -557,13 +558,13 @@ namespace YARG.Menu.DifficultySelect
             return true;
         }
 
-        public int CancelJoin(BandColumnModel column)
+        public int CancelJoin(OvershellColumnModel column)
         {
             _joiner.ReleaseJoin(column.Player);
             return RemoveColumn(column);
         }
 
-        public int Disconnect(BandColumnModel column)
+        public int Disconnect(OvershellColumnModel column)
         {
             if (column.IsJoining)
             {
@@ -574,15 +575,15 @@ namespace YARG.Menu.DifficultySelect
             return RemoveColumn(column);
         }
 
-        public BandColumnModel HandleExternalPlayerAdded(YargPlayer player, out int replacedSlotIndex)
+        public OvershellColumnModel HandleExternalPlayerAdded(YargPlayer player, out int replacedSlotIndex)
         {
-            var model = new BandColumnModel { Player = player };
+            var model = new OvershellColumnModel { Player = player };
             InitializeColumnForMode(model);
             replacedSlotIndex = _seating.Insert(model, targetSlotIndex: -1);
             return model;
         }
 
-        public int HandleExternalPlayerRemoved(YargPlayer player, out BandColumnModel removed)
+        public int HandleExternalPlayerRemoved(YargPlayer player, out OvershellColumnModel removed)
         {
             _seating.ForgetSeat(player);
             if (_joiner.IsSuppressingPlayerEvents)
@@ -595,7 +596,7 @@ namespace YARG.Menu.DifficultySelect
             return removed != null ? RemoveColumn(removed) : -1;
         }
 
-        public int RemoveColumn(BandColumnModel column)
+        public int RemoveColumn(OvershellColumnModel column)
         {
             int slotIndex = _seating.Remove(column);
             _joiner.UntrackJoin(column.Player);
@@ -632,7 +633,7 @@ namespace YARG.Menu.DifficultySelect
             ColumnsChanged?.Invoke();
         }
 
-        public bool AnyOvershellColumnOpen()
+        public bool AnyEverywhereColumnOpen()
         {
             foreach (var column in _seating.Slots)
             {
@@ -653,12 +654,12 @@ namespace YARG.Menu.DifficultySelect
             return false;
         }
 
-        public BandColumnModel ColumnFor(YargPlayer player)
+        public OvershellColumnModel ColumnFor(YargPlayer player)
         {
             return player == null ? FocusedColumn : FindColumn(player);
         }
 
-        public BandColumnModel FindColumn(YargPlayer player)
+        public OvershellColumnModel FindColumn(YargPlayer player)
         {
             return _seating.Find(player);
         }
@@ -696,18 +697,18 @@ namespace YARG.Menu.DifficultySelect
             StartPending = false;
         }
 
-        public void CollectOptions(BandColumnModel column)
+        public void CollectOptions(OvershellColumnModel column)
         {
             column.ExcusableModifiers =
                 PlayerSelectionRules.CollectPossibleModifiers(column.Player.Profile, column.Modifiers);
             PlayerSelectionRules.CollectPossibleDifficulties(column.Player.Profile, Songs, column.Difficulties);
         }
 
-        private void InitializeColumnForMode(BandColumnModel column)
+        private void InitializeColumnForMode(OvershellColumnModel column)
         {
-            if (IsOvershell)
+            if (IsEverywhere)
             {
-                ResetForOvershell(column);
+                ResetForEverywhere(column);
             }
             else
             {
@@ -715,7 +716,7 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
-        private static bool HasRequiredInputDevice(BandColumnModel column)
+        private static bool HasRequiredInputDevice(OvershellColumnModel column)
         {
             if (column.Player.IsMissingMicrophone)
             {
@@ -732,12 +733,12 @@ namespace YARG.Menu.DifficultySelect
             return true;
         }
 
-        private BandColumnModel InsertJoiningColumn(YargPlayer player, BandPlayerJoiner.PendingJoin join,
+        private OvershellColumnModel InsertJoiningColumn(YargPlayer player, PlayerJoiner.PendingJoin join,
             int targetSlotIndex, out int replacedSlotIndex)
         {
-            var model = new BandColumnModel { Player = player };
+            var model = new OvershellColumnModel { Player = player };
             model.IsReady = false;
-            model.ViewStack.SetRoot(BandColumnState.ChooseProfile);
+            model.ViewStack.SetRoot(ColumnState.ChooseProfile);
 
             replacedSlotIndex = _seating.Insert(model, targetSlotIndex);
             _joiner.TrackJoin(player, join);
@@ -746,7 +747,7 @@ namespace YARG.Menu.DifficultySelect
 
         private void ComputeStatus()
         {
-            if (IsOvershell)
+            if (IsEverywhere)
             {
                 FooterText = string.Empty;
                 StartPending = false;
@@ -781,7 +782,7 @@ namespace YARG.Menu.DifficultySelect
             GreenDisabled = columnCount == 0;
         }
 
-        private bool TryAutoSelectInstrument(BandColumnModel column)
+        private bool TryAutoSelectInstrument(OvershellColumnModel column)
         {
             var profile = column.Player.Profile;
             foreach (var candidate in new[] { profile.PreferredInstrument, profile.CurrentInstrument })

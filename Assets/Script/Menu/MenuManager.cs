@@ -2,8 +2,8 @@
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
-using YARG.Menu.DifficultySelect;
 using YARG.Menu.Filters;
+using YARG.Menu.Overshell;
 using YARG.Menu.Persistent;
 using YARG.Menu.Settings;
 using YARG.Player;
@@ -47,7 +47,7 @@ namespace YARG.Menu
         private static Menu _lastOpenMenu = Menu.None;
 
         [SerializeField]
-        private BandSelectMenu _overshellPrefab;
+        private OvershellMenu _overshellPrefab;
 
         public static bool UseOvershell => SettingsManager.Settings.ShowOvershell.Value == OvershellMode.Everywhere;
 
@@ -55,7 +55,7 @@ namespace YARG.Menu
             PlayerContainer.Players.Count <= 0 && SettingsManager.Settings.ShowOvershell.Value == OvershellMode.Off;
 
         private Dictionary<Menu, MenuObject> _menus;
-        private BandSelectMenu _overshell;
+        private OvershellMenu _overshell;
         private MenuObject _overshellHost;
 
         private readonly Stack<Menu> _openMenus = new();
@@ -192,7 +192,7 @@ namespace YARG.Menu
 
             if (_overshell != null)
             {
-                _overshell.SetOvershellHidden(IsOvershellHidden());
+                _overshell.SetHidden(IsOvershellHidden());
             }
         }
 
@@ -229,7 +229,7 @@ namespace YARG.Menu
             }
 
             _overshell.transform.SetAsLastSibling();
-            _overshell.OpenOvershell(CanEngageOvershell);
+            _overshell.OpenEverywhere(CanEngageOvershell);
         }
 
         private static bool CanEngageOvershell()

@@ -17,6 +17,7 @@ using YARG.Helpers.Extensions;
 using YARG.Localization;
 using YARG.Menu.Data;
 using YARG.Menu.Navigation;
+using YARG.Menu.Overshell;
 using YARG.Menu.Persistent;
 using YARG.Menu.ProfileList;
 using YARG.Menu.Filters;
@@ -98,7 +99,7 @@ namespace YARG.Menu.DifficultySelect
         [SerializeField]
         private ModifierItem _modifierItemPrefab;
         [SerializeField]
-        private BandSelectMenu _band;
+        private OvershellMenu _band;
         [SerializeField]
         private TextMeshProUGUI _headerText;
 

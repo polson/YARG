@@ -14,10 +14,10 @@ using YARG.Core.Song;
 using YARG.Helpers;
 using YARG.Helpers.Extensions;
 using YARG.Localization;
-using YARG.Menu.DifficultySelect;
 using YARG.Menu.Filters;
 using YARG.Menu.ListMenu;
 using YARG.Menu.Navigation;
+using YARG.Menu.Overshell;
 using YARG.Menu.Persistent;
 using YARG.Menu.Settings;
 using YARG.Player;
@@ -575,7 +575,7 @@ namespace YARG.Menu.MusicLibrary
         {
             _sidebar.SetCompact(visible);
             _sidebarLayout.padding.bottom = visible
-                ? Mathf.RoundToInt(_helpBarSpacer.preferredHeight + BandSelectMenu.JOIN_STRIP_HEIGHT)
+                ? Mathf.RoundToInt(_helpBarSpacer.preferredHeight + OvershellMenu.JOIN_STRIP_HEIGHT)
                 : 0;
             LayoutRebuilder.MarkLayoutForRebuild((RectTransform) _sidebarLayout.transform);
         }

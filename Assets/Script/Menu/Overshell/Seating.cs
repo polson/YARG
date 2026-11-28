@@ -2,24 +2,24 @@ using System;
 using System.Collections.Generic;
 using YARG.Player;
 
-namespace YARG.Menu.DifficultySelect
+namespace YARG.Menu.Overshell
 {
     /// <summary>
     /// Owns where each band column sits: the ordered slots (a null slot is an empty join slot), which column has
     /// focus, and the seats players return to the next time the band opens.
     /// </summary>
-    internal sealed class BandSeating
+    internal sealed class Seating
     {
         public const int MIN_SLOTS = 4;
 
         private static readonly Dictionary<YargPlayer, int> _savedSeats = new();
 
-        private readonly List<BandColumnModel> _slots = new();
+        private readonly List<OvershellColumnModel> _slots = new();
 
-        public IReadOnlyList<BandColumnModel> Slots => _slots;
+        public IReadOnlyList<OvershellColumnModel> Slots => _slots;
         public int FocusIndex { get; private set; }
 
-        public BandColumnModel FocusedColumn
+        public OvershellColumnModel FocusedColumn
         {
             get
             {
@@ -48,7 +48,7 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// Seats the given columns, putting each player back in their saved seat when it is still free.
         /// </summary>
-        public void SeatColumns(IReadOnlyList<BandColumnModel> columns)
+        public void SeatColumns(IReadOnlyList<OvershellColumnModel> columns)
         {
             FocusIndex = 0;
             var savedSeats = new Dictionary<YargPlayer, int>(_savedSeats);
@@ -61,7 +61,7 @@ namespace YARG.Menu.DifficultySelect
                 _slots.Add(null);
             }
 
-            var unseatedColumns = new List<BandColumnModel>();
+            var unseatedColumns = new List<OvershellColumnModel>();
             foreach (var column in columns)
             {
                 bool hasFreeSavedSeat = savedSeats.TryGetValue(column.Player, out int savedSlotIndex)
@@ -129,7 +129,7 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// Returns the column of the given player, or null.
         /// </summary>
-        public BandColumnModel Find(YargPlayer player)
+        public OvershellColumnModel Find(YargPlayer player)
         {
             if (player == null)
             {
@@ -150,7 +150,7 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// Focuses a column. Returns false if it is not seated or already focused.
         /// </summary>
-        public bool Focus(BandColumnModel column)
+        public bool Focus(OvershellColumnModel column)
         {
             int columnIndex = IndexOfOccupiedColumn(column);
             if (columnIndex < 0 || columnIndex == FocusIndex)
@@ -186,7 +186,7 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// Returns true if the column can swap with the slot next to it in the given direction.
         /// </summary>
-        public bool CanMove(BandColumnModel column, int direction)
+        public bool CanMove(OvershellColumnModel column, int direction)
         {
             int currentSlotIndex = _slots.IndexOf(column);
             int targetSlotIndex = currentSlotIndex + direction;
@@ -196,7 +196,7 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// Swaps the column with the slot next to it, keeping focus on the same column.
         /// </summary>
-        public bool Move(BandColumnModel column, int direction)
+        public bool Move(OvershellColumnModel column, int direction)
         {
             if (!CanMove(column, direction))
             {
@@ -217,7 +217,7 @@ namespace YARG.Menu.DifficultySelect
         /// Seats a new column in the target slot if it is empty, otherwise the first empty slot, otherwise at the
         /// end. Returns the replaced join slot index, or -1 if the column was added at the end.
         /// </summary>
-        public int Insert(BandColumnModel model, int targetSlotIndex)
+        public int Insert(OvershellColumnModel model, int targetSlotIndex)
         {
             int replacedSlotIndex = PlaceColumnInSlot(model, targetSlotIndex);
             int columnIndex = IndexOfOccupiedColumn(model);
@@ -233,7 +233,7 @@ namespace YARG.Menu.DifficultySelect
         /// Removes a column, leaving an empty join slot behind while the band has fewer than the minimum slots.
         /// Returns the slot index it was in, or -1.
         /// </summary>
-        public int Remove(BandColumnModel column)
+        public int Remove(OvershellColumnModel column)
         {
             int slotIndex = _slots.IndexOf(column);
             if (slotIndex < 0)
@@ -254,7 +254,7 @@ namespace YARG.Menu.DifficultySelect
             return slotIndex;
         }
 
-        private BandColumnModel GetOccupiedColumn(int targetColumnIndex)
+        private OvershellColumnModel GetOccupiedColumn(int targetColumnIndex)
         {
             int columnIndex = 0;
             foreach (var slot in _slots)
@@ -275,7 +275,7 @@ namespace YARG.Menu.DifficultySelect
             return null;
         }
 
-        private int IndexOfOccupiedColumn(BandColumnModel target)
+        private int IndexOfOccupiedColumn(OvershellColumnModel target)
         {
             int columnIndex = 0;
             foreach (var slot in _slots)
@@ -296,7 +296,7 @@ namespace YARG.Menu.DifficultySelect
             return -1;
         }
 
-        private int PlaceColumnInSlot(BandColumnModel model, int targetSlotIndex)
+        private int PlaceColumnInSlot(OvershellColumnModel model, int targetSlotIndex)
         {
             if (IsEmptySlot(targetSlotIndex))
             {

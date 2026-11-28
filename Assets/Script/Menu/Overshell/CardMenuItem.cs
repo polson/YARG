@@ -6,9 +6,9 @@ using YARG.Core.Game;
 using YARG.Core.Song;
 using YARG.Menu.MusicLibrary;
 
-namespace YARG.Menu.DifficultySelect
+namespace YARG.Menu.Overshell
 {
-    internal enum BandMenuItemKind
+    internal enum CardMenuItemKind
     {
         Button,
         Label,
@@ -16,7 +16,7 @@ namespace YARG.Menu.DifficultySelect
         Stepper,
     }
 
-    internal enum BandRowStyle
+    internal enum CardRowStyle
     {
         Normal,
         Small,
@@ -27,12 +27,12 @@ namespace YARG.Menu.DifficultySelect
     /// <summary>
     /// Plain data for one row on a band card: what it says, how it looks, and what happens when it is used.
     /// </summary>
-    internal sealed class BandMenuItem
+    internal sealed class CardMenuItem
     {
-        public BandMenuItemKind Kind { get; private set; }
+        public CardMenuItemKind Kind { get; private set; }
         public string Header { get; set; }
         public string Body { get; set; }
-        public BandRowStyle Style { get; set; }
+        public CardRowStyle Style { get; set; }
         public float? Height { get; set; }
         public bool Enabled { get; set; } = true;
         public Color? TextColor { get; set; }
@@ -55,11 +55,11 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// A row that runs <paramref name="picked"/> when confirmed.
         /// </summary>
-        public static BandMenuItem Button(string body, Action picked, bool enabled = true)
+        public static CardMenuItem Button(string body, Action picked, bool enabled = true)
         {
-            return new BandMenuItem
+            return new CardMenuItem
             {
-                Kind = BandMenuItemKind.Button,
+                Kind = CardMenuItemKind.Button,
                 Body = body,
                 Picked = picked,
                 Enabled = enabled,
@@ -69,7 +69,7 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// A row with a small header line above its value.
         /// </summary>
-        public static BandMenuItem Button(string header, string body, Action picked, bool enabled = true)
+        public static CardMenuItem Button(string header, string body, Action picked, bool enabled = true)
         {
             var item = Button(body, picked, enabled);
             item.Header = header;
@@ -79,11 +79,11 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// A row of text that cannot be selected.
         /// </summary>
-        public static BandMenuItem Label(string text)
+        public static CardMenuItem Label(string text)
         {
-            return new BandMenuItem
+            return new CardMenuItem
             {
-                Kind = BandMenuItemKind.Label,
+                Kind = CardMenuItemKind.Label,
                 Body = text,
                 Enabled = false,
             };
@@ -92,11 +92,11 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// An on/off switch that reads its state from <paramref name="isOn"/>.
         /// </summary>
-        public static BandMenuItem Toggle(string label, Func<bool> isOn, Action<bool> toggled)
+        public static CardMenuItem Toggle(string label, Func<bool> isOn, Action<bool> toggled)
         {
-            return new BandMenuItem
+            return new CardMenuItem
             {
-                Kind = BandMenuItemKind.Toggle,
+                Kind = CardMenuItemKind.Toggle,
                 Body = label,
                 IsOn = isOn,
                 Toggled = toggled,
@@ -106,11 +106,11 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// A number row changed with left and right, showing the text from <paramref name="value"/>.
         /// </summary>
-        public static BandMenuItem Stepper(string header, Func<string> value, Action<int> stepped)
+        public static CardMenuItem Stepper(string header, Func<string> value, Action<int> stepped)
         {
-            return new BandMenuItem
+            return new CardMenuItem
             {
-                Kind = BandMenuItemKind.Stepper,
+                Kind = CardMenuItemKind.Stepper,
                 Header = header,
                 Value = value,
                 Stepped = stepped,
@@ -121,29 +121,29 @@ namespace YARG.Menu.DifficultySelect
     /// <summary>
     /// Everything one band card shows for its current screen.
     /// </summary>
-    internal sealed class BandCardContent
+    internal sealed class CardContent
     {
-        private readonly List<BandMenuItem> _items = new();
+        private readonly List<CardMenuItem> _items = new();
 
         public string HeaderText { get; set; }
         public YargProfile HeaderProfile { get; set; }
         public bool HeaderReady { get; set; }
-        public IReadOnlyList<BandMenuItem> Items => _items;
+        public IReadOnlyList<CardMenuItem> Items => _items;
 
         /// <summary>
         /// Selected even when the card is rebuilt on the same screen.
         /// </summary>
-        public BandMenuItem FocusItem { get; set; }
+        public CardMenuItem FocusItem { get; set; }
 
         /// <summary>
         /// Selected when the card opens a screen, unless a previous selection is being restored.
         /// </summary>
-        public BandMenuItem DefaultItem { get; set; }
+        public CardMenuItem DefaultItem { get; set; }
 
         /// <summary>
         /// Adds <paramref name="item"/> to the bottom of the card and returns it.
         /// </summary>
-        public BandMenuItem Add(BandMenuItem item)
+        public CardMenuItem Add(CardMenuItem item)
         {
             _items.Add(item);
             return item;

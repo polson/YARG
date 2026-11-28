@@ -9,9 +9,9 @@ using YARG.Helpers;
 using YARG.Input.Bindings;
 using YARG.Player;
 
-namespace YARG.Menu.DifficultySelect
+namespace YARG.Menu.Overshell
 {
-    internal sealed class BandPlayerJoiner
+    internal sealed class PlayerJoiner
     {
         private static readonly GameMode[] NEW_PROFILE_MODES =
         {
