@@ -19,6 +19,28 @@ namespace YARG.Menu.DifficultySelect
         SettingOptions,
     }
 
+    /// <summary>
+    /// Represents a selectable choice in a band column's generic setting-options submenu.
+    /// </summary>
+    internal readonly struct BandSettingOption
+    {
+        public readonly string Label;
+        public readonly bool Current;
+        public readonly Action Pick;
+
+        public BandSettingOption(string label, bool current, Action pick)
+        {
+            Label = label;
+            Current = current;
+            Pick = pick;
+        }
+    }
+
+    /// <summary>
+    /// Tracks a single player's submenu navigation history (back stack) inside their band column.
+    /// Remembers which row was highlighted before entering a submenu so pressing Back re-highlights it,
+    /// and holds the title and choice list while a generic setting-options submenu is open.
+    /// </summary>
     internal sealed class BandColumnViewStack
     {
         private readonly struct ColumnView
@@ -26,10 +48,10 @@ namespace YARG.Menu.DifficultySelect
             public readonly BandColumnState State;
             public readonly string FocusKey;
             public readonly string SettingTitle;
-            public readonly List<(string Label, bool Current, Action Pick)> SettingOptions;
+            public readonly List<BandSettingOption> SettingOptions;
 
             public ColumnView(BandColumnState state, string focusKey = null, string settingTitle = null,
-                List<(string Label, bool Current, Action Pick)> settingOptions = null)
+                List<BandSettingOption> settingOptions = null)
             {
                 State = state;
                 FocusKey = focusKey;
@@ -43,7 +65,7 @@ namespace YARG.Menu.DifficultySelect
 
         public BandColumnState State => _currentView.State;
         public string SettingTitle => _currentView.SettingTitle;
-        public List<(string Label, bool Current, Action Pick)> SettingOptions => _currentView.SettingOptions;
+        public List<BandSettingOption> SettingOptions => _currentView.SettingOptions;
         public string RestoreFocusKey { get; set; }
         public int Depth => _history.Count;
 
@@ -76,7 +98,7 @@ namespace YARG.Menu.DifficultySelect
         }
 
         public void Push(BandColumnState state, string focusKey = null, string settingTitle = null,
-            List<(string Label, bool Current, Action Pick)> settingOptions = null)
+            List<BandSettingOption> settingOptions = null)
         {
             _history.Push(new ColumnView(_currentView.State, focusKey, _currentView.SettingTitle,
                 _currentView.SettingOptions));

@@ -64,7 +64,7 @@ namespace YARG.Menu.DifficultySelect
 
         public YargPlayer Player => Model.Player;
         public BandColumnState State => Model.State;
-        public bool Ready => Model.Ready;
+        public bool Ready => Model.IsReady;
         public bool IsJoining => Model.IsJoining;
         public bool IsExpanded => Model.IsExpanded;
         public bool IsAtTopLevel => Model.IsAtTopLevel;
@@ -360,7 +360,7 @@ namespace YARG.Menu.DifficultySelect
         private void SetPlayerHeading()
         {
             _content.HeaderProfile = Player.Profile;
-            _content.HeaderReady = Model.Ready;
+            _content.HeaderReady = Model.IsReady;
         }
 
         private void PushView(BandColumnState state, string focusKey)
@@ -451,19 +451,19 @@ namespace YARG.Menu.DifficultySelect
                 return;
             }
 
-            if (Model.Warning != null)
+            if (Model.WarningMessage != null)
             {
-                _content.Add(BandMenuItem.Label(Model.Warning)).TextColor = WARNING_COLOR;
+                _content.Add(BandMenuItem.Label(Model.WarningMessage)).TextColor = WARNING_COLOR;
             }
 
             _readyItem = _content.Add(BandMenuItem.Button(
-                Localize.Key("Menu.DifficultySelect.Band", Model.Ready ? "Unready" : "Ready"),
+                Localize.Key("Menu.DifficultySelect.Band", Model.IsReady ? "Unready" : "Ready"),
                 () => _session.ToggleReady(Model)));
             _readyItem.Style = BandRowStyle.Ready;
 
             AddInstrumentRow();
 
-            bool canPickDifficulty = !Model.Ready && Model.Difficulties.Count > 0;
+            bool canPickDifficulty = !Model.IsReady && Model.Difficulties.Count > 0;
             var difficulty = AddStateRow(Localize.Key("Menu.DifficultySelect.Difficulty"),
                 profile.CurrentDifficulty.ToLocalizedName(), BandColumnState.Difficulty, canPickDifficulty);
             if (canPickDifficulty)
@@ -475,13 +475,13 @@ namespace YARG.Menu.DifficultySelect
             {
                 _content.Add(BandMenuItem.Button(
                     Localize.KeyFormat("Menu.DifficultySelect.Band.Part", profile.HarmonyIndex + 1),
-                    () => _session.CycleHarmonyPart(Model), !Model.Ready));
+                    () => _session.CycleHarmonyPart(Model), !Model.IsReady));
             }
 
             string adjustments = PlayerSelectionRules.BuildAdjustmentsSummary(profile, Model.Modifiers,
                 Model.ExcusableModifiers, out int optionCount);
             AddStateRow(Localize.Key("Menu.DifficultySelect.Adjustments"), adjustments,
-                BandColumnState.Adjustments, !Model.Ready, MultiLineHeight(optionCount));
+                BandColumnState.Adjustments, !Model.IsReady, MultiLineHeight(optionCount));
 
             AddSettingsEntryRow();
             AddPositionRow();
@@ -508,7 +508,7 @@ namespace YARG.Menu.DifficultySelect
         private void AddSettingsEntryRow()
         {
             var row = _content.Add(BandMenuItem.Button(Localize.Key("Menu.DifficultySelect.Band.Settings"),
-                () => PushView(BandColumnState.Settings, nameof(BandColumnState.Settings)), !Model.Ready));
+                () => PushView(BandColumnState.Settings, nameof(BandColumnState.Settings)), !Model.IsReady));
             if (Model.ViewStack.RestoreFocusKey == nameof(BandColumnState.Settings))
             {
                 _content.DefaultItem = row;
@@ -558,7 +558,7 @@ namespace YARG.Menu.DifficultySelect
 
             var row = _content.Add(BandMenuItem.Button(Localize.Key("Menu.DifficultySelect.Instrument"),
                 PlayerSelectionRules.GetInstrumentDisplayName(profile.CurrentInstrument, profile.GameMode),
-                OpenPicker, !Model.Ready));
+                OpenPicker, !Model.IsReady));
             row.Height = height;
 
             if (showRings)
@@ -751,7 +751,7 @@ namespace YARG.Menu.DifficultySelect
         {
             SetPlayerHeading();
             _content.Add(BandMenuItem.Button(Localize.Key("Menu.DifficultySelect.Band.SittingOut"), OpenPicker,
-                !Model.Locked));
+                !Model.IsLocked));
         }
 
         private void BuildSettings()
@@ -788,16 +788,16 @@ namespace YARG.Menu.DifficultySelect
 
             _content.Add(BandMenuItem.Label(Model.ViewStack.SettingTitle)).WrapIfLong = true;
 
-            foreach (var (label, isCurrent, pick) in Model.ViewStack.SettingOptions)
+            foreach (var option in Model.ViewStack.SettingOptions)
             {
-                var row = _content.Add(BandMenuItem.Button(label, () =>
+                var row = _content.Add(BandMenuItem.Button(option.Label, () =>
                 {
-                    pick();
+                    option.Pick();
                     PopView();
                 }));
                 row.WrapIfLong = true;
 
-                if (isCurrent)
+                if (option.Current)
                 {
                     row.TextColor = BandSelectMenu.READY_COLOR;
                     _content.DefaultItem = row;
@@ -861,15 +861,17 @@ namespace YARG.Menu.DifficultySelect
                     break;
                 case ProfileSettingStrings.OPEN_LANE_DISPLAY_TYPE:
                     AddChoiceRow("DedicatedOpenNoteLane", profile.OpenLaneDisplayType.ToLocalizedName(),
-                        ProfileSettingsCatalog.OPEN_LANE_DISPLAY_TYPES.Select(type => (type.ToLocalizedName(),
+                        ProfileSettingsCatalog.OPEN_LANE_DISPLAY_TYPES.Select(type => new BandSettingOption(
+                            type.ToLocalizedName(),
                             type == profile.OpenLaneDisplayType,
-                            (Action) (() => profile.OpenLaneDisplayType = type))));
+                            () => profile.OpenLaneDisplayType = type)));
                     break;
                 case ProfileSettingStrings.DRUM_STAR_POWER_ACTIVATION_TYPE:
                     AddChoiceRow("StarPowerActivationType", profile.StarPowerActivationType.ToLocalizedName(),
-                        ProfileSettingsCatalog.STAR_POWER_ACTIVATION_TYPES.Select(type => (type.ToLocalizedName(),
+                        ProfileSettingsCatalog.STAR_POWER_ACTIVATION_TYPES.Select(type => new BandSettingOption(
+                            type.ToLocalizedName(),
                             type == profile.StarPowerActivationType,
-                            (Action) (() => profile.StarPowerActivationType = type))));
+                            () => profile.StarPowerActivationType = type)));
                     break;
             }
         }
@@ -884,10 +886,10 @@ namespace YARG.Menu.DifficultySelect
 
             string currentName = presets.FirstOrDefault(preset => preset.Id == current)?.Name ?? string.Empty;
             AddChoiceRow(key, currentName, presets.Select(preset =>
-                (preset.Name, preset.Id == current, (Action) (() => pick(preset.Id)))));
+                new BandSettingOption(preset.Name, preset.Id == current, () => pick(preset.Id))));
         }
 
-        private void AddChoiceRow(string key, string value, IEnumerable<(string Label, bool Current, Action Pick)> options)
+        private void AddChoiceRow(string key, string value, IEnumerable<BandSettingOption> options)
         {
             string title = SettingLabel(key);
             var choices = options.ToList();

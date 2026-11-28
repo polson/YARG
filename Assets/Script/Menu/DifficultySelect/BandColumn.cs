@@ -91,8 +91,20 @@ namespace YARG.Menu.DifficultySelect
             public VerticalLayoutGroup AvatarLayout;
         }
 
+        private readonly struct DividerEntry
+        {
+            public readonly Transform Row;
+            public readonly GameObject Divider;
+
+            public DividerEntry(Transform row, GameObject divider)
+            {
+                Row = row;
+                Divider = divider;
+            }
+        }
+
         private readonly List<ShownRow> _shownRows = new();
-        private readonly List<(Transform Row, GameObject Divider)> _dividers = new();
+        private readonly List<DividerEntry> _dividers = new();
         private readonly List<Texture2D> _avatarTextures = new();
 
         private PlayerCardHeader _playerHeader;
@@ -685,7 +697,7 @@ namespace YARG.Menu.DifficultySelect
                     }
                 }
 
-                _dividers.Add((row, divider));
+                _dividers.Add(new DividerEntry(row, divider));
             }
         }
 

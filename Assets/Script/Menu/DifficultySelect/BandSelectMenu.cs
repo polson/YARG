@@ -60,11 +60,23 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
+        private readonly struct CardSnapshot
+        {
+            public readonly float Position;
+            public readonly float Width;
+
+            public CardSnapshot(float position, float width)
+            {
+                Position = position;
+                Width = width;
+            }
+        }
+
         private readonly BandSessionState _session = new();
         private readonly Dictionary<BandColumnModel, BandCardController> _cardsByModel = new();
         private readonly List<BandCardController> _cards = new();
         private readonly List<JoinSlotEntry> _joinSlots = new();
-        private readonly Dictionary<RectTransform, (float Position, float Width)> _cardSnapshotBuffer = new();
+        private readonly Dictionary<RectTransform, CardSnapshot> _cardSnapshotBuffer = new();
         private readonly Dictionary<RectTransform, Tween> _shifts = new();
         private readonly Dictionary<RectTransform, Tween> _resizes = new();
         private readonly List<InputDevice> _pendingJoins = new();
@@ -992,12 +1004,12 @@ namespace YARG.Menu.DifficultySelect
             foreach (var card in _cards)
             {
                 var rect = card.View.Card;
-                _cardSnapshotBuffer[rect] = (CardPosition(rect), rect.sizeDelta.x);
+                _cardSnapshotBuffer[rect] = new CardSnapshot(CardPosition(rect), rect.sizeDelta.x);
             }
 
             foreach (var entry in _joinSlots)
             {
-                _cardSnapshotBuffer[entry.Card] = (CardPosition(entry.Card), entry.Card.sizeDelta.x);
+                _cardSnapshotBuffer[entry.Card] = new CardSnapshot(CardPosition(entry.Card), entry.Card.sizeDelta.x);
             }
         }
 
