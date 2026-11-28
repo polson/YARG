@@ -290,10 +290,7 @@ namespace YARG.Menu.DifficultySelect
                 : Localize.Key("Menu.DifficultySelect.Band.JoinPrompt");
             _joinSlots.UpdateCards(width, joinText);
             ApplyColumnWidthsAndFocus(width);
-            if (!_session.IsOvershell)
-            {
-                UpdateStatus();
-            }
+            UpdateStatus();
         }
 
         private void SyncCardsWithSession()

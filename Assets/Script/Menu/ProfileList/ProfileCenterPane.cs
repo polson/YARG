@@ -233,8 +233,8 @@ namespace YARG.Menu.ProfileList
             _gameModeDropdown.value = _gameModesByIndex.IndexOf(profile.GameMode);
             _starPowerActivationTypeDropdown.value = _starPowerActivationTypesByIndex
                 .IndexOf(profile.StarPowerActivationType);
-            _noteSpeedField.text = profile.NoteSpeed.ToString(ProfilesMenu.NUMBER_FORMAT, CultureInfo.CurrentCulture);
-            _highwayLengthField.text = profile.HighwayLength.ToString(ProfilesMenu.NUMBER_FORMAT, CultureInfo.CurrentCulture);
+            _noteSpeedField.text = profile.NoteSpeed.ToString(ProfileSettingsCatalog.NUMBER_FORMAT, CultureInfo.CurrentCulture);
+            _highwayLengthField.text = profile.HighwayLength.ToString(ProfileSettingsCatalog.NUMBER_FORMAT, CultureInfo.CurrentCulture);
             _inputCalibrationField.text = Profile.InputCalibrationMilliseconds.ToString();
             _leftyFlipToggle.isOn = profile.LeftyFlip;
             _rangeDisabledToggle.isOn = profile.RangeEnabled;
@@ -474,7 +474,7 @@ namespace YARG.Menu.ProfileList
             }
 
             // Always format it after
-            _noteSpeedField.text = Profile.NoteSpeed.ToString(ProfilesMenu.NUMBER_FORMAT, CultureInfo.CurrentCulture);
+            _noteSpeedField.text = Profile.NoteSpeed.ToString(ProfileSettingsCatalog.NUMBER_FORMAT, CultureInfo.CurrentCulture);
         }
 
         public void ChangeHighwayLength()
@@ -485,7 +485,7 @@ namespace YARG.Menu.ProfileList
             }
 
             // Always format it after
-            _highwayLengthField.text = Profile.HighwayLength.ToString(ProfilesMenu.NUMBER_FORMAT, CultureInfo.CurrentCulture);
+            _highwayLengthField.text = Profile.HighwayLength.ToString(ProfileSettingsCatalog.NUMBER_FORMAT, CultureInfo.CurrentCulture);
         }
 
         public void ChangeInputCalibration()

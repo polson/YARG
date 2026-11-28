@@ -133,6 +133,30 @@ namespace YARG.Player
             return _profilesById.GetValueOrDefault(id);
         }
 
+        /// <summary>
+        /// Returns <paramref name="profileName"/>, or that name with the lowest free number appended if a profile
+        /// already uses it.
+        /// </summary>
+        public static string GetUniqueProfileName(string profileName)
+        {
+            var existingNames = Profiles.Select(p => p.Name);
+
+            if (!existingNames.Contains(profileName))
+            {
+                return profileName;
+            }
+
+            int count = 1;
+            string newName;
+            do
+            {
+                newName = $"{profileName} {count}";
+                count++;
+            } while (existingNames.Contains(newName));
+
+            return newName;
+        }
+
         public static bool IsProfileTaken(YargProfile profile)
         {
             return _playersByProfile.ContainsKey(profile);

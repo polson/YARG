@@ -10,6 +10,7 @@ namespace YARG.Menu.ProfileList
 {
     public static class ProfileSettingsCatalog
     {
+        public const string NUMBER_FORMAT = "0.0###";
         public const float NOTE_SPEED_MIN = 0f;
         public const float NOTE_SPEED_MAX = 100f;
         public const float NOTE_SPEED_STEP = 0.5f;

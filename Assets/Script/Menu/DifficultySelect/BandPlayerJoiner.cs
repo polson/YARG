@@ -7,7 +7,6 @@ using YARG.Core.Extensions;
 using YARG.Core.Game;
 using YARG.Helpers;
 using YARG.Input.Bindings;
-using YARG.Menu.ProfileList;
 using YARG.Player;
 
 namespace YARG.Menu.DifficultySelect
@@ -207,7 +206,7 @@ namespace YARG.Menu.DifficultySelect
             var instrument = mode.PossibleInstruments()[0];
             var profile = new YargProfile
             {
-                Name = ProfilesMenu.GetUniqueProfileName("New Profile"),
+                Name = PlayerContainer.GetUniqueProfileName("New Profile"),
                 NoteSpeed = 5,
                 HighwayLength = 1,
                 GameMode = mode,

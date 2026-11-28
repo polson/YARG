@@ -25,8 +25,6 @@ namespace YARG.Menu.ProfileList
 {
     public class ProfilesMenu : MonoBehaviour
     {
-        public const string NUMBER_FORMAT = "0.0###";
-
         private const string PROFILES_TAB = "profiles";
         private const string BINDINGS_TAB = "bindings";
         public const string YARGBINDS_EXTENSION = "yargbinds";
@@ -285,31 +283,11 @@ namespace YARG.Menu.ProfileList
             }
         }
 
-        public static string GetUniqueProfileName(string profileName)
-        {
-            var existingNames = PlayerContainer.Profiles.Select(p => p.Name);
-
-            if (!existingNames.Contains(profileName))
-            {
-                return profileName;
-            }
-
-            int count = 1;
-            string newName;
-            do
-            {
-                newName = $"{profileName} {count}";
-                count++;
-            } while (existingNames.Contains(newName));
-
-            return newName;
-        }
-
         public void AddProfile()
         {
             PlayerContainer.AddProfile(new YargProfile
             {
-                Name = GetUniqueProfileName("New Profile"),
+                Name = PlayerContainer.GetUniqueProfileName("New Profile"),
                 NoteSpeed = 5,
                 HighwayLength = 1,
                 GameMode = GameMode.FiveFretGuitar
@@ -322,7 +300,7 @@ namespace YARG.Menu.ProfileList
         {
             PlayerContainer.AddProfile(new YargProfile
             {
-                Name = GetUniqueProfileName("Bot"),
+                Name = PlayerContainer.GetUniqueProfileName("Bot"),
                 NoteSpeed = 5,
                 HighwayLength = 1,
                 GameMode = GameMode.FiveFretGuitar,

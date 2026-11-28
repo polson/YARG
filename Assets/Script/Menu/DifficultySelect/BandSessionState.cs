@@ -39,19 +39,7 @@ namespace YARG.Menu.DifficultySelect
         /// </summary>
         public event Action RebuildRequested;
 
-        /// <summary>
-        /// Raised when this collapsed overshell column opens.
-        /// </summary>
-        public event Action Expanded;
-
-        /// <summary>
-        /// Raised when this column switches between ready and not ready.
-        /// </summary>
-        public event Action ReadyChanged;
-
         public void RequestRebuild() => RebuildRequested?.Invoke();
-        public void NotifyExpanded() => Expanded?.Invoke();
-        public void NotifyReadyChanged() => ReadyChanged?.Invoke();
     }
 
     internal readonly struct JoinedColumn
@@ -291,7 +279,6 @@ namespace YARG.Menu.DifficultySelect
             }
 
             column.IsManuallyCollapsed = false;
-            column.NotifyExpanded();
             return true;
         }
 
@@ -409,7 +396,6 @@ namespace YARG.Menu.DifficultySelect
             column.WarningMessage = null;
             column.IsManuallyCollapsed = false;
             column.IsReady = !column.IsReady;
-            column.NotifyReadyChanged();
             SyncColumnsAndSlots();
             return true;
         }
