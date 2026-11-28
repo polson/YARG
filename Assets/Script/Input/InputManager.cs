@@ -31,6 +31,8 @@ namespace YARG.Input
 
         public static event MenuInputEvent MenuInput;
 
+        public static Func<InputDevice, bool> UnclaimedDevicePressed;
+
         private static double _latestInputTime;
 
         /// <summary>
@@ -65,6 +67,7 @@ namespace YARG.Input
         private static bool _gameFocused;
         private static bool _focusChanged;
         private static HashSet<InputDevice> _backgroundDisabledDevices = new();
+        private static readonly List<YargPlayer> _playersToUpdate = new();
 
         public static bool SuppressDeviceToasts { get; set; } = false;
 
@@ -120,11 +123,19 @@ namespace YARG.Input
             InputSystem.onDeviceChange -= OnDeviceChange;
         }
 
-        public static void RegisterPlayer(YargPlayer player)
+        public static void RegisterMenuInput(YargPlayer player)
         {
             player.MenuInput += OnMenuInput;
+        }
 
-            foreach (var device in player.DeviceInfo.Controllers)
+        public static void UnregisterMenuInput(YargPlayer player)
+        {
+            player.MenuInput -= OnMenuInput;
+        }
+
+        internal static void RegisterDevices(IEnumerable<InputDevice> devices)
+        {
+            foreach (var device in devices)
             {
                 if (!_registeredDevices.Add(device))
                 {
@@ -133,17 +144,25 @@ namespace YARG.Input
             }
         }
 
-        public static void UnregisterPlayer(YargPlayer player)
+        internal static void UnregisterDevices(IEnumerable<InputDevice> devices)
         {
-            player.MenuInput -= OnMenuInput;
-
-            foreach (var device in player.DeviceInfo.Controllers)
+            foreach (var device in devices)
             {
                 if (!_registeredDevices.Remove(device))
                 {
                     YargLogger.LogFormatError("Player not registered with device: {0}", device);
                 }
             }
+        }
+
+        internal static void RegisterDevice(InputDevice device)
+        {
+            _registeredDevices.Add(device);
+        }
+
+        internal static void UnregisterDevice(InputDevice device)
+        {
+            _registeredDevices.Remove(device);
         }
 
         public static void OnMenuAction(MenuAction action, bool pressed)
@@ -185,13 +204,13 @@ namespace YARG.Input
             }
 
             // Update bindings using the input update time
-            using (var players = PlayerContainer.PlayerEnumerator)
+            _playersToUpdate.Clear();
+            _playersToUpdate.AddRange(PlayerContainer.Players);
+            foreach (var player in _playersToUpdate)
             {
-                while (players.MoveNext())
-                {
-                    players.Current.DeviceInfo.UpdateBindingsForFrame(InputUpdateTime);
-                }
+                player.DeviceInfo?.UpdateBindingsForFrame(InputUpdateTime);
             }
+            _playersToUpdate.Clear();
 
             // Remove any devices that happened to be actually disabled
             // right as the game focus changed
@@ -258,20 +277,33 @@ namespace YARG.Input
                 // Don't ask me why, but we get events with no controls changed, so we have to check that there
                 // was a change in addition to checking if it was a noisy control that did change
                 bool controlChanged = false;
+                bool buttonPressed = false;
 
                 foreach (var control in eventPtr.EnumerateChangedControls())
                 {
-                    if (control.noisy || control is not ButtonControl)
+                    if (control.noisy || control is not ButtonControl button)
                     {
                         continue;
                     }
                     controlChanged = true;
-                    break;
+
+                    if (button.IsValueConsideredPressed(button.ReadValueFromEvent(eventPtr)))
+                    {
+                        buttonPressed = true;
+                        break;
+                    }
                 }
 
                 if (controlChanged)
                 {
-                    eventPtr.handled = PlayerContainer.TryConnectProfile(device);
+                    if (UnclaimedDevicePressed == null)
+                    {
+                        eventPtr.handled = PlayerContainer.TryConnectProfile(device);
+                    }
+                    else if (buttonPressed)
+                    {
+                        eventPtr.handled = UnclaimedDevicePressed(device);
+                    }
                 }
             }
 

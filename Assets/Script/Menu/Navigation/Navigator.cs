@@ -118,6 +118,8 @@ namespace YARG.Menu.Navigation
 
         public event Action<NavigationContext> NavigationEvent;
 
+        public Func<NavigationContext, bool> InputInterceptor;
+
         private readonly List<RepeatContext> _repeatInputs = new();
         private readonly List<NavigationHold> _holdInputs = new();
         private readonly Stack<NavigationScheme> _schemeStack = new();
@@ -249,6 +251,16 @@ namespace YARG.Menu.Navigation
                 return;
             }
 
+            if (InputInterceptor?.Invoke(context) == true)
+            {
+                if (RepeatActions.Contains(context.Action))
+                {
+                    _repeatInputs.Add(new RepeatContext(context));
+                }
+
+                return;
+            }
+
             if (_schemeStack.Count > 0 &&
                 _schemeStack.Peek().TryGetHoldSeconds(context.Action, out var holdSeconds))
             {
@@ -332,7 +344,7 @@ namespace YARG.Menu.Navigation
 
         private void InvokeNavigationEvent(NavigationContext ctx)
         {
-            if (ShouldBlockInputs())
+            if (ShouldBlockInputs() || InputInterceptor?.Invoke(ctx) == true)
             {
                 return;
             }
@@ -360,7 +372,7 @@ namespace YARG.Menu.Navigation
 
         private void InvokeHoldEvent(NavigationContext ctx)
         {
-            if (ShouldBlockInputs())
+            if (ShouldBlockInputs() || InputInterceptor?.Invoke(ctx) == true)
             {
                 return;
             }

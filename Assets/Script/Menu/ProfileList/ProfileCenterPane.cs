@@ -23,30 +23,6 @@ namespace YARG.Menu.ProfileList
 {
     public class ProfileCenterPane : MonoBehaviour
     {
-        private static readonly GameMode[] _gameModes =
-        {
-            GameMode.FiveFretGuitar,
-            GameMode.SixFretGuitar,
-            GameMode.EliteDrums,
-            GameMode.FourLaneDrums,
-            GameMode.FiveLaneDrums,
-            GameMode.Vocals,
-            GameMode.ProKeys
-        };
-
-        private static readonly StarPowerActivationType[] _starPowerActivationTypes =
-        {
-            StarPowerActivationType.RightmostNote,
-            StarPowerActivationType.AllNotes,
-        };
-
-        private static readonly OpenLaneDisplayType[] _openLaneDisplayTypes =
-        {
-            OpenLaneDisplayType.Never,
-            OpenLaneDisplayType.IfChartContainsOpens,
-            OpenLaneDisplayType.Always,
-        };
-
         [SerializeField]
         private GameObject _contents;
         [SerializeField]
@@ -155,7 +131,7 @@ namespace YARG.Menu.ProfileList
         {
             // Setup dropdown items
             _gameModeDropdown.options.Clear();
-            foreach (var gameMode in _gameModes)
+            foreach (var gameMode in ProfileSettingsCatalog.GAME_MODES)
             {
                 _gameModesByIndex.Add(gameMode);
 
@@ -197,14 +173,14 @@ namespace YARG.Menu.ProfileList
 
             // Set drum star power activation type
             _starPowerActivationTypeDropdown.options.Clear();
-            foreach (var starPowerActivationType in _starPowerActivationTypes)
+            foreach (var starPowerActivationType in ProfileSettingsCatalog.STAR_POWER_ACTIVATION_TYPES)
             {
                 _starPowerActivationTypesByIndex.Add(starPowerActivationType);
                 _starPowerActivationTypeDropdown.options.Add(new(starPowerActivationType.ToLocalizedName()));
             }
 
             _openLaneDisplayTypeDropdown.options.Clear();
-            foreach (var openLaneDisplayType in _openLaneDisplayTypes)
+            foreach (var openLaneDisplayType in ProfileSettingsCatalog.OPEN_LANE_DISPLAY_TYPES)
             {
                 _openLaneDisplayTypesByIndex.Add(openLaneDisplayType);
                 _openLaneDisplayTypeDropdown.options.Add(new(openLaneDisplayType.ToLocalizedName()));
@@ -213,27 +189,13 @@ namespace YARG.Menu.ProfileList
 
         private void RemoveUnusedDropdownOptions(YargProfile profile)
         {
-            // TODO: Refactor presets so that this doesn't have to be so tightly coupled to the preset implementation
-            //  We could use reflection to figure out what each alternate default changes and only show ones that
-            //  change something relevant to the profile's game mode
-
-            // Solo Taps only changes FiveFretGuitar
-            if (profile.GameMode is not GameMode.FiveFretGuitar)
+            for (int i = _enginePresetsByIndex.Count - 1; i >= 0; i--)
             {
-                RemoveDropdownOption(_engineDropdown, _enginePresetsByIndex, EnginePreset.SoloTaps.Id);
-            }
-
-            // Casual only changes FiveFretGuitar, SixFretGuitar, and Vocals
-            if (profile.GameMode is not (GameMode.FiveFretGuitar or GameMode.Vocals or GameMode.SixFretGuitar))
-            {
-                RemoveDropdownOption(_engineDropdown, _enginePresetsByIndex, EnginePreset.Casual.Id);
-            }
-
-            // Pro keys isn't changed by anything, apparently
-            if (profile.GameMode is GameMode.ProKeys)
-            {
-                // We will have necessarily already removed SoloTaps and Casual, so removing Precision removes all but Default
-                RemoveDropdownOption(_engineDropdown, _enginePresetsByIndex, EnginePreset.Precision.Id);
+                if (!ProfileSettingsCatalog.IsEngineAllowed(profile.GameMode, _enginePresetsByIndex[i]))
+                {
+                    _engineDropdown.options.RemoveAt(i);
+                    _enginePresetsByIndex.RemoveAt(i);
+                }
             }
         }
 
@@ -271,8 +233,8 @@ namespace YARG.Menu.ProfileList
             _gameModeDropdown.value = _gameModesByIndex.IndexOf(profile.GameMode);
             _starPowerActivationTypeDropdown.value = _starPowerActivationTypesByIndex
                 .IndexOf(profile.StarPowerActivationType);
-            _noteSpeedField.text = profile.NoteSpeed.ToString(ProfilesMenu.NUMBER_FORMAT, CultureInfo.CurrentCulture);
-            _highwayLengthField.text = profile.HighwayLength.ToString(ProfilesMenu.NUMBER_FORMAT, CultureInfo.CurrentCulture);
+            _noteSpeedField.text = profile.NoteSpeed.ToString(ProfileSettingsCatalog.NUMBER_FORMAT, CultureInfo.CurrentCulture);
+            _highwayLengthField.text = profile.HighwayLength.ToString(ProfileSettingsCatalog.NUMBER_FORMAT, CultureInfo.CurrentCulture);
             _inputCalibrationField.text = Profile.InputCalibrationMilliseconds.ToString();
             _leftyFlipToggle.isOn = profile.LeftyFlip;
             _rangeDisabledToggle.isOn = profile.RangeEnabled;
@@ -367,7 +329,7 @@ namespace YARG.Menu.ProfileList
                 {
                     child.gameObject.SetActive(false);
                 }
-                else if (Profile.IsBot && ProfileSettingsIrrelevantToBots.Contains(settingInfo.Value.setting))
+                else if (Profile.IsBot && ProfileSettingsCatalog.BOT_IRRELEVANT_SETTINGS.Contains(settingInfo.Value.setting))
                 {
                     child.gameObject.SetActive(false);
                 }
@@ -493,13 +455,9 @@ namespace YARG.Menu.ProfileList
 
         public void ChangeGameMode()
         {
-            Profile.GameMode = _gameModesByIndex[_gameModeDropdown.value];
+            ProfileSettingsCatalog.ApplyGameModeDefaults(Profile, _gameModesByIndex[_gameModeDropdown.value]);
             var player = PlayerContainer.GetPlayerFromProfile(Profile);
             player.DeviceInfo.RefreshGameMode();
-
-            // Set the player's instrument to the foremost of their new game mode's possible instruments. This prevents scenarios like
-            // a brand new Keys profile defaulting to 5L Lead Guitar instead of Pro Keys
-            Profile.CurrentInstrument = Profile.GameMode.PossibleInstruments()[0];
 
             _profileView.UpdateDisplay(Profile);
             FiltersMenu.ResetIntensityFiltersForProfile(Profile);
@@ -512,22 +470,22 @@ namespace YARG.Menu.ProfileList
         {
             if (float.TryParse(_noteSpeedField.text, out var speed))
             {
-                Profile.NoteSpeed = Mathf.Clamp(speed, 0f, 100f);
+                Profile.NoteSpeed = ProfileSettingsCatalog.ClampNoteSpeed(speed);
             }
 
             // Always format it after
-            _noteSpeedField.text = Profile.NoteSpeed.ToString(ProfilesMenu.NUMBER_FORMAT, CultureInfo.CurrentCulture);
+            _noteSpeedField.text = Profile.NoteSpeed.ToString(ProfileSettingsCatalog.NUMBER_FORMAT, CultureInfo.CurrentCulture);
         }
 
         public void ChangeHighwayLength()
         {
             if (float.TryParse(_highwayLengthField.text, out var speed))
             {
-                Profile.HighwayLength = Mathf.Clamp(speed, 0.001f, 10f);
+                Profile.HighwayLength = ProfileSettingsCatalog.ClampHighwayLength(speed);
             }
 
             // Always format it after
-            _highwayLengthField.text = Profile.HighwayLength.ToString(ProfilesMenu.NUMBER_FORMAT, CultureInfo.CurrentCulture);
+            _highwayLengthField.text = Profile.HighwayLength.ToString(ProfileSettingsCatalog.NUMBER_FORMAT, CultureInfo.CurrentCulture);
         }
 
         public void ChangeInputCalibration()
@@ -645,12 +603,5 @@ namespace YARG.Menu.ProfileList
         {
             Profile.RockMeterPreset = _rockmeterPresetsByIndex[_rockMeterPresetDropdown.value];
         }
-
-        private static HashSet<string> ProfileSettingsIrrelevantToBots = new()
-        {
-            ProfileSettingStrings.CONTROLLERS,
-            ProfileSettingStrings.MICROPHONES,
-            ProfileSettingStrings.INPUT_CALIBRATION
-        };
     }
 }

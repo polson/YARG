@@ -21,6 +21,13 @@ namespace YARG.Menu.MusicLibrary
 {
     public class Sidebar : MonoBehaviour
     {
+        private const float ALBUM_COVER_HEIGHT = 500f;
+        private const float COMPACT_ALBUM_COVER_HEIGHT = 431f;
+        private const float SOURCE_ROW_HEIGHT = 45f;
+        private const float COMPACT_SOURCE_ROW_HEIGHT = 38f;
+        private const float SOURCE_ROWS_HEIGHT = 105f;
+        private const float SOURCE_ROWS_SPACING = 15f;
+
         [SerializeField]
         private Transform _difficultyRingsTopContainer;
         [SerializeField]
@@ -183,6 +190,7 @@ namespace YARG.Menu.MusicLibrary
             }
 
             UpdatePlayButtonLabel(_musicLibraryMenu.ShowPlaylist.Count > 0);
+            _musicLibraryMenu.RefreshGreenHint();
             RefreshFavoriteState();
         }
 
@@ -517,8 +525,39 @@ namespace YARG.Menu.MusicLibrary
             }
         }
 
+        public void SetCompact(bool compact)
+        {
+            _albumCover.transform.parent.GetComponent<LayoutElement>().preferredHeight =
+                compact ? COMPACT_ALBUM_COVER_HEIGHT : ALBUM_COVER_HEIGHT;
+
+            float rowHeight = compact ? COMPACT_SOURCE_ROW_HEIGHT : SOURCE_ROW_HEIGHT;
+            foreach (var row in new[] { _sourceContainer, _charterContainer })
+            {
+                row.GetComponent<LayoutElement>().preferredHeight = rowHeight;
+                var rect = (RectTransform) row.transform;
+                rect.sizeDelta = new Vector2(rect.sizeDelta.x, rowHeight);
+            }
+
+            var sourceRows = _sourceContainer.transform.parent;
+            var sourceRowsElement = sourceRows.GetComponent<LayoutElement>();
+            sourceRowsElement.preferredHeight = compact ? -1f : SOURCE_ROWS_HEIGHT;
+            sourceRowsElement.minHeight = compact ? -1f : SOURCE_ROWS_HEIGHT;
+
+            var sourceRowsLayout = sourceRows.GetComponent<VerticalLayoutGroup>();
+            sourceRowsLayout.spacing = compact ? 0f : SOURCE_ROWS_SPACING;
+            sourceRowsLayout.childControlHeight = compact;
+            sourceRowsLayout.childForceExpandHeight = !compact;
+        }
+
         public void UpdatePlayButtonLabel(bool setListNotEmpty)
         {
+            bool visible = !MenuManager.UseOvershell;
+            _playButton.transform.parent.gameObject.SetActive(visible);
+            if (!visible)
+            {
+                return;
+            }
+
             string key;
             bool enableButton;
             Action<NavigationContext> holdHandler = null;

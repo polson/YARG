@@ -357,7 +357,30 @@
             "Disconnect": "Disconnect",
             "Done": "Done",
             "WarningPlayerNoInputDevice": "This player has no input device assigned! Assign one from the Profiles menu.",
-            "WarningVocalistNoMicrophone": "This vocalist has no microphone assigned! Assign one from the Profiles menu."
+            "WarningVocalistNoMicrophone": "This vocalist has no microphone assigned! Assign one from the Profiles menu.",
+            "Band": {
+                "Title": "Select Difficulty",
+                "JoinPrompt": "Press to Join",
+                "Full": "Full ({0} of {0})",
+                "ChooseProfile": "Choose Profile",
+                "NoPlayableInstruments": "No playable instruments",
+                "NoBinding": "(no binding)",
+                "NeedsMicrophone": "(no microphone)",
+                "NeedsController": "(no controller)",
+                "SingersMustMatch": "(singers must match)",
+                "NoMicrophone": "No microphone assigned",
+                "NoController": "No controller assigned",
+                "Ready": "Ready",
+                "Unready": "Unready",
+                "SittingOut": "Sitting Out",
+                "DropOut": "Drop Out",
+                "Position": "Position",
+                "Settings": "Settings",
+                "MoveLeft": "Move Left",
+                "MoveRight": "Move Right",
+                "Part": "Part {0}",
+                "NobodyPlaying": "Everyone is sitting out"
+            }
         },
         "GameModes": {
             "Options": {
@@ -2266,6 +2289,15 @@
             "SaveScoresWithBots": {
                 "Name": "Save Scores with Bots",
                 "Description": "Allows score saving when playing with bots. Only human scores are recorded. Bot scores are excluded."
+            },
+            "ShowOvershell": {
+                "Name": "Show Overshell",
+                "Description": "Shows a column per player along the bottom of the screen. Players join by pressing a button on their controller, and the song starts once everyone is ready. Everywhere shows it in the music library and difficulty select, Difficulty Select shows it only on the difficulty select screen.",
+                "Dropdown": {
+                    "Everywhere": "Everywhere",
+                    "DifficultySelect": "Difficulty Select",
+                    "Off": "Off"
+                }
             },
             "SfxVolume": {
                 "Name": "SFX Volume",

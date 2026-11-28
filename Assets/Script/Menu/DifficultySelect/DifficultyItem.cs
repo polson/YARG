@@ -9,6 +9,9 @@ namespace YARG.Menu.DifficultySelect
 {
     public class DifficultyItem : MonoBehaviour
     {
+        private const float MIN_SHRINK = 0.5f;
+        private const float TINY_FONT_SIZE = 4f;
+
         [SerializeField]
         private TextMeshProUGUI _header;
         [SerializeField]
@@ -18,6 +21,10 @@ namespace YARG.Menu.DifficultySelect
         private Image _selectionFill;
         [SerializeField]
         private CanvasGroup _canvasGroup;
+        [SerializeField]
+        private Image _avatar;
+
+        private Color? _bodyColor;
 
         [field: SerializeField]
         public NavigatableButton Button { get; private set; }
@@ -102,6 +109,89 @@ namespace YARG.Menu.DifficultySelect
         public void SetSelectionFill(Color fillColor)
         {
             _selectionFill.color = fillColor;
+        }
+
+        public void SetTextColor(Color color)
+        {
+            _header.color = color;
+            _body.color = color;
+        }
+
+        public void UseCompactText(float fontSize)
+        {
+            UseCompactText(fontSize, fontSize);
+        }
+
+        public void UseCompactText(float headerSize, float bodySize)
+        {
+            ShrinkToFit(_header, headerSize);
+            ShrinkToFit(_body, bodySize);
+        }
+
+        public void SetBody(string body)
+        {
+            _body.text = body;
+        }
+
+        public void SetBodyColor(Color? color)
+        {
+            _bodyColor ??= _body.color;
+            _body.color = color ?? _bodyColor.Value;
+        }
+
+        public bool WrapIfLong()
+        {
+            var label = _body.gameObject.activeSelf ? _body : _header;
+            if (label.textWrappingMode != TextWrappingModes.NoWrap)
+            {
+                return false;
+            }
+
+            float width = label.rectTransform.rect.width;
+            if (width <= 0f || label.GetPreferredValues(label.text).x <= width)
+            {
+                return false;
+            }
+
+            label.textWrappingMode = TextWrappingModes.Normal;
+            return true;
+        }
+
+        public void AllowTinyText()
+        {
+            _header.fontSizeMin = TINY_FONT_SIZE;
+            _body.fontSizeMin = TINY_FONT_SIZE;
+        }
+
+        public void UseWrappedText()
+        {
+            _header.fontSizeMin = TINY_FONT_SIZE;
+            _header.textWrappingMode = TextWrappingModes.Normal;
+            _header.overflowMode = TextOverflowModes.Overflow;
+        }
+
+        public void SetAvatar(Sprite sprite, bool flipped)
+        {
+            _avatar.sprite = sprite;
+            _avatar.rectTransform.localScale = new Vector3(1f, flipped ? -1f : 1f, 1f);
+        }
+
+        public void FitAvatar(float rowHeight, float size, float margin)
+        {
+            var rect = (RectTransform) _avatar.rectTransform.parent;
+            rect.sizeDelta = new Vector2(rect.sizeDelta.x, size - rowHeight);
+            rect.anchoredPosition = new Vector2(margin, rect.anchoredPosition.y);
+            AllowTinyText();
+        }
+
+        private static void ShrinkToFit(TextMeshProUGUI label, float fontSize)
+        {
+            label.fontSize = fontSize;
+            label.fontSizeMax = fontSize;
+            label.fontSizeMin = fontSize * MIN_SHRINK;
+            label.enableAutoSizing = true;
+            label.textWrappingMode = TextWrappingModes.NoWrap;
+            label.overflowMode = TextOverflowModes.Ellipsis;
         }
     }
 }

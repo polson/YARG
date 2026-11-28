@@ -44,6 +44,7 @@ namespace YARG.Input
         private readonly Dictionary<InputDevice, ReusableBindingSet> _selectedGameplayBindings = new();
         private readonly Dictionary<InputDevice, RuntimeBindingSet> _activeGameplayRuntimeBindings = new();
         private readonly Dictionary<InputDevice, RuntimeBindingSet> _activeMenuRuntimeBindings = new();
+        private readonly List<RuntimeBindingSet> _bindingsToUpdate = new();
         private readonly Dictionary<(GameMode mode, ControllerFamily controllerFamily), ReusableBindingSet> _preferredBindsByContext = new();
         public IEnumerable<ReusableBindingSet> AllPreferredBindingSets => _preferredBindsByContext.Values;
         public IEnumerable<ReusableBindingSet> BindingSetsInUse {
@@ -691,10 +692,27 @@ namespace YARG.Input
             _menuInputAggregator.UnsuppressController();
         }
 
+        public bool HasGameplayBindingsForMode(GameMode mode)
+        {
+            foreach (var controller in _controllers)
+            {
+                if (GetBindingSetForController(controller, mode) is not null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private ReusableBindingSet GetBindingSetForController(InputDevice controller, bool menu)
         {
+            return GetBindingSetForController(controller, menu ? GameMode.Menu : Profile.GameMode);
+        }
+
+        private ReusableBindingSet GetBindingSetForController(InputDevice controller, GameMode mode)
+        {
             var family = LayoutHelper.InputDeviceToControllerFamily(controller);
-            var mode = menu ? GameMode.Menu : Profile.GameMode;
 
             if (_preferredBindsByContext.TryGetValue((mode, family), out var preferredBindingSet))
             {
@@ -759,15 +777,16 @@ namespace YARG.Input
 
         public void UpdateBindingsForFrame(double updateTime)
         {
-            foreach (var bindings in _activeGameplayRuntimeBindings.Values)
+            _bindingsToUpdate.Clear();
+            _bindingsToUpdate.AddRange(_activeGameplayRuntimeBindings.Values);
+            _bindingsToUpdate.AddRange(_activeMenuRuntimeBindings.Values);
+
+            foreach (var bindings in _bindingsToUpdate)
             {
                 bindings.UpdateBindingsForFrame(updateTime);
             }
 
-            foreach (var bindings in _activeMenuRuntimeBindings.Values)
-            {
-                bindings.UpdateBindingsForFrame(updateTime);
-            }
+            _bindingsToUpdate.Clear();
 
             _gameplayInputAggregator.UpdateForFrame(updateTime);
             _menuInputAggregator.UpdateForFrame(updateTime);

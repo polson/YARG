@@ -26,6 +26,7 @@ namespace YARG.Menu.Persistent
         private readonly List<HelpBarButton> _buttons = new();
         private HelpBarButton _directionButton;
         private MenuAction? _verticalDirectionsModifier;
+        private NavigationScheme _scheme;
 
         protected override void SingletonAwake()
         {
@@ -48,6 +49,7 @@ namespace YARG.Menu.Persistent
         {
             _directionButton = null;
             _verticalDirectionsModifier = null;
+            _scheme = null;
             foreach (var button in _buttons)
             {
                 button.gameObject.SetActive(false);
@@ -63,6 +65,7 @@ namespace YARG.Menu.Persistent
         public void SetInfoFromScheme(NavigationScheme scheme)
         {
             ResetHelpBar();
+            _scheme = scheme;
             _verticalDirectionsModifier = scheme.VerticalDirectionsModifier;
 
             // Show/hide music player
@@ -124,6 +127,10 @@ namespace YARG.Menu.Persistent
                 var button = _buttons[buttonIndex];
                 button.gameObject.SetActive(true);
                 button.SetInfoFromSchemeEntry(entry);
+                if (scheme.IsActionDisabled(entry.Action))
+                {
+                    button.DisableButton(false);
+                }
 
                 buttonIndex++;
             }
@@ -146,6 +153,54 @@ namespace YARG.Menu.Persistent
             }
 
             gameObject.SetActive(true);
+        }
+
+        public void RefreshEntry(NavigationScheme scheme, NavigationScheme.Entry entry)
+        {
+            if (scheme != _scheme || scheme.SuppressHelpBar || entry.Hide)
+            {
+                return;
+            }
+
+            foreach (var button in _buttons)
+            {
+                if (button.gameObject.activeSelf && button.Action == entry.Action)
+                {
+                    button.SetInfoFromSchemeEntry(entry);
+                    if (scheme.IsActionDisabled(entry.Action))
+                    {
+                        button.DisableButton(false);
+                    }
+
+                    return;
+                }
+            }
+        }
+
+        public void RefreshDisabledActions(NavigationScheme scheme)
+        {
+            if (scheme != _scheme)
+            {
+                return;
+            }
+
+            foreach (var button in _buttons)
+            {
+                if (!button.gameObject.activeSelf || button.Action is not { } action)
+                {
+                    continue;
+                }
+
+                bool disabled = scheme.IsActionDisabled(action);
+                if (disabled && !button.IsDisabledState)
+                {
+                    button.DisableButton(false);
+                }
+                else if (!disabled && button.IsDisabledState)
+                {
+                    button.EnableButton();
+                }
+            }
         }
 
         private void Update()

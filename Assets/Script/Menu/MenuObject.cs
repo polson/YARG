@@ -11,9 +11,20 @@ namespace YARG.Menu
         [field: SerializeField]
         public bool HideBelow { get; private set; } = true;
 
+        [field: SerializeField]
+        public bool SupportsOvershell { get; private set; }
+
         private void Start()
         {
             Assert.AreNotEqual(Menu, MenuManager.Menu.None);
+        }
+
+        private void OnEnable()
+        {
+            if (MenuManager.Instance != null)
+            {
+                MenuManager.Instance.RefreshOvershell();
+            }
         }
 
         public void CloseMenu()

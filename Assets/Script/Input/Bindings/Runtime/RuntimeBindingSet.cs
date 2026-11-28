@@ -110,9 +110,9 @@ namespace YARG.Input.Bindings
 
         public void UpdateBindingsForFrame(double updateTime)
         {
-            foreach (var binding in _bindings)
+            for (int i = 0; i < _bindings.Count; i++)
             {
-                binding.UpdateForFrame(updateTime);
+                _bindings[i].UpdateForFrame(updateTime);
             }
         }
 

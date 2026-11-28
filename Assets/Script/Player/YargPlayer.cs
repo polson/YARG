@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using UnityEngine.InputSystem;
 using YARG.Core;
 using YARG.Core.Engine;
 using YARG.Core.Game;
@@ -62,6 +63,7 @@ namespace YARG.Player
             Profile = profile;
             DeviceInfo = bindings;
             IsReplay = false;
+            RegisterDeviceInfo();
         }
 
         public YargPlayer(ReplayFrame frame, ReplayData replay)
@@ -95,6 +97,7 @@ namespace YARG.Player
             // Force-disable inputs
             bool enabled = InputsEnabled;
             DisableInputs();
+            UnregisterDeviceInfo();
 
             // Swap to the new profile
             DeviceInfo?.Dispose();
@@ -106,6 +109,8 @@ namespace YARG.Player
             {
                 DeviceInfo?.ResolveDevices();
             }
+
+            RegisterDeviceInfo();
 
             // Re-enable inputs
             if (enabled)
@@ -148,7 +153,7 @@ namespace YARG.Player
 
             DeviceInfo.EnableInputs();
             DeviceInfo.SubscribeToMenuInputs(OnMenuInput);
-            InputManager.RegisterPlayer(this);
+            InputManager.RegisterMenuInput(this);
 
             InputsEnabled = true;
         }
@@ -162,9 +167,43 @@ namespace YARG.Player
 
             DeviceInfo.DisableInputs();
             DeviceInfo.UnsubscribeFromMenuInputs(OnMenuInput);
-            InputManager.UnregisterPlayer(this);
+            InputManager.UnregisterMenuInput(this);
 
             InputsEnabled = false;
+        }
+
+        private void RegisterDeviceInfo()
+        {
+            if (DeviceInfo == null)
+            {
+                return;
+            }
+
+            InputManager.RegisterDevices(DeviceInfo.Controllers);
+            DeviceInfo.ControllerAdded += OnControllerAdded;
+            DeviceInfo.ControllerRemoved += OnControllerRemoved;
+        }
+
+        private void UnregisterDeviceInfo()
+        {
+            if (DeviceInfo == null)
+            {
+                return;
+            }
+
+            DeviceInfo.ControllerAdded -= OnControllerAdded;
+            DeviceInfo.ControllerRemoved -= OnControllerRemoved;
+            InputManager.UnregisterDevices(DeviceInfo.Controllers);
+        }
+
+        private static void OnControllerAdded(InputDevice controller)
+        {
+            InputManager.RegisterDevice(controller);
+        }
+
+        private static void OnControllerRemoved(InputDevice controller)
+        {
+            InputManager.UnregisterDevice(controller);
         }
 
         private void OnMenuInput(ref GameInput input)
@@ -175,6 +214,7 @@ namespace YARG.Player
         public void Dispose()
         {
             DisableInputs();
+            UnregisterDeviceInfo();
             DeviceInfo?.Dispose();
         }
     }

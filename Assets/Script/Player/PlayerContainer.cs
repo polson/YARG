@@ -133,6 +133,30 @@ namespace YARG.Player
             return _profilesById.GetValueOrDefault(id);
         }
 
+        /// <summary>
+        /// Returns <paramref name="profileName"/>, or that name with the lowest free number appended if a profile
+        /// already uses it.
+        /// </summary>
+        public static string GetUniqueProfileName(string profileName)
+        {
+            var existingNames = Profiles.Select(p => p.Name);
+
+            if (!existingNames.Contains(profileName))
+            {
+                return profileName;
+            }
+
+            int count = 1;
+            string newName;
+            do
+            {
+                newName = $"{profileName} {count}";
+                count++;
+            } while (existingNames.Contains(newName));
+
+            return newName;
+        }
+
         public static bool IsProfileTaken(YargProfile profile)
         {
             return _playersByProfile.ContainsKey(profile);
@@ -970,6 +994,20 @@ namespace YARG.Player
 
             _players.RemoveAt(index);
             _players.Insert(index + 1, player);
+        }
+
+        public static void SetPlayerOrder(List<YargPlayer> order)
+        {
+            var sorted = _players
+                .OrderBy(player => order.IndexOf(player) is var index and >= 0 ? index : int.MaxValue)
+                .ToList();
+            if (sorted.SequenceEqual(_players))
+            {
+                return;
+            }
+
+            _players.Clear();
+            _players.AddRange(sorted);
         }
 
         public static void UpdateProfileOrder()

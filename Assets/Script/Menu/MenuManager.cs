@@ -2,6 +2,12 @@
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using YARG.Menu.Filters;
+using YARG.Menu.Overshell;
+using YARG.Menu.Persistent;
+using YARG.Menu.Settings;
+using YARG.Player;
+using YARG.Settings;
 
 namespace YARG.Menu
 {
@@ -40,7 +46,17 @@ namespace YARG.Menu
         /// </summary>
         private static Menu _lastOpenMenu = Menu.None;
 
+        [SerializeField]
+        private OvershellMenu _overshellPrefab;
+
+        public static bool UseOvershell => SettingsManager.Settings.ShowOvershell.Value == OvershellMode.Everywhere;
+
+        public static bool NeedsPlayers =>
+            PlayerContainer.Players.Count <= 0 && SettingsManager.Settings.ShowOvershell.Value == OvershellMode.Off;
+
         private Dictionary<Menu, MenuObject> _menus;
+        private OvershellMenu _overshell;
+        private MenuObject _overshellHost;
 
         private readonly Stack<Menu> _openMenus = new();
         private Coroutine _reactivateCoroutine;
@@ -63,8 +79,20 @@ namespace YARG.Menu
             }
         }
 
+        private void OnEnable()
+        {
+            SettingsManager.Settings.ShowOvershell.OnChange += OnOvershellSettingChanged;
+            SettingsMenu.OpenStateChanged += OnOverlayOpenStateChanged;
+            FiltersMenu.OpenStateChanged += OnOverlayOpenStateChanged;
+            RefreshOvershell();
+        }
+
         private void OnDisable()
         {
+            SettingsManager.Settings.ShowOvershell.OnChange -= OnOvershellSettingChanged;
+            SettingsMenu.OpenStateChanged -= OnOverlayOpenStateChanged;
+            FiltersMenu.OpenStateChanged -= OnOverlayOpenStateChanged;
+            SetOvershellHost(null);
             _lastOpenMenu = Menu.None;
 
             // Set the last open menu to the first instance of the allowed menu
@@ -108,6 +136,7 @@ namespace YARG.Menu
 
             // ... and push it onto the stack
             _openMenus.Push(menu);
+            RefreshOvershell();
 
             return newMenu;
         }
@@ -136,6 +165,82 @@ namespace YARG.Menu
             {
                 throw new InvalidOperationException($"Failed to open menu {newMenuEnum}.");
             }
+
+            RefreshOvershell();
+        }
+
+        private void OnOvershellSettingChanged(OvershellMode _)
+        {
+            RefreshOvershell();
+        }
+
+        private void OnOverlayOpenStateChanged(bool _)
+        {
+            RefreshOvershell();
+        }
+
+        public void RefreshOvershell()
+        {
+            MenuObject host = null;
+            if (UseOvershell && _openMenus.TryPeek(out var top) && _menus.TryGetValue(top, out var menu) &&
+                menu.SupportsOvershell && menu.gameObject.activeInHierarchy)
+            {
+                host = menu;
+            }
+
+            SetOvershellHost(host);
+
+            if (_overshell != null)
+            {
+                _overshell.SetHidden(IsOvershellHidden());
+            }
+        }
+
+        private void SetOvershellHost(MenuObject host)
+        {
+            if (host == _overshellHost)
+            {
+                return;
+            }
+
+            if (_overshell != null)
+            {
+                _overshell.Close();
+            }
+
+            _overshellHost = host;
+            if (host == null)
+            {
+                return;
+            }
+
+            if (_overshell == null)
+            {
+                if (_overshellPrefab == null)
+                {
+                    return;
+                }
+
+                _overshell = Instantiate(_overshellPrefab, host.transform, false);
+            }
+            else
+            {
+                _overshell.transform.SetParent(host.transform, false);
+            }
+
+            _overshell.transform.SetAsLastSibling();
+            _overshell.OpenEverywhere(CanEngageOvershell);
+        }
+
+        private static bool CanEngageOvershell()
+        {
+            return !IsOvershellHidden() && !DialogManager.Instance.IsDialogShowing;
+        }
+
+        private static bool IsOvershellHidden()
+        {
+            return (SettingsMenu.Instance != null && SettingsMenu.Instance.gameObject.activeSelf) ||
+                (FiltersMenu.Instance != null && FiltersMenu.Instance.gameObject.activeInHierarchy);
         }
 
         // Disables the current menu without popping it from the stack
@@ -145,6 +250,8 @@ namespace YARG.Menu
             {
                 currentMenu.gameObject.SetActive(false);
             }
+
+            RefreshOvershell();
         }
 
         public void ReactivateCurrentMenu(bool forceRefreshIfActive = true)
@@ -189,6 +296,7 @@ namespace YARG.Menu
             }
 
             menuObject.SetActive(true);
+            RefreshOvershell();
             _reactivateCoroutine = null;
         }
     }
