@@ -23,6 +23,7 @@ namespace YARG.Menu.DifficultySelect
         public const float ROW_HEIGHT = 52f;
         public const float TWO_LINE_ROW_HEIGHT = 72f;
         public const float PROFILE_ROW_HEIGHT = 64f;
+        public static readonly Color READY_COLOR = new Color32(0x00, 0xD3, 0xFF, 0xFF);
 
         private const float UNFOCUSED_BORDER_BRIGHTNESS = 0.5f;
 
@@ -250,7 +251,7 @@ namespace YARG.Menu.DifficultySelect
             var shown = FindShownRow(item);
             if (shown?.Row != null)
             {
-                shown.Row.SetBodyColor(editing ? BandSelectMenu.READY_COLOR : null);
+                shown.Row.SetBodyColor(editing ? READY_COLOR : null);
             }
         }
 
@@ -324,7 +325,7 @@ namespace YARG.Menu.DifficultySelect
         {
             _rise?.Kill();
             _card.anchoredPosition = new Vector2(_card.anchoredPosition.x, offset);
-            _rise = _card.DOAnchorPosY(0f, BandSelectMenu.SLIDE_SECONDS)
+            _rise = _card.DOAnchorPosY(0f, BandStripAnimator.SLIDE_SECONDS)
                 .SetEase(Ease.OutCubic)
                 .SetUpdate(true);
         }
@@ -339,7 +340,7 @@ namespace YARG.Menu.DifficultySelect
             }
 
             group.blocksRaycasts = false;
-            _card.DOAnchorPosY(-BandSelectMenu.SLIDE_DISTANCE, BandSelectMenu.SLIDE_SECONDS)
+            _card.DOAnchorPosY(-BandStripAnimator.SLIDE_DISTANCE, BandStripAnimator.SLIDE_SECONDS)
                 .SetEase(Ease.InCubic)
                 .SetUpdate(true)
                 .SetLink(gameObject);
@@ -353,7 +354,7 @@ namespace YARG.Menu.DifficultySelect
             _rise?.Kill();
             _collapse?.Kill();
 
-            _collapse = _card.DOAnchorPosY(CollapsedHeight - _card.rect.height, BandSelectMenu.SLIDE_SECONDS)
+            _collapse = _card.DOAnchorPosY(CollapsedHeight - _card.rect.height, BandStripAnimator.SLIDE_SECONDS)
                 .SetEase(Ease.OutCubic)
                 .SetUpdate(true)
                 .OnComplete(() =>
@@ -371,7 +372,7 @@ namespace YARG.Menu.DifficultySelect
             gameObject.AddComponent<CanvasGroup>().blocksRaycasts = false;
 
             _card.DOKill();
-            _card.DOAnchorPosY(-BandSelectMenu.SLIDE_DISTANCE, BandSelectMenu.SLIDE_SECONDS)
+            _card.DOAnchorPosY(-BandStripAnimator.SLIDE_DISTANCE, BandStripAnimator.SLIDE_SECONDS)
                 .SetEase(Ease.InCubic)
                 .SetUpdate(true)
                 .SetLink(gameObject)
@@ -426,7 +427,7 @@ namespace YARG.Menu.DifficultySelect
             SetHeaderText(profile.Name, showIcon: true);
             if (content.HeaderReady)
             {
-                _heading.color = BandSelectMenu.READY_COLOR;
+                _heading.color = READY_COLOR;
             }
         }
 

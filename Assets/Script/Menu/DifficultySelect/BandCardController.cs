@@ -594,7 +594,7 @@ namespace YARG.Menu.DifficultySelect
                     () => ConfirmDifficulty(difficulty)));
                 if (difficulty == current)
                 {
-                    row.TextColor = BandSelectMenu.READY_COLOR;
+                    row.TextColor = BandColumn.READY_COLOR;
                     _content.DefaultItem = row;
                 }
             }
@@ -749,7 +749,7 @@ namespace YARG.Menu.DifficultySelect
 
                 if (displayType == profile.OpenLaneDisplayType)
                 {
-                    row.TextColor = BandSelectMenu.READY_COLOR;
+                    row.TextColor = BandColumn.READY_COLOR;
                     _content.DefaultItem = row;
                 }
             }
@@ -808,7 +808,7 @@ namespace YARG.Menu.DifficultySelect
 
                 if (option.Current)
                 {
-                    row.TextColor = BandSelectMenu.READY_COLOR;
+                    row.TextColor = BandColumn.READY_COLOR;
                     _content.DefaultItem = row;
                 }
             }
