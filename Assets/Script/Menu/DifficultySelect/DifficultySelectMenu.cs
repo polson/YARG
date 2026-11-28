@@ -879,7 +879,8 @@ namespace YARG.Menu.DifficultySelect
                 ? Setlist.ResolveSongs()
                 : new List<SongEntry> { GlobalVariables.State.CurrentSong };
 
-            _band.Open(_songList, _difficultyRing, LoadGameplay);
+            var state = GlobalVariables.State;
+            _band.Open(_songList, state.CurrentSong, state.CurrentCareer is not null, _difficultyRing, LoadGameplay);
         }
 
         private void LoadGameplay()

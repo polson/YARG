@@ -65,6 +65,9 @@ namespace YARG.Menu.DifficultySelect
 
             view.Clicked += OnClicked;
             view.SelectionChanged += OnSelectionChanged;
+            model.RebuildRequested += Rebuild;
+            model.Expanded += RebuildFromCurrentTop;
+            model.ReadyChanged += ApplyReadyVisuals;
         }
 
         public BandColumnModel Model { get; }
@@ -98,7 +101,7 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// Rebuilds the card, then slides it up from where its top edge was before.
         /// </summary>
-        public void RebuildFromCurrentTop()
+        private void RebuildFromCurrentTop()
         {
             float top = View.TopEdge;
             Rebuild();
@@ -116,7 +119,7 @@ namespace YARG.Menu.DifficultySelect
         /// <summary>
         /// Shows the card after the player's state changed between ready and not ready.
         /// </summary>
-        public void ApplyReadyVisuals()
+        private void ApplyReadyVisuals()
         {
             if (Ready)
             {
@@ -552,7 +555,7 @@ namespace YARG.Menu.DifficultySelect
         private void AddInstrumentRow()
         {
             var profile = Player.Profile;
-            var song = GlobalVariables.State.CurrentSong;
+            var song = _session.CurrentSong;
             var instruments = profile.GameMode.PossibleInstrumentsForSong(song)
                 .Where(instrument => _session.Instruments.ContainsInstrument(instrument))
                 .ToList();
@@ -611,7 +614,7 @@ namespace YARG.Menu.DifficultySelect
             var profile = Player.Profile;
 
             SetPlayerHeading();
-            var song = GlobalVariables.State.CurrentSong;
+            var song = _session.CurrentSong;
 
             bool anyPlayable = false;
             foreach (var instrument in _session.Instruments)
