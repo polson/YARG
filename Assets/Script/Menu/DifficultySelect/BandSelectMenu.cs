@@ -173,12 +173,13 @@ namespace YARG.Menu.DifficultySelect
 
             bool wasOvershell = _session.IsOvershell;
             _pendingJoins.Clear();
-            _startDelay?.Kill();
-            _startDelay = null;
-            ReleaseStartInputBlocker();
+            CancelStartDelay();
             Unsubscribe();
 
             _session.Close();
+
+            KillAllCardTweens();
+            SetJoinSlotCount(0);
 
             foreach (var card in _cards)
             {
@@ -205,8 +206,14 @@ namespace YARG.Menu.DifficultySelect
             }
         }
 
+        private void OnEnable()
+        {
+            Subscribe();
+        }
+
         private void OnDisable()
         {
+            CancelStartDelay();
             Unsubscribe();
         }
 
@@ -216,7 +223,34 @@ namespace YARG.Menu.DifficultySelect
             _session.ColumnRebuildRequested -= OnSessionColumnRebuildRequested;
             _session.ColumnExpanded -= OnSessionColumnExpanded;
             _session.ColumnReadyChanged -= OnSessionColumnReadyChanged;
+            CancelStartDelay();
             Unsubscribe();
+        }
+
+        private void Subscribe()
+        {
+            if (!_session.IsOpen)
+            {
+                return;
+            }
+
+            ListenForPlayers();
+
+            var navigator = Navigator.Instance;
+            if (navigator == null)
+            {
+                return;
+            }
+
+            if (_session.IsOvershell)
+            {
+                navigator.InputInterceptor = InterceptOvershellInput;
+            }
+            else
+            {
+                navigator.NavigationEvent -= OnNavigationEvent;
+                navigator.NavigationEvent += OnNavigationEvent;
+            }
         }
 
         private void Unsubscribe()
@@ -998,7 +1032,8 @@ namespace YARG.Menu.DifficultySelect
                     card.DOAnchorPosY(0f, SLIDE_SECONDS)
                         .SetDelay(rise)
                         .SetEase(Ease.OutCubic)
-                        .SetUpdate(true);
+                        .SetUpdate(true)
+                        .SetLink(card.gameObject);
                 }
             }
         }
@@ -1027,7 +1062,8 @@ namespace YARG.Menu.DifficultySelect
             _shifts[card] = card.DOAnchorPosX(0f, SLIDE_SECONDS)
                 .SetDelay(delay)
                 .SetEase(Ease.OutCubic)
-                .SetUpdate(true);
+                .SetUpdate(true)
+                .SetLink(card.gameObject);
         }
 
         private void ResizeCard(RectTransform card, float from, float delay)
@@ -1070,6 +1106,22 @@ namespace YARG.Menu.DifficultySelect
             card.DOKill();
         }
 
+        private void KillAllCardTweens()
+        {
+            foreach (var shift in _shifts.Values)
+            {
+                shift.Kill();
+            }
+
+            foreach (var resize in _resizes.Values)
+            {
+                resize.Kill();
+            }
+
+            _shifts.Clear();
+            _resizes.Clear();
+        }
+
         private static float SlotPosition(RectTransform card)
         {
             return card.parent.localPosition.x;
@@ -1110,6 +1162,13 @@ namespace YARG.Menu.DifficultySelect
                 })
                 .SetUpdate(true)
                 .SetLink(gameObject);
+        }
+
+        private void CancelStartDelay()
+        {
+            _startDelay?.Kill();
+            _startDelay = null;
+            ReleaseStartInputBlocker();
         }
 
         private void ReleaseStartInputBlocker()
